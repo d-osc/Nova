@@ -22,11 +22,12 @@ private:
     MIRFunction* currentFunction_;
     uint32_t localCounter_;
     uint32_t blockCounter_;
+    uint32_t totalBlocks_;
     
 public:
     MIRGenerator(hir::HIRModule* hirModule, MIRModule* mirModule)
         : hirModule_(hirModule), mirModule_(mirModule), builder_(nullptr),
-          currentFunction_(nullptr), localCounter_(0), blockCounter_(0) {}
+          currentFunction_(nullptr), localCounter_(0), blockCounter_(0), totalBlocks_(0) {}
     
     ~MIRGenerator() {
         delete builder_;
@@ -139,22 +140,70 @@ private:
             MIRPlace::Kind::Return, 0, mirFunc->returnType, "");
         valueMap_[nullptr] = returnPlace;  // Use for return values
         
+        // Initialize block counter
+        blockCounter_ = 0;
+        
+        // Clear existing basic blocks in MIR function
+        currentFunction_->basicBlocks.clear();
+        
         // Translate basic blocks
         blockMap_.clear();
+        blockCounter_ = 0;
+        
+        // Debug: Print HIR basic blocks
+        std::cout << "HIR has " << hirFunc->basicBlocks.size() << " basic blocks" << std::endl;
+        
+        // Debug: Print MIR basic blocks
+        std::cout << "MIR has " << currentFunction_->basicBlocks.size() << " basic blocks" << std::endl;
+        
+        // First pass: create MIR blocks for non-empty HIR blocks only
         for (const auto& hirBlock : hirFunc->basicBlocks) {
-            std::string label = "bb" + std::to_string(blockCounter_++);
+            // Skip empty blocks (like if.end blocks with no instructions)
+            if (hirBlock->instructions.empty()) {
+                std::cerr << "Skipping empty HIR block - not creating MIR block" << std::endl;
+                continue;
+            }
+            
+            std::string label = "bb" + std::to_string(currentFunction_->basicBlocks.size());
             auto mirBlock = currentFunction_->createBasicBlock(label);
             blockMap_[hirBlock.get()] = mirBlock.get();
+            std::cout << "Created MIR block " << label << " for non-empty HIR block" << std::endl;
         }
         
-        // Translate instructions
+        // Debug: Print MIR basic blocks
+        std::cout << "MIR has " << currentFunction_->basicBlocks.size() << " basic blocks" << std::endl;
+        
+        // Second pass: translate instructions
         for (const auto& hirBlock : hirFunc->basicBlocks) {
+            // Skip empty blocks (like if.end blocks with no instructions)
+            if (hirBlock->instructions.empty()) {
+                std::cerr << "Skipping empty HIR block - no instructions to translate" << std::endl;
+                continue;
+            }
+            
             auto mirBlock = blockMap_[hirBlock.get()];
+            if (!mirBlock) continue;
+            
             builder_->setInsertPoint(mirBlock);
             
+            // Debug: Check if block has terminator after processing
             for (const auto& hirInst : hirBlock->instructions) {
                 generateInstruction(hirInst.get(), mirBlock);
             }
+            
+            // Debug: Check if this block has a terminator
+            if (!mirBlock->terminator) {
+                std::cerr << "MIR Block missing terminator!" << std::endl;
+            }
+        }
+        
+        // Debug: Print all MIR blocks and their terminators
+        std::cout << "MIR Blocks and terminators:" << std::endl;
+        for (size_t i = 0; i < currentFunction_->basicBlocks.size(); i++) {
+            auto* block = currentFunction_->basicBlocks[i].get();
+            std::cout << "  Block " << i << ": " 
+                      << (block->terminator ? "has terminator" : "NO TERMINATOR") 
+                      << ", " << block->statements.size() << " statements" << std::endl;
         }
     }
     
@@ -207,6 +256,7 @@ private:
                 break;
             
             case hir::HIRInstruction::Opcode::Call:
+                std::cerr << "Processing Call instruction" << std::endl;
                 generateCall(hirInst, mirBlock);
                 break;
             
@@ -429,6 +479,8 @@ private:
         (void)mirBlock;
         if (hirInst->operands.empty()) return;
         
+        std::cerr << "generateCall called with " << hirInst->operands.size() << " operands" << std::endl;
+        
         // First operand is the function name (string constant)
         auto funcOperand = translateOperand(hirInst->operands[0].get());
         
@@ -437,11 +489,20 @@ private:
             args.push_back(translateOperand(hirInst->operands[i].get()));
         }
         
-        auto dest = getOrCreatePlace(hirInst);
-        auto returnBlock = builder_->createBasicBlock("bb" + std::to_string(blockCounter_++));
+        std::cerr << "Creating call with " << args.size() << " arguments" << std::endl;
         
-        builder_->createCall(funcOperand, args, dest, returnBlock.get());
-        builder_->setInsertPoint(returnBlock.get());
+        auto dest = getOrCreatePlace(hirInst);
+        
+        // Create a new block for the continuation after the call
+        auto contBlock = builder_->createBasicBlock("call_cont");
+        
+        // Create the call terminator with destination and continuation block
+        builder_->createCall(funcOperand, args, dest, contBlock.get(), nullptr);
+        
+        std::cerr << "Call terminator created" << std::endl;
+        
+        // Switch to the continuation block
+        builder_->setInsertPoint(contBlock.get());
     }
     
     void generateReturn(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
@@ -463,9 +524,16 @@ private:
         if (mirBlock->isCleanup) return;
         
         // For now, just create a simple goto to the next block
+        // But avoid jumping to the entry block (bb0)
         if (blockCounter_ < currentFunction_->basicBlocks.size()) {
             auto targetBlock = currentFunction_->basicBlocks[blockCounter_].get();
-            builder_->createGoto(targetBlock);
+            // Don't jump to the entry block (first block)
+            if (blockCounter_ > 0) {
+                builder_->createGoto(targetBlock);
+            } else {
+                // If we're trying to jump to the entry block, just return instead
+                builder_->createReturn();
+            }
         } else {
             builder_->createReturn();
         }
@@ -477,15 +545,36 @@ private:
         
         auto condition = translateOperand(hirInst->operands[0].get());
         
-        // Create true and false blocks
-        auto trueBlock = builder_->createBasicBlock("bb" + std::to_string(blockCounter_++));
-        auto falseBlock = builder_->createBasicBlock("bb" + std::to_string(blockCounter_++));
-        
-        // Create switch on boolean (1 = true, 0 = false)
-        std::vector<std::pair<int64_t, MIRBasicBlock*>> targets;
-        targets.push_back({1, trueBlock.get()});
-        
-        builder_->createSwitchInt(condition, targets, falseBlock.get());
+        // Get the successor blocks from the current HIR block
+        if (hirInst->parentBlock && hirInst->parentBlock->successors.size() >= 2) {
+            auto* trueBlock = blockMap_[hirInst->parentBlock->successors[0].get()];
+            auto* falseBlock = blockMap_[hirInst->parentBlock->successors[1].get()];
+            
+            // Make sure the blocks exist
+            if (trueBlock && falseBlock) {
+                // Create switch on boolean (1 = true, 0 = false)
+                std::vector<std::pair<int64_t, MIRBasicBlock*>> targets;
+                targets.push_back({1, trueBlock});  // If condition == 1, go to trueBlock
+                
+                builder_->createSwitchInt(condition, targets, falseBlock);  // Otherwise go to falseBlock
+            } else {
+                // Fallback - create goto to next block
+                if (blockCounter_ < currentFunction_->basicBlocks.size()) {
+                    auto targetBlock = currentFunction_->basicBlocks[blockCounter_].get();
+                    builder_->createGoto(targetBlock);
+                } else {
+                    builder_->createReturn();
+                }
+            }
+        } else {
+            // Fallback - create goto to next block
+            if (blockCounter_ < totalBlocks_) {
+                auto targetBlock = currentFunction_->basicBlocks[blockCounter_].get();
+                builder_->createGoto(targetBlock);
+            } else {
+                builder_->createReturn();
+            }
+        }
     }
     
     void generateCast(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {

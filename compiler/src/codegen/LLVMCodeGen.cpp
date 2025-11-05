@@ -386,9 +386,22 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     }
     
     // Generate basic blocks
+    bool entryBlockCreated = false;
     for (const auto& bb : function->basicBlocks) {
         if (!bb) continue;
+        
+        // Use the original label, but ensure we have only one entry block
         std::string bbLabel = bb->label.empty() ? "entry" : bb->label;
+        
+        // Ensure only the first block is the entry block
+        if (bbLabel == "entry" && entryBlockCreated) {
+            bbLabel = "bb" + std::to_string(blockMap.size());
+        }
+        
+        if (bbLabel == "entry") {
+            entryBlockCreated = true;
+        }
+        
         llvm::BasicBlock* llvmBB = llvm::BasicBlock::Create(*context, bbLabel, llvmFunc);
         blockMap[bb.get()] = llvmBB;
     }
@@ -485,12 +498,18 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
             llvm::Value* value = convertOperand(switchTerm->discriminant.get());
             llvm::BasicBlock* defaultBB = blockMap[switchTerm->otherwise];
             
+            // Get the bit width of the switch value
+            unsigned bitWidth = 1; // Default to 1 bit for boolean
+            if (auto* intType = llvm::dyn_cast<llvm::IntegerType>(value->getType())) {
+                bitWidth = intType->getBitWidth();
+            }
+            
             llvm::SwitchInst* switchInst = builder->CreateSwitch(value, defaultBB, 
                                                                 static_cast<unsigned int>(switchTerm->targets.size()));
             
             for (const auto& caseItem : switchTerm->targets) {
                 llvm::ConstantInt* caseVal = llvm::ConstantInt::get(
-                    *context, llvm::APInt(32, caseItem.value));
+                    *context, llvm::APInt(bitWidth, caseItem.value));
                 llvm::BasicBlock* caseBB = blockMap[caseItem.target];
                 switchInst->addCase(caseVal, caseBB);
             }

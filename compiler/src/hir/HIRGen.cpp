@@ -89,6 +89,12 @@ public:
             case Op::LessEqual:
                 lastValue_ = builder_->createLe(lhs, rhs);
                 break;
+            case Op::Greater:
+                lastValue_ = builder_->createGt(lhs, rhs);
+                break;
+            case Op::GreaterEqual:
+                lastValue_ = builder_->createGe(lhs, rhs);
+                break;
             default:
                 // Add more operators as needed
                 break;

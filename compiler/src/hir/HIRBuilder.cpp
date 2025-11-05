@@ -119,6 +119,32 @@ HIRInstruction* HIRBuilder::createLe(HIRValue* lhs, HIRValue* rhs, const std::st
     return inst.get();
 }
 
+HIRInstruction* HIRBuilder::createGt(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto boolType = std::make_shared<HIRType>(HIRType::Kind::Bool);
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Gt, boolType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+    
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createGe(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto boolType = std::make_shared<HIRType>(HIRType::Kind::Bool);
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Ge, boolType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+    
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
 // Memory Operations
 HIRInstruction* HIRBuilder::createAlloca(HIRType* type, const std::string& name) {
     auto ptrType = std::make_shared<HIRPointerType>(

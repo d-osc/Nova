@@ -324,6 +324,8 @@ public:
     HIRInstruction* createNe(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createLt(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createLe(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createGt(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createGe(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     
     // Memory
     HIRInstruction* createAlloca(HIRType* type, const std::string& name = "");

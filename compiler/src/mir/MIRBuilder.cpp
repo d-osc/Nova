@@ -181,6 +181,8 @@ void MIRBuilder::createGoto(MIRBasicBlock* target) {
     currentBlock_->setTerminator(term);
 }
 
+
+
 void MIRBuilder::createSwitchInt(MIROperandPtr discriminant,
                     const std::vector<std::pair<int64_t, MIRBasicBlock*>>& targets,
                     MIRBasicBlock* otherwise) {
