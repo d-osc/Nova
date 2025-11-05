@@ -1,0 +1,826 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MIR",
+  "scopeName": "source.mir",
+  "fileTypes": ["mir"],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#function-declaration"
+    },
+    {
+      "include": "#basic-blocks"
+    },
+    {
+      "include": "#statements"
+    },
+    {
+      "include": "#terminators"
+    },
+    {
+      "include": "#rvalues"
+    },
+    {
+      "include": "#operands"
+    },
+    {
+      "include": "#places"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#scopes"
+    },
+    {
+      "include": "#attributes"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.mir",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.mir",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            {
+              "include": "#comments"
+            }
+          ]
+        }
+      ]
+    },
+    "function-declaration": {
+      "patterns": [
+        {
+          "name": "meta.function.mir",
+          "begin": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_:]*)",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.function.mir"
+            },
+            "2": {
+              "name": "entity.name.function.mir"
+            }
+          },
+          "end": "\\{",
+          "patterns": [
+            {
+              "include": "#function-signature"
+            },
+            {
+              "include": "#attributes"
+            },
+            {
+              "include": "#comments"
+            }
+          ]
+        },
+        {
+          "name": "keyword.control.mir",
+          "match": "\\b(let|debug|scope|span)\\b"
+        }
+      ]
+    },
+    "function-signature": {
+      "patterns": [
+        {
+          "name": "meta.function.parameters.mir",
+          "begin": "\\(",
+          "end": "\\)",
+          "patterns": [
+            {
+              "name": "variable.parameter.mir",
+              "match": "(_[0-9]+|_\\w+)"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.mir",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "meta.function.return-type.mir",
+          "begin": "->",
+          "end": "(?=\\{)",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.separator.return-type.mir"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#types"
+            }
+          ]
+        }
+      ]
+    },
+    "basic-blocks": {
+      "patterns": [
+        {
+          "name": "entity.name.label.basic-block.mir",
+          "match": "^\\s*(bb[0-9]+)\\s*:",
+          "captures": {
+            "1": {
+              "name": "entity.name.label.mir"
+            }
+          }
+        },
+        {
+          "name": "entity.name.label.basic-block.cleanup.mir",
+          "match": "^\\s*(bb[0-9]+)\\s*\\(cleanup\\)\\s*:",
+          "captures": {
+            "1": {
+              "name": "entity.name.label.cleanup.mir"
+            }
+          }
+        },
+        {
+          "name": "variable.other.basic-block.mir",
+          "match": "\\bbb[0-9]+\\b"
+        }
+      ]
+    },
+    "statements": {
+      "patterns": [
+        {
+          "name": "meta.statement.storage-live.mir",
+          "match": "\\b(StorageLive|StorageDead)\\s*\\(([^)]+)\\)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.storage.mir"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#places"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "meta.statement.assignment.mir",
+          "begin": "\\b(_[0-9]+|_\\w+)\\s*(=)",
+          "beginCaptures": {
+            "1": {
+              "name": "variable.other.mir"
+            },
+            "2": {
+              "name": "keyword.operator.assignment.mir"
+            }
+          },
+          "end": ";",
+          "patterns": [
+            {
+              "include": "#rvalues"
+            },
+            {
+              "include": "#operands"
+            },
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "name": "keyword.other.statement.mir",
+          "match": "\\b(Deinit|SetDiscriminant|Retag|AscribeUserType|Coverage|CopyNonOverlapping|Nop)\\b"
+        },
+        {
+          "name": "meta.statement.intrinsic.mir",
+          "match": "\\b(FakeRead|Discriminant|PlaceMention)\\b"
+        }
+      ]
+    },
+    "terminators": {
+      "patterns": [
+        {
+          "name": "keyword.control.terminator.return.mir",
+          "match": "\\breturn\\b"
+        },
+        {
+          "name": "meta.terminator.goto.mir",
+          "match": "\\b(goto)\\s*->\\s*(bb[0-9]+)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.goto.mir"
+            },
+            "2": {
+              "name": "entity.name.label.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.terminator.switchint.mir",
+          "begin": "\\b(switchInt)\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.switch.mir"
+            }
+          },
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#operands"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "keyword.control.otherwise.mir",
+              "match": "\\botherwise\\b"
+            },
+            {
+              "name": "entity.name.label.mir",
+              "match": "\\bbb[0-9]+\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.terminator.call.mir",
+          "begin": "\\b(call)\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.call.mir"
+            }
+          },
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#operands"
+            },
+            {
+              "include": "#places"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "keyword.control.unwind.mir",
+              "match": "\\b(unwind|continue)\\b"
+            },
+            {
+              "name": "entity.name.label.mir",
+              "match": "\\bbb[0-9]+\\b"
+            },
+            {
+              "name": "entity.name.function.mir",
+              "match": "<[^>]+>"
+            }
+          ]
+        },
+        {
+          "name": "meta.terminator.assert.mir",
+          "begin": "\\b(assert)\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.assert.mir"
+            }
+          },
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#operands"
+            },
+            {
+              "name": "keyword.operator.comparison.mir",
+              "match": "\\b(eq|ne|lt|le|gt|ge)\\b"
+            },
+            {
+              "name": "string.quoted.double.mir",
+              "begin": "\"",
+              "end": "\""
+            },
+            {
+              "name": "entity.name.label.mir",
+              "match": "\\bbb[0-9]+\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.terminator.drop.mir",
+          "begin": "\\b(drop|drop_and_replace)\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.drop.mir"
+            }
+          },
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#places"
+            },
+            {
+              "name": "keyword.control.unwind.mir",
+              "match": "\\b(unwind|continue)\\b"
+            },
+            {
+              "name": "entity.name.label.mir",
+              "match": "\\bbb[0-9]+\\b"
+            }
+          ]
+        },
+        {
+          "name": "keyword.control.terminator.mir",
+          "match": "\\b(unreachable|resume|abort|yield|GeneratorDrop|FalseEdge|FalseUnwind|InlineAsm)\\b"
+        }
+      ]
+    },
+    "rvalues": {
+      "patterns": [
+        {
+          "name": "meta.rvalue.use.mir",
+          "match": "\\b(Use|Copy|Move)\\s*\\(([^)]+)\\)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.rvalue.mir"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#operands"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "meta.rvalue.ref.mir",
+          "match": "\\b(Ref|AddressOf)\\s*\\(\\s*(\\w+)\\s*,",
+          "captures": {
+            "1": {
+              "name": "keyword.other.rvalue.mir"
+            },
+            "2": {
+              "name": "storage.modifier.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.rvalue.binary-op.mir",
+          "begin": "\\b(BinaryOp|CheckedBinaryOp)\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.rvalue.mir"
+            }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "name": "keyword.operator.arithmetic.mir",
+              "match": "\\b(Add|Sub|Mul|Div|Rem|BitXor|BitAnd|BitOr|Shl|Shr|Offset)\\b"
+            },
+            {
+              "name": "keyword.operator.comparison.mir",
+              "match": "\\b(Eq|Lt|Le|Ne|Ge|Gt)\\b"
+            },
+            {
+              "include": "#operands"
+            }
+          ]
+        },
+        {
+          "name": "meta.rvalue.unary-op.mir",
+          "match": "\\b(UnaryOp)\\s*\\((Not|Neg)\\s*,",
+          "captures": {
+            "1": {
+              "name": "keyword.other.rvalue.mir"
+            },
+            "2": {
+              "name": "keyword.operator.unary.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.rvalue.cast.mir",
+          "begin": "\\b(Cast)\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.rvalue.mir"
+            }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "name": "keyword.operator.cast.mir",
+              "match": "\\b(Pointer|IntToInt|FloatToInt|FloatToFloat|IntToFloat|PtrToPtr|PointerExposeAddress|PointerFromExposedAddress|Unsize|DynStar)\\b"
+            },
+            {
+              "include": "#operands"
+            },
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "name": "meta.rvalue.aggregate.mir",
+          "begin": "\\b(Aggregate)\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.rvalue.mir"
+            }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "name": "storage.type.aggregate.mir",
+              "match": "\\b(Array|Tuple|Adt|Closure|Generator)\\b"
+            },
+            {
+              "include": "#operands"
+            },
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "name": "keyword.other.rvalue.mir",
+          "match": "\\b(Len|Discriminant|NullaryOp|ThreadLocalRef|Repeat|ShallowInitBox|CopyForDeref)\\b"
+        }
+      ]
+    },
+    "operands": {
+      "patterns": [
+        {
+          "name": "meta.operand.copy.mir",
+          "match": "\\b(copy|move)\\s+([^,;)]+)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.operand.mir"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#places"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "meta.operand.const.mir",
+          "begin": "\\b(const)\\s+",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.modifier.const.mir"
+            }
+          },
+          "end": "(?=[,;)])",
+          "patterns": [
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#types"
+            }
+          ]
+        }
+      ]
+    },
+    "places": {
+      "patterns": [
+        {
+          "name": "variable.other.local.mir",
+          "match": "(_[0-9]+|_\\w+)\\b"
+        },
+        {
+          "name": "meta.place.projection.mir",
+          "match": "(_[0-9]+|_\\w+)(\\.[a-zA-Z_][a-zA-Z0-9_]*|\\[\\d+\\]|\\[\\]|\\*)+",
+          "captures": {
+            "1": {
+              "name": "variable.other.local.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.place.static.mir",
+          "match": "\\(\\*_[0-9]+\\)",
+          "captures": {
+            "1": {
+              "name": "variable.other.local.mir"
+            }
+          }
+        },
+        {
+          "name": "keyword.other.projection.mir",
+          "match": "\\b(Deref|Field|Index|ConstantIndex|Subslice|Downcast|OpaqueCast)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.mir",
+          "match": "\\b(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|bool|char|str|never)\\b"
+        },
+        {
+          "name": "storage.type.unit.mir",
+          "match": "\\(\\)"
+        },
+        {
+          "name": "meta.type.reference.mir",
+          "match": "&(mut\\s+)?('[a-z_][a-z0-9_]*\\s+)?",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.mut.mir"
+            },
+            "2": {
+              "name": "storage.modifier.lifetime.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.type.pointer.mir",
+          "match": "\\*(const|mut)\\s+",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.type.array.mir",
+          "begin": "\\[",
+          "end": "\\]",
+          "patterns": [
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.mir",
+              "match": ";"
+            }
+          ]
+        },
+        {
+          "name": "meta.type.tuple.mir",
+          "begin": "\\(",
+          "end": "\\)",
+          "patterns": [
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.mir",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "meta.type.function.mir",
+          "begin": "\\bfn\\s*\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": {
+              "name": "storage.type.function.mir"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "name": "meta.type.path.mir",
+          "match": "([a-zA-Z_][a-zA-Z0-9_]*::)+[a-zA-Z_][a-zA-Z0-9_]*",
+          "captures": {
+            "0": {
+              "name": "entity.name.type.mir"
+            }
+          }
+        },
+        {
+          "name": "entity.name.type.mir",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "storage.modifier.lifetime.mir",
+          "match": "'[a-z_][a-z0-9_]*\\b"
+        },
+        {
+          "name": "storage.modifier.lifetime.static.mir",
+          "match": "'static\\b"
+        },
+        {
+          "name": "storage.type.generic.mir",
+          "begin": "<",
+          "end": ">",
+          "patterns": [
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.mir",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "storage.modifier.mir",
+          "match": "\\b(const|mut|shared|unique|shallow|two_phase)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.mir",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.unit.mir",
+          "match": "\\(\\)"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.mir",
+          "match": "\\b[0-9][0-9_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.hexadecimal.mir",
+          "match": "\\b0x[0-9a-fA-F][0-9a-fA-F_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.binary.mir",
+          "match": "\\b0b[01][01_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.octal.mir",
+          "match": "\\b0o[0-7][0-7_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.mir",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(e[+-]?[0-9]+)?(f32|f64)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.scientific.mir",
+          "match": "\\b[0-9][0-9_]*e[+-]?[0-9]+(f32|f64)?\\b"
+        },
+        {
+          "name": "string.quoted.double.mir",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mir",
+              "match": "\\\\(x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\}|n|r|t|\\\\|0|'|\")"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.byte.mir",
+          "begin": "b\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mir",
+              "match": "\\\\(x[0-9a-fA-F]{2}|n|r|t|\\\\|0|'|\")"
+            }
+          ]
+        },
+        {
+          "name": "constant.character.mir",
+          "match": "'([^'\\\\]|\\\\(x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\}|n|r|t|\\\\|0|'))'"
+        },
+        {
+          "name": "meta.constant.zst.mir",
+          "match": "\\bZeroSized\\b",
+          "captures": {
+            "0": {
+              "name": "constant.language.zst.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.constant.promoted.mir",
+          "match": "\\bpromoted\\[([0-9]+)\\]",
+          "captures": {
+            "0": {
+              "name": "constant.other.promoted.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.constant.allocation.mir",
+          "match": "\\balloc[0-9]+\\b",
+          "captures": {
+            "0": {
+              "name": "constant.other.allocation.mir"
+            }
+          }
+        }
+      ]
+    },
+    "scopes": {
+      "patterns": [
+        {
+          "name": "meta.scope.mir",
+          "begin": "\\bscope\\s+([0-9]+)",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.other.scope.mir"
+            },
+            "1": {
+              "name": "constant.numeric.scope-id.mir"
+            }
+          },
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#scopes"
+            },
+            {
+              "name": "keyword.other.debug.mir",
+              "match": "\\bdebug\\b"
+            },
+            {
+              "name": "variable.other.debug.mir",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\s+=>\\s+"
+            },
+            {
+              "include": "#places"
+            }
+          ]
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.inline.mir",
+          "match": "#\\[inline(\\(([^)]+)\\))?\\]",
+          "captures": {
+            "0": {
+              "name": "entity.other.attribute-name.mir"
+            },
+            "2": {
+              "name": "constant.other.inline-hint.mir"
+            }
+          }
+        },
+        {
+          "name": "meta.attribute.custom.mir",
+          "begin": "#\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.attribute.mir"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.attribute.mir"
+            }
+          },
+          "patterns": [
+            {
+              "name": "entity.other.attribute-name.mir",
+              "match": "\\b(cold|track_caller|naked|rustc_inherit_overflow_checks|target_feature|no_sanitize|link_section|export_name|link_name|used|rustc_std_internal_symbol)\\b"
+            },
+            {
+              "include": "#constants"
+            }
+          ]
+        },
+        {
+          "name": "meta.span.mir",
+          "match": "// @([a-zA-Z0-9_\\./-]+):(\\d+):(\\d+):\\s*(\\d+):(\\d+)",
+          "captures": {
+            "0": {
+              "name": "comment.line.span.mir"
+            },
+            "1": {
+              "name": "entity.name.filename.mir"
+            },
+            "2": {
+              "name": "constant.numeric.line.mir"
+            },
+            "3": {
+              "name": "constant.numeric.column.mir"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

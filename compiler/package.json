@@ -1,0 +1,54 @@
+{
+  "name": "@nova/compiler",
+  "version": "1.0.0",
+  "description": "Nova Compiler - TypeScript/JavaScript to Native Code via LLVM",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "nova": "./bin/nova",
+    "novac": "./bin/novac"
+  },
+  "scripts": {
+    "build": "cmake --build build --config Release",
+    "configure": "cmake -B build -S . -DCMAKE_BUILD_TYPE=Release",
+    "clean": "cmake --build build --target clean",
+    "test": "ctest --test-dir build --output-on-failure",
+    "install": "cmake --install build",
+    "format": "clang-format -i src/**/*.cpp include/**/*.h",
+    "lint": "clang-tidy src/**/*.cpp -- -Iinclude",
+    "docs": "doxygen Doxyfile",
+    "example": "node scripts/run-examples.js"
+  },
+  "keywords": [
+    "compiler",
+    "typescript",
+    "javascript",
+    "llvm",
+    "native",
+    "aot",
+    "jit",
+    "performance"
+  ],
+  "author": "Nova Compiler Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nova-lang/compiler"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.6.0"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

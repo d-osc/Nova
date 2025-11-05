@@ -1,0 +1,138 @@
+# .gitignore for Nova Compiler
+
+# Build directories
+build/
+build-*/
+cmake-build-*/
+out/
+dist/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+*.cmake
+!CMakeLists.txt
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# LLVM IR outputs
+*.ll
+*.bc
+
+# MIR outputs
+*.mir
+
+# HIR outputs
+*.hir
+
+# Assembly outputs
+*.s
+*.asm
+
+# IDEs
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Testing
+Testing/
+*.gcda
+*.gcno
+*.gcov
+coverage/
+
+# Documentation build
+docs/_build/
+docs/html/
+docs/latex/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.log
+
+# OS specific
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# macOS
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+
+# Clang
+.clang-format
+.clang-tidy
+
+# Profiling
+*.prof
+perf.data
+perf.data.old
+
+# Valgrind
+*.memcheck
+*.callgrind
+*.cachegrind

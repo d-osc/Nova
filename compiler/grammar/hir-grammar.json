@@ -1,0 +1,507 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "HIR",
+  "scopeName": "source.hir",
+  "fileTypes": ["hir"],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#control-flow"
+    },
+    {
+      "include": "#expressions"
+    },
+    {
+      "include": "#literals"
+    },
+    {
+      "include": "#attributes"
+    },
+    {
+      "include": "#lifetime-markers"
+    },
+    {
+      "include": "#memory-operations"
+    },
+    {
+      "include": "#intrinsics"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.hir",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.hir",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.metadata.hir",
+          "match": ";.*$",
+          "comment": "Metadata comments"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.hir",
+          "begin": "\\b(fn|function|def)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.function.hir"
+            }
+          },
+          "end": "\\{|;",
+          "patterns": [
+            {
+              "include": "#function-name"
+            },
+            {
+              "include": "#function-parameters"
+            },
+            {
+              "include": "#return-type"
+            },
+            {
+              "include": "#attributes"
+            }
+          ]
+        },
+        {
+          "name": "entity.name.function.hir",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)::[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "keyword.control.hir",
+          "match": "\\b(return|yield|tail_call)\\b"
+        }
+      ]
+    },
+    "function-name": {
+      "patterns": [
+        {
+          "name": "entity.name.function.hir",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b"
+        }
+      ]
+    },
+    "function-parameters": {
+      "patterns": [
+        {
+          "name": "meta.function.parameters.hir",
+          "begin": "\\(",
+          "end": "\\)",
+          "patterns": [
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#variables"
+            },
+            {
+              "name": "punctuation.separator.parameter.hir",
+              "match": ","
+            }
+          ]
+        }
+      ]
+    },
+    "return-type": {
+      "patterns": [
+        {
+          "name": "meta.function.return-type.hir",
+          "begin": "->",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.separator.return-type.hir"
+            }
+          },
+          "end": "(?=\\{|;)",
+          "patterns": [
+            {
+              "include": "#types"
+            }
+          ]
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.hir",
+          "match": "\\b(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|bool|char|str|void|unit|never)\\b"
+        },
+        {
+          "name": "storage.type.compound.hir",
+          "match": "\\b(struct|enum|union|tuple|array|slice|ptr|ref|dyn|impl)\\b"
+        },
+        {
+          "name": "storage.type.generic.hir",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "meta.type.pointer.hir",
+          "match": "\\*\\s*(const|mut)?\\s*"
+        },
+        {
+          "name": "meta.type.reference.hir",
+          "match": "&\\s*(mut)?\\s*"
+        },
+        {
+          "name": "meta.type.option.hir",
+          "match": "\\b(Option|Result|Some|None|Ok|Err)\\b"
+        },
+        {
+          "name": "meta.type.function-pointer.hir",
+          "begin": "\\bfn\\s*\\(",
+          "end": "\\)",
+          "patterns": [
+            {
+              "include": "#types"
+            }
+          ]
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.hir",
+          "match": "\\b(true|false|null|None|Some|Ok|Err|undef|poison)\\b"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.hir",
+          "match": "\\b[0-9][0-9_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.hexadecimal.hir",
+          "match": "\\b0x[0-9a-fA-F][0-9a-fA-F_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.binary.hir",
+          "match": "\\b0b[01][01_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.octal.hir",
+          "match": "\\b0o[0-7][0-7_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.hir",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(e[+-]?[0-9]+)?(f32|f64)?\\b"
+        },
+        {
+          "name": "constant.character.hir",
+          "match": "'([^'\\\\]|\\\\.)'"
+        },
+        {
+          "name": "string.quoted.double.hir",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.hir",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.parameter.hir",
+          "match": "\\b%[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.local.hir",
+          "match": "\\b_[0-9]+\\b"
+        },
+        {
+          "name": "variable.other.ssa.hir",
+          "match": "\\b[a-z][a-z0-9_]*\\.[0-9]+\\b"
+        },
+        {
+          "name": "variable.other.hir",
+          "match": "\\b[a-z_][a-z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.global.hir",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arithmetic.hir",
+          "match": "\\+|\\-|\\*|\\/|%|\\*\\*"
+        },
+        {
+          "name": "keyword.operator.bitwise.hir",
+          "match": "&|\\||\\^|~|<<|>>|>>>"
+        },
+        {
+          "name": "keyword.operator.comparison.hir",
+          "match": "==|!=|<|>|<=|>=|<=>|eq|ne|lt|gt|le|ge"
+        },
+        {
+          "name": "keyword.operator.logical.hir",
+          "match": "\\b(and|or|not|xor)\\b|&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.assignment.hir",
+          "match": "=|\\+=|-=|\\*=|\\/=|%=|&=|\\|=|\\^=|<<=|>>="
+        },
+        {
+          "name": "keyword.operator.cast.hir",
+          "match": "\\b(as|cast|bitcast|transmute|zext|sext|trunc|fpext|fptrunc|ptrtoint|inttoptr)\\b"
+        },
+        {
+          "name": "keyword.operator.member.hir",
+          "match": "\\.|::|->|=>"
+        }
+      ]
+    },
+    "control-flow": {
+      "patterns": [
+        {
+          "name": "keyword.control.conditional.hir",
+          "match": "\\b(if|then|else|elif|match|switch|case|default)\\b"
+        },
+        {
+          "name": "keyword.control.loop.hir",
+          "match": "\\b(loop|while|for|do|continue|break)\\b"
+        },
+        {
+          "name": "keyword.control.flow.hir",
+          "match": "\\b(goto|br|br_if|br_table|jump|jmp|call|invoke|unreachable)\\b"
+        },
+        {
+          "name": "keyword.control.exception.hir",
+          "match": "\\b(try|catch|throw|unwind|landing_pad|resume)\\b"
+        },
+        {
+          "name": "entity.name.label.hir",
+          "match": "\\bbb[0-9]+:|[a-z_][a-z0-9_]*:"
+        }
+      ]
+    },
+    "expressions": {
+      "patterns": [
+        {
+          "name": "meta.expression.call.hir",
+          "begin": "\\b(call|invoke|apply)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.operator.call.hir"
+            }
+          },
+          "end": "\\)|;",
+          "patterns": [
+            {
+              "include": "#variables"
+            },
+            {
+              "include": "#literals"
+            },
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "name": "meta.expression.binary.hir",
+          "match": "\\b(add|sub|mul|div|rem|and|or|xor|shl|shr|eq|ne|lt|gt|le|ge)\\b"
+        },
+        {
+          "name": "meta.expression.unary.hir",
+          "match": "\\b(neg|not|deref|addr_of|ref)\\b"
+        },
+        {
+          "name": "meta.expression.aggregate.hir",
+          "match": "\\b(struct|tuple|array|vector|aggregate)\\b"
+        },
+        {
+          "name": "meta.expression.field-access.hir",
+          "match": "\\b(get_field|extract_field|project|offset)\\b"
+        },
+        {
+          "name": "meta.expression.index.hir",
+          "match": "\\b(index|get_element|subscript)\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "include": "#constants"
+        },
+        {
+          "name": "meta.literal.aggregate.hir",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#literals"
+            },
+            {
+              "include": "#variables"
+            },
+            {
+              "name": "punctuation.separator.hir",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "meta.literal.array.hir",
+          "begin": "\\[",
+          "end": "\\]",
+          "patterns": [
+            {
+              "include": "#literals"
+            },
+            {
+              "include": "#variables"
+            },
+            {
+              "name": "punctuation.separator.hir",
+              "match": ","
+            }
+          ]
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.hir",
+          "begin": "#\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.attribute.hir"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.attribute.hir"
+            }
+          },
+          "patterns": [
+            {
+              "name": "entity.other.attribute-name.hir",
+              "match": "\\b(inline|noinline|cold|hot|readonly|writeonly|pure|const|noreturn|nounwind|optimize|align|repr|derive|cfg|target)\\b"
+            },
+            {
+              "include": "#literals"
+            }
+          ]
+        },
+        {
+          "name": "meta.annotation.hir",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*",
+          "captures": {
+            "0": {
+              "name": "entity.other.annotation.hir"
+            }
+          }
+        }
+      ]
+    },
+    "lifetime-markers": {
+      "patterns": [
+        {
+          "name": "storage.modifier.lifetime.hir",
+          "match": "'[a-z_][a-z0-9_]*\\b"
+        },
+        {
+          "name": "storage.modifier.lifetime.static.hir",
+          "match": "'static\\b"
+        },
+        {
+          "name": "meta.lifetime.bound.hir",
+          "match": "\\b(outlives|for)\\b"
+        }
+      ]
+    },
+    "memory-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.memory.allocation.hir",
+          "match": "\\b(alloc|alloca|malloc|calloc|free|dealloc)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.access.hir",
+          "match": "\\b(load|store|memcpy|memmove|memset|volatile_load|volatile_store|atomic_load|atomic_store)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.pointer.hir",
+          "match": "\\b(offset|gep|ptr_add|ptr_sub|nullptr|null_ptr)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.ordering.hir",
+          "match": "\\b(relaxed|acquire|release|acq_rel|seq_cst)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.fence.hir",
+          "match": "\\b(fence|barrier|atomic_fence)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.atomic.hir",
+          "match": "\\b(atomic_add|atomic_sub|atomic_and|atomic_or|atomic_xor|atomic_xchg|atomic_cmpxchg|atomic_min|atomic_max)\\b"
+        }
+      ]
+    },
+    "intrinsics": {
+      "patterns": [
+        {
+          "name": "support.function.intrinsic.hir",
+          "match": "\\b(llvm\\.|rustc\\.|@llvm\\.|intrinsic::)[a-zA-Z_][a-zA-Z0-9_\\.]*\\b"
+        },
+        {
+          "name": "support.function.builtin.hir",
+          "match": "\\b(size_of|align_of|offset_of|type_id|type_name|discriminant|variant|min_value|max_value)\\b"
+        },
+        {
+          "name": "support.function.math.hir",
+          "match": "\\b(abs|min|max|sqrt|pow|exp|log|sin|cos|tan|floor|ceil|round|saturating_add|saturating_sub|wrapping_add|wrapping_sub|checked_add|checked_sub)\\b"
+        },
+        {
+          "name": "support.function.bit.hir",
+          "match": "\\b(ctlz|cttz|ctpop|bswap|bitreverse|rotate_left|rotate_right|leading_zeros|trailing_zeros|count_ones)\\b"
+        },
+        {
+          "name": "support.function.simd.hir",
+          "match": "\\b(simd_add|simd_sub|simd_mul|simd_div|simd_shuffle|simd_extract|simd_insert|simd_cast|simd_select)\\b"
+        },
+        {
+          "name": "support.function.compiler.hir",
+          "match": "\\b(unreachable_unchecked|assume|expect|prefetch|black_box|copy_nonoverlapping|write_bytes|likely|unlikely)\\b"
+        }
+      ]
+    }
+  }
+}

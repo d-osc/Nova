@@ -1,0 +1,938 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "LLVM IR",
+  "scopeName": "source.llvm",
+  "fileTypes": ["ll", "llvm"],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#metadata"
+    },
+    {
+      "include": "#attributes"
+    },
+    {
+      "include": "#target-data"
+    },
+    {
+      "include": "#module-declarations"
+    },
+    {
+      "include": "#function-definition"
+    },
+    {
+      "include": "#global-variables"
+    },
+    {
+      "include": "#type-definitions"
+    },
+    {
+      "include": "#instructions"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#types"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.semicolon.llvm",
+          "match": ";.*$"
+        }
+      ]
+    },
+    "metadata": {
+      "patterns": [
+        {
+          "name": "meta.metadata.named.llvm",
+          "match": "^(!\\w+)\\s*=\\s*(!\\{[^}]*\\}|!DILocation|!DISubprogram|!DIFile|!DICompileUnit|!DIBasicType|!DICompositeType|!DIDerivedType|!DISubroutineType|!DILocalVariable|!DIExpression|!DIGlobalVariableExpression|!DILexicalBlock|!DINamespace|!DIModule)",
+          "captures": {
+            "1": {
+              "name": "variable.other.metadata.llvm"
+            }
+          }
+        },
+        {
+          "name": "meta.metadata.node.llvm",
+          "begin": "!\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.metadata.begin.llvm"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.metadata.end.llvm"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#metadata"
+            },
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "name": "variable.other.metadata.reference.llvm",
+          "match": "!\\d+|!\\w+"
+        },
+        {
+          "name": "meta.metadata.debug-info.llvm",
+          "match": "\\b(DILocation|DISubprogram|DIFile|DICompileUnit|DIBasicType|DICompositeType|DIDerivedType|DISubroutineType|DILocalVariable|DIExpression|DIGlobalVariableExpression|DILexicalBlock|DINamespace|DIModule|DITemplateTypeParameter|DITemplateValueParameter|DIGlobalVariable|DIImportedEntity|DIMacro|DIMacroFile|DILabel|DIGenericSubrange)\\b",
+          "captures": {
+            "0": {
+              "name": "support.type.debug-info.llvm"
+            }
+          }
+        },
+        {
+          "name": "meta.metadata.attachment.llvm",
+          "match": ",\\s*!dbg\\s+!\\d+|,\\s*!\\w+\\s+!\\d+",
+          "captures": {
+            "0": {
+              "name": "meta.metadata.attachment.llvm"
+            }
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.function.llvm",
+          "match": "\\b(alwaysinline|inlinehint|noinline|noreturn|nounwind|optsize|readnone|readonly|writeonly|argmemonly|inaccessiblememonly|inaccessiblemem_or_argmemonly|cold|hot|naked|norecurse|speculatable|strictfp|uwtable|willreturn|nocallback|nosync|nofree|null_pointer_is_valid|mustprogress|nocf_check|shadowcallstack|sanitize_address|sanitize_thread|sanitize_memory|sanitize_hwaddress|safestack)\\b",
+          "captures": {
+            "0": {
+              "name": "entity.other.attribute-name.function.llvm"
+            }
+          }
+        },
+        {
+          "name": "meta.attribute.parameter.llvm",
+          "match": "\\b(zeroext|signext|inreg|byval|byref|preallocated|inalloca|sret|noalias|nocapture|nonnull|dereferenceable|dereferenceable_or_null|swiftself|swiftasync|swifterror|immarg|noundef|nofree|alignstack|allocalign|allocptr|readnone|readonly|writeonly|returned|nonnull|align|elementtype)\\b",
+          "captures": {
+            "0": {
+              "name": "entity.other.attribute-name.parameter.llvm"
+            }
+          }
+        },
+        {
+          "name": "meta.attribute.group.llvm",
+          "match": "#\\d+",
+          "captures": {
+            "0": {
+              "name": "entity.other.attribute-group.llvm"
+            }
+          }
+        },
+        {
+          "name": "keyword.other.alignment.llvm",
+          "match": "\\balign\\s+\\d+"
+        }
+      ]
+    },
+    "target-data": {
+      "patterns": [
+        {
+          "name": "meta.target.triple.llvm",
+          "begin": "^\\s*(target)\\s+(triple)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.target.llvm"
+            },
+            "2": {
+              "name": "keyword.other.triple.llvm"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "string.quoted.double.llvm",
+              "begin": "\"",
+              "end": "\""
+            }
+          ]
+        },
+        {
+          "name": "meta.target.datalayout.llvm",
+          "begin": "^\\s*(target)\\s+(datalayout)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.target.llvm"
+            },
+            "2": {
+              "name": "keyword.other.datalayout.llvm"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "string.quoted.double.llvm",
+              "begin": "\"",
+              "end": "\""
+            }
+          ]
+        },
+        {
+          "name": "meta.source-filename.llvm",
+          "begin": "^\\s*(source_filename)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.source-filename.llvm"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "string.quoted.double.llvm",
+              "begin": "\"",
+              "end": "\""
+            }
+          ]
+        }
+      ]
+    },
+    "module-declarations": {
+      "patterns": [
+        {
+          "name": "meta.module-asm.llvm",
+          "begin": "\\b(module)\\s+(asm)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.module.llvm"
+            },
+            "2": {
+              "name": "keyword.other.asm.llvm"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "string.quoted.double.llvm",
+              "begin": "\"",
+              "end": "\""
+            }
+          ]
+        },
+        {
+          "name": "keyword.other.module.llvm",
+          "match": "\\b(declare|define|module)\\b"
+        }
+      ]
+    },
+    "function-definition": {
+      "patterns": [
+        {
+          "name": "meta.function.llvm",
+          "begin": "^\\s*(declare|define)\\s+(.*?)\\s+(@[a-zA-Z0-9_.$]+|\"[^\"]+\")\\s*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.function.llvm"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#linkage"
+                },
+                {
+                  "include": "#visibility"
+                },
+                {
+                  "include": "#calling-convention"
+                },
+                {
+                  "include": "#attributes"
+                },
+                {
+                  "include": "#types"
+                }
+              ]
+            },
+            "3": {
+              "name": "entity.name.function.llvm"
+            }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "include": "#function-parameters"
+            }
+          ]
+        },
+        {
+          "name": "entity.name.function.llvm",
+          "match": "@[a-zA-Z0-9_.$]+|@\"[^\"]+\""
+        },
+        {
+          "name": "meta.label.llvm",
+          "match": "^\\s*([a-zA-Z0-9_.$]+|\"[^\"]+\"):",
+          "captures": {
+            "1": {
+              "name": "entity.name.label.llvm"
+            }
+          }
+        },
+        {
+          "name": "variable.other.label.llvm",
+          "match": "\\blabel\\s+%[a-zA-Z0-9_.$]+|\\blabel\\s+%\"[^\"]+\""
+        }
+      ]
+    },
+    "function-parameters": {
+      "patterns": [
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#attributes"
+        },
+        {
+          "include": "#variables"
+        },
+        {
+          "name": "keyword.operator.ellipsis.llvm",
+          "match": "\\.\\.\\."
+        },
+        {
+          "name": "punctuation.separator.parameter.llvm",
+          "match": ","
+        }
+      ]
+    },
+    "linkage": {
+      "patterns": [
+        {
+          "name": "storage.modifier.linkage.llvm",
+          "match": "\\b(private|internal|available_externally|linkonce|weak|common|appending|extern_weak|linkonce_odr|weak_odr|external|dllimport|dllexport)\\b"
+        }
+      ]
+    },
+    "visibility": {
+      "patterns": [
+        {
+          "name": "storage.modifier.visibility.llvm",
+          "match": "\\b(default|hidden|protected)\\b"
+        }
+      ]
+    },
+    "calling-convention": {
+      "patterns": [
+        {
+          "name": "storage.modifier.calling-convention.llvm",
+          "match": "\\b(ccc|fastcc|coldcc|webkit_jscc|anyregcc|preserve_mostcc|preserve_allcc|cxx_fast_tlscc|swiftcc|swifttailcc|tailcc|cfguard_checkcc|cc\\s+\\d+)\\b"
+        }
+      ]
+    },
+    "global-variables": {
+      "patterns": [
+        {
+          "name": "meta.global.llvm",
+          "begin": "^\\s*(@[a-zA-Z0-9_.$]+|@\"[^\"]+\")\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "variable.other.global.llvm"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#linkage"
+            },
+            {
+              "include": "#visibility"
+            },
+            {
+              "include": "#thread-local"
+            },
+            {
+              "include": "#unnamed-addr"
+            },
+            {
+              "include": "#address-space"
+            },
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "storage.modifier.global.llvm",
+              "match": "\\b(global|constant|externally_initialized)\\b"
+            },
+            {
+              "include": "#attributes"
+            }
+          ]
+        },
+        {
+          "name": "variable.other.global.llvm",
+          "match": "@[a-zA-Z0-9_.$]+|@\"[^\"]+\""
+        }
+      ]
+    },
+    "type-definitions": {
+      "patterns": [
+        {
+          "name": "meta.type.definition.llvm",
+          "begin": "^\\s*(%[a-zA-Z0-9_.$]+|%\"[^\"]+\")\\s*=\\s*type",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.name.type.llvm"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "name": "entity.name.type.llvm",
+          "match": "%[a-zA-Z0-9_.$]+|%\"[^\"]+\""
+        }
+      ]
+    },
+    "thread-local": {
+      "patterns": [
+        {
+          "name": "storage.modifier.thread-local.llvm",
+          "match": "\\bthread_local\\s*\\((localdynamic|initialexec|localexec)\\)|\\bthread_local\\b"
+        }
+      ]
+    },
+    "unnamed-addr": {
+      "patterns": [
+        {
+          "name": "storage.modifier.unnamed-addr.llvm",
+          "match": "\\b(unnamed_addr|local_unnamed_addr)\\b"
+        }
+      ]
+    },
+    "address-space": {
+      "patterns": [
+        {
+          "name": "storage.modifier.address-space.llvm",
+          "match": "\\baddrspace\\s*\\(\\s*\\d+\\s*\\)"
+        }
+      ]
+    },
+    "instructions": {
+      "patterns": [
+        {
+          "include": "#terminator-instructions"
+        },
+        {
+          "include": "#binary-operations"
+        },
+        {
+          "include": "#bitwise-operations"
+        },
+        {
+          "include": "#vector-operations"
+        },
+        {
+          "include": "#aggregate-operations"
+        },
+        {
+          "include": "#memory-instructions"
+        },
+        {
+          "include": "#conversion-operations"
+        },
+        {
+          "include": "#comparison-operations"
+        },
+        {
+          "include": "#other-operations"
+        }
+      ]
+    },
+    "terminator-instructions": {
+      "patterns": [
+        {
+          "name": "keyword.control.terminator.ret.llvm",
+          "match": "\\bret\\b"
+        },
+        {
+          "name": "keyword.control.terminator.br.llvm",
+          "match": "\\bbr\\b"
+        },
+        {
+          "name": "keyword.control.terminator.switch.llvm",
+          "match": "\\bswitch\\b"
+        },
+        {
+          "name": "keyword.control.terminator.indirectbr.llvm",
+          "match": "\\bindirectbr\\b"
+        },
+        {
+          "name": "keyword.control.terminator.invoke.llvm",
+          "match": "\\binvoke\\b"
+        },
+        {
+          "name": "keyword.control.terminator.resume.llvm",
+          "match": "\\bresume\\b"
+        },
+        {
+          "name": "keyword.control.terminator.catchswitch.llvm",
+          "match": "\\bcatchswitch\\b"
+        },
+        {
+          "name": "keyword.control.terminator.catchret.llvm",
+          "match": "\\bcatchret\\b"
+        },
+        {
+          "name": "keyword.control.terminator.cleanupret.llvm",
+          "match": "\\bcleanupret\\b"
+        },
+        {
+          "name": "keyword.control.terminator.unreachable.llvm",
+          "match": "\\bunreachable\\b"
+        },
+        {
+          "name": "keyword.control.terminator.callbr.llvm",
+          "match": "\\bcallbr\\b"
+        },
+        {
+          "name": "keyword.control.unwind.llvm",
+          "match": "\\b(to|unwind|label)\\b"
+        }
+      ]
+    },
+    "binary-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arithmetic.llvm",
+          "match": "\\b(add|fadd|sub|fsub|mul|fmul|udiv|sdiv|fdiv|urem|srem|frem)\\b"
+        },
+        {
+          "name": "keyword.operator.arithmetic.modifier.llvm",
+          "match": "\\b(nuw|nsw|exact)\\b"
+        }
+      ]
+    },
+    "bitwise-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.bitwise.llvm",
+          "match": "\\b(shl|lshr|ashr|and|or|xor)\\b"
+        }
+      ]
+    },
+    "vector-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.vector.llvm",
+          "match": "\\b(extractelement|insertelement|shufflevector)\\b"
+        }
+      ]
+    },
+    "aggregate-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.aggregate.llvm",
+          "match": "\\b(extractvalue|insertvalue)\\b"
+        }
+      ]
+    },
+    "memory-instructions": {
+      "patterns": [
+        {
+          "name": "keyword.operator.memory.alloca.llvm",
+          "match": "\\balloca\\b"
+        },
+        {
+          "name": "keyword.operator.memory.load.llvm",
+          "match": "\\bload\\b"
+        },
+        {
+          "name": "keyword.operator.memory.store.llvm",
+          "match": "\\bstore\\b"
+        },
+        {
+          "name": "keyword.operator.memory.fence.llvm",
+          "match": "\\bfence\\b"
+        },
+        {
+          "name": "keyword.operator.memory.cmpxchg.llvm",
+          "match": "\\bcmpxchg\\b"
+        },
+        {
+          "name": "keyword.operator.memory.atomicrmw.llvm",
+          "match": "\\batomicrmw\\b"
+        },
+        {
+          "name": "keyword.operator.memory.getelementptr.llvm",
+          "match": "\\bgetelementptr\\b"
+        },
+        {
+          "name": "keyword.operator.memory.modifier.llvm",
+          "match": "\\b(volatile|atomic|inbounds|inrange)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.ordering.llvm",
+          "match": "\\b(unordered|monotonic|acquire|release|acq_rel|seq_cst)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.atomicrmw-op.llvm",
+          "match": "\\b(xchg|add|sub|and|nand|or|xor|max|min|umax|umin|fadd|fsub|fmax|fmin)\\b"
+        }
+      ]
+    },
+    "conversion-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.cast.llvm",
+          "match": "\\b(trunc|zext|sext|fptrunc|fpext|fptoui|fptosi|uitofp|sitofp|ptrtoint|inttoptr|bitcast|addrspacecast)\\b"
+        }
+      ]
+    },
+    "comparison-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.icmp.llvm",
+          "match": "\\bicmp\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.fcmp.llvm",
+          "match": "\\bfcmp\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.condition.integer.llvm",
+          "match": "\\b(eq|ne|ugt|uge|ult|ule|sgt|sge|slt|sle)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.condition.float.llvm",
+          "match": "\\b(oeq|ogt|oge|olt|ole|one|ord|ueq|ugt|uge|ult|ule|une|uno)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.fast-math.llvm",
+          "match": "\\b(nnan|ninf|nsz|arcp|contract|afn|reassoc|fast)\\b"
+        }
+      ]
+    },
+    "other-operations": {
+      "patterns": [
+        {
+          "name": "keyword.operator.other.phi.llvm",
+          "match": "\\bphi\\b"
+        },
+        {
+          "name": "keyword.operator.other.select.llvm",
+          "match": "\\bselect\\b"
+        },
+        {
+          "name": "keyword.operator.other.freeze.llvm",
+          "match": "\\bfreeze\\b"
+        },
+        {
+          "name": "keyword.operator.other.call.llvm",
+          "match": "\\bcall\\b"
+        },
+        {
+          "name": "keyword.operator.other.va-arg.llvm",
+          "match": "\\bva_arg\\b"
+        },
+        {
+          "name": "keyword.operator.other.landingpad.llvm",
+          "match": "\\blandingpad\\b"
+        },
+        {
+          "name": "keyword.operator.other.catchpad.llvm",
+          "match": "\\bcatchpad\\b"
+        },
+        {
+          "name": "keyword.operator.other.cleanuppad.llvm",
+          "match": "\\bcleanuppad\\b"
+        },
+        {
+          "name": "keyword.control.other.within.llvm",
+          "match": "\\bwithin\\b"
+        },
+        {
+          "name": "keyword.control.other.cleanup.llvm",
+          "match": "\\bcleanup\\b"
+        },
+        {
+          "name": "keyword.control.other.catch.llvm",
+          "match": "\\bcatch\\b"
+        },
+        {
+          "name": "keyword.control.other.filter.llvm",
+          "match": "\\bfilter\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.void.llvm",
+          "match": "\\bvoid\\b"
+        },
+        {
+          "name": "storage.type.integer.llvm",
+          "match": "\\bi[1-9][0-9]*\\b"
+        },
+        {
+          "name": "storage.type.float.llvm",
+          "match": "\\b(half|bfloat|float|double|fp128|x86_fp80|ppc_fp128)\\b"
+        },
+        {
+          "name": "storage.type.x86mmx.llvm",
+          "match": "\\bx86_mmx\\b"
+        },
+        {
+          "name": "storage.type.x86amx.llvm",
+          "match": "\\bx86_amx\\b"
+        },
+        {
+          "name": "storage.type.ptr.llvm",
+          "match": "\\bptr\\b"
+        },
+        {
+          "name": "meta.type.pointer.llvm",
+          "match": "([a-zA-Z0-9_<>\\[\\]{}%*, ]+)\\*",
+          "captures": {
+            "1": {
+              "patterns": [
+                {
+                  "include": "#types"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "meta.type.vector.llvm",
+          "begin": "<",
+          "end": ">",
+          "patterns": [
+            {
+              "name": "storage.modifier.vscale.llvm",
+              "match": "\\bvscale\\b"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "keyword.operator.vector-size.llvm",
+              "match": "x"
+            }
+          ]
+        },
+        {
+          "name": "meta.type.array.llvm",
+          "begin": "\\[",
+          "end": "\\]",
+          "patterns": [
+            {
+              "include": "#types"
+            },
+            {
+              "name": "keyword.operator.array-size.llvm",
+              "match": "x"
+            }
+          ]
+        },
+        {
+          "name": "meta.type.struct.llvm",
+          "begin": "\\{|<\\{",
+          "end": "\\}>|\\}",
+          "patterns": [
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.llvm",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "meta.type.function.llvm",
+          "match": "([a-zA-Z0-9_<>\\[\\]{}%*, ]+)\\s*\\(([^)]*)\\)",
+          "captures": {
+            "1": {
+              "patterns": [
+                {
+                  "include": "#types"
+                }
+              ]
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#types"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "storage.type.opaque.llvm",
+          "match": "\\bopaque\\b"
+        },
+        {
+          "name": "storage.type.token.llvm",
+          "match": "\\btoken\\b"
+        },
+        {
+          "name": "storage.type.metadata.llvm",
+          "match": "\\bmetadata\\b"
+        },
+        {
+          "include": "#address-space"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.local.llvm",
+          "match": "%[a-zA-Z0-9_.$]+|%\"[^\"]+\"|%\\d+"
+        },
+        {
+          "name": "variable.other.global.llvm",
+          "match": "@[a-zA-Z0-9_.$]+|@\"[^\"]+\"|@\\d+"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.llvm",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.llvm",
+          "match": "\\b(null|none)\\b"
+        },
+        {
+          "name": "constant.language.undef.llvm",
+          "match": "\\bundef\\b"
+        },
+        {
+          "name": "constant.language.poison.llvm",
+          "match": "\\bpoison\\b"
+        },
+        {
+          "name": "constant.language.zeroinitializer.llvm",
+          "match": "\\bzeroinitializer\\b"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.llvm",
+          "match": "\\b-?[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.hexadecimal.llvm",
+          "match": "\\b-?0x[0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.llvm",
+          "match": "\\b-?[0-9]+\\.[0-9]+(e[+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.hexadecimal.llvm",
+          "match": "\\b-?0x[0-9A-Fa-f]+\\.[0-9A-Fa-f]+(p[+-]?[0-9]+)?\\b|\\b-?0x[KLMH][0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "string.quoted.double.llvm",
+          "begin": "c?\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.llvm",
+              "match": "\\\\[0-9A-Fa-f]{2}"
+            }
+          ]
+        },
+        {
+          "name": "meta.constant.struct.llvm",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.llvm",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "meta.constant.array.llvm",
+          "begin": "\\[",
+          "end": "\\]",
+          "patterns": [
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.llvm",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "meta.constant.vector.llvm",
+          "begin": "<",
+          "end": ">",
+          "patterns": [
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.separator.llvm",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "meta.constant.expression.llvm",
+          "match": "\\b(getelementptr|bitcast|inttoptr|ptrtoint|trunc|zext|sext|fptrunc|fpext|fptoui|fptosi|uitofp|sitofp|addrspacecast|add|sub|mul)\\b",
+          "captures": {
+            "0": {
+              "name": "keyword.operator.constant-expression.llvm"
+            }
+          }
+        },
+        {
+          "name": "constant.other.blockaddress.llvm",
+          "match": "\\bblockaddress\\s*\\(@[a-zA-Z0-9_.$]+\\s*,\\s*%[a-zA-Z0-9_.$]+\\)"
+        },
+        {
+          "name": "constant.other.dso-local.llvm",
+          "match": "\\bdso_local\\b"
+        },
+        {
+          "name": "constant.other.dso-preemptable.llvm",
+          "match": "\\bdso_preemptable\\b"
+        }
+      ]
+    }
+  }
+}
