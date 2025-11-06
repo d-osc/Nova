@@ -107,9 +107,14 @@ set(NOVA_SOURCES
     src/codegen/ExprGen.cpp
     
     # Runtime
+    src/runtime/Memory.cpp
     src/runtime/GarbageCollector.cpp
     src/runtime/AsyncRuntime.cpp
-    src/runtime/Memory.cpp
+    src/runtime/Array.cpp
+    src/runtime/String.cpp
+    src/runtime/Object.cpp
+    src/runtime/Function.cpp
+    src/runtime/Utility.cpp
     
     # Diagnostics
     src/diagnostics/Diagnostic.cpp

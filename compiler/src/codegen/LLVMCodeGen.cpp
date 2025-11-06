@@ -902,11 +902,54 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
             }
             
             if (callee) {
-                // Convert arguments
+                // Convert arguments with type checking
                 std::vector<llvm::Value*> args;
+                auto paramIt = callee->arg_begin();
+                
                 for (const auto& arg : callTerm->args) {
                     llvm::Value* argValue = convertOperand(arg.get());
-                    if (argValue) args.push_back(argValue);
+                    if (argValue && paramIt != callee->arg_end()) {
+                        // Check if we need to convert types
+                        llvm::Type* expectedType = paramIt->getType();
+                        llvm::Type* actualType = argValue->getType();
+                        
+                        if (actualType != expectedType) {
+                            std::cerr << "DEBUG LLVM: Type mismatch in function call, converting from ";
+                            actualType->print(llvm::errs());
+                            std::cerr << " to ";
+                            expectedType->print(llvm::errs());
+                            std::cerr << std::endl;
+                            
+                            // Handle pointer to integer conversion
+                            if (actualType->isPointerTy() && expectedType->isIntegerTy()) {
+                                std::cerr << "DEBUG LLVM: Converting pointer to integer" << std::endl;
+                                argValue = builder->CreatePtrToInt(argValue, expectedType);
+                            }
+                            // Handle integer to pointer conversion
+                            else if (actualType->isIntegerTy() && expectedType->isPointerTy()) {
+                                std::cerr << "DEBUG LLVM: Converting integer to pointer" << std::endl;
+                                argValue = builder->CreateIntToPtr(argValue, expectedType);
+                            }
+                            // Handle integer size mismatch
+                            else if (actualType->isIntegerTy() && expectedType->isIntegerTy()) {
+                                auto actualIntType = static_cast<llvm::IntegerType*>(actualType);
+                                auto expectedIntType = static_cast<llvm::IntegerType*>(expectedType);
+                                
+                                if (actualIntType->getBitWidth() < expectedIntType->getBitWidth()) {
+                                    std::cerr << "DEBUG LLVM: Extending integer from " << actualIntType->getBitWidth() 
+                                              << " to " << expectedIntType->getBitWidth() << std::endl;
+                                    argValue = builder->CreateSExt(argValue, expectedType);
+                                } else if (actualIntType->getBitWidth() > expectedIntType->getBitWidth()) {
+                                    std::cerr << "DEBUG LLVM: Truncating integer from " << actualIntType->getBitWidth() 
+                                              << " to " << expectedIntType->getBitWidth() << std::endl;
+                                    argValue = builder->CreateTrunc(argValue, expectedType);
+                                }
+                            }
+                        }
+                        
+                        args.push_back(argValue);
+                        ++paramIt;
+                    }
                 }
                 
                 // Create call
@@ -942,6 +985,35 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
     }
     
     std::cerr << "DEBUG LLVM: Creating binary operation with op=" << static_cast<int>(op) << std::endl;
+    
+    // Convert operands to compatible types for arithmetic operations
+    if (op != mir::MIRBinaryOpRValue::BinOp::Eq && 
+        op != mir::MIRBinaryOpRValue::BinOp::Ne &&
+        op != mir::MIRBinaryOpRValue::BinOp::Lt &&
+        op != mir::MIRBinaryOpRValue::BinOp::Le &&
+        op != mir::MIRBinaryOpRValue::BinOp::Gt &&
+        op != mir::MIRBinaryOpRValue::BinOp::Ge) {
+        // For arithmetic operations, ensure both operands are of the same type
+        if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
+            // Convert pointer to integer
+            std::cerr << "DEBUG LLVM: Converting pointer to integer in binary operation" << std::endl;
+            lhs = builder->CreatePtrToInt(lhs, llvm::Type::getInt64Ty(*context), "ptr_to_int");
+        } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+            // Convert pointer to integer
+            std::cerr << "DEBUG LLVM: Converting pointer to integer in binary operation" << std::endl;
+            rhs = builder->CreatePtrToInt(rhs, llvm::Type::getInt64Ty(*context), "ptr_to_int");
+        } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy() && 
+                   lhs->getType() != rhs->getType()) {
+            // Convert integers to the same width
+            auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
+            auto rhsIntTy = static_cast<llvm::IntegerType*>(rhs->getType());
+            if (lhsIntTy->getBitWidth() > rhsIntTy->getBitWidth()) {
+                rhs = builder->CreateSExt(rhs, lhs->getType(), "int_ext");
+            } else {
+                lhs = builder->CreateSExt(lhs, rhs->getType(), "int_ext");
+            }
+        }
+    }
     
     switch (op) {
         case mir::MIRBinaryOpRValue::BinOp::Add:
