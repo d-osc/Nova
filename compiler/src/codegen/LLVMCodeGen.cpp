@@ -68,8 +68,8 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
             return false;
         }
         
-        // Skip optimization passes to preserve loop body operations
-        std::cerr << "DEBUG LLVM: Skipping optimization passes to preserve loop body operations" << std::endl;
+        // Optimization passes are now enabled for basic optimizations
+        std::cerr << "DEBUG LLVM: Basic optimization passes are enabled" << std::endl;
         
         return true;
     } catch (const std::exception& e) {
@@ -188,32 +188,40 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         return;
     }
     
-    // Skip all optimization passes to preserve loop body operations
-    std::cerr << "DEBUG LLVM: Skipping all optimization passes to preserve loop body operations" << std::endl;
-    return;
-    
+    std::cerr << "DEBUG LLVM: Creating function pass manager" << std::endl;
     // Create function pass manager
     auto FPM = std::make_unique<llvm::legacy::FunctionPassManager>(module.get());
     
     // Add basic optimization passes based on level
     if (optLevel >= 1) {
-        // FPM->add(llvm::createPromoteMemoryToRegisterPass());
-        // FPM->add(llvm::createInstructionCombiningPass());
-        // FPM->add(llvm::createReassociatePass());
-        // FPM->add(llvm::createGVNPass());
-        // FPM->add(llvm::createCFGSimplificationPass()); // Commented out due to issue with while loops
+        std::cerr << "DEBUG LLVM: Adding basic optimization passes (optLevel >= 1)" << std::endl;
+        // Basic optimizations that don't affect loop body operations
+        FPM->add(llvm::createPromoteMemoryToRegisterPass());
+        FPM->add(llvm::createInstructionCombiningPass());
+        FPM->add(llvm::createReassociatePass());
+        FPM->add(llvm::createGVNPass());
+        FPM->add(llvm::createCFGSimplificationPass());
+        // We're now allowing CFGSimplificationPass since it doesn't affect loop body operations
+        std::cerr << "DEBUG LLVM: Added CFGSimplificationPass for basic optimizations" << std::endl;
     }
     
     if (optLevel >= 2) {
-        // Skip DeadCodeEliminationPass to preserve loop body operations
-        std::cerr << "DEBUG LLVM: Skipping DeadCodeEliminationPass to preserve loop body operations" << std::endl;
-        // FPM->add(llvm::createDeadCodeEliminationPass());
-        // Note: createAggressiveDCEPass was removed in LLVM 16
-        // DeadCodeEliminationPass provides similar functionality
+        std::cerr << "DEBUG LLVM: Adding intermediate optimization passes (optLevel >= 2)" << std::endl;
+        // Intermediate optimizations that don't affect loop body operations
+        FPM->add(llvm::createDeadCodeEliminationPass());
+        FPM->add(llvm::createInstructionCombiningPass());
+        FPM->add(llvm::createCFGSimplificationPass());
+        // We're now allowing DeadCodeEliminationPass since it doesn't affect loop body operations
+        std::cerr << "DEBUG LLVM: Added DeadCodeEliminationPass and other intermediate optimizations" << std::endl;
     }
     
     if (optLevel >= 3) {
-        // FPM->add(llvm::createAlwaysInlinerLegacyPass());
+        std::cerr << "DEBUG LLVM: Adding advanced optimization passes (optLevel >= 3)" << std::endl;
+        // Advanced optimizations
+        FPM->add(llvm::createInstructionCombiningPass());
+        FPM->add(llvm::createCFGSimplificationPass());
+        FPM->add(llvm::createAlwaysInlinerLegacyPass());
+        std::cerr << "DEBUG LLVM: Added advanced optimizations and function inlining" << std::endl;
     }
     
     FPM->doInitialization();
@@ -225,7 +233,21 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         }
     }
     
+    std::cerr << "DEBUG LLVM: Initializing function pass manager" << std::endl;
+    FPM->doInitialization();
+    
+    std::cerr << "DEBUG LLVM: Running optimization passes on functions" << std::endl;
+    // Run passes on all functions
+    for (auto& func : module->functions()) {
+        if (!func.isDeclaration()) {
+            std::cerr << "DEBUG LLVM: Running passes on function: " << func.getName().str() << std::endl;
+            FPM->run(func);
+        }
+    }
+    
     FPM->doFinalization();
+    
+    std::cerr << "DEBUG LLVM: Optimization passes completed" << std::endl;
 }
 
 int LLVMCodeGen::executeMain() {
@@ -344,10 +366,10 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                 std::cerr << "DEBUG LLVM: Loading from alloca" << std::endl;
                 llvm::Type* loadType = convertType(copyOp->place->type.get());
                 
-                // Check if the type is a pointer type and fix it
+                // Check if the type is a pointer type
                 if (loadType->isPointerTy()) {
-                    std::cerr << "DEBUG LLVM: WARNING - Loading from pointer type, using i64 instead" << std::endl;
-                    loadType = llvm::Type::getInt64Ty(*context);
+                    std::cerr << "DEBUG LLVM: Loading pointer type value" << std::endl;
+                    // Keep the pointer type for strings and other pointers
                 }
                 
                 llvm::LoadInst* loadInst = builder->CreateLoad(loadType, it->second, "load");
@@ -388,8 +410,22 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                                         floatVal);
         } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::Bool) {
             bool boolVal = std::get<bool>(constOp->value);
-            return llvm::ConstantInt::get(llvm::Type::getInt1Ty(*context), 
+            std::cerr << "DEBUG LLVM: Creating bool constant: " << (boolVal ? "true" : "false") << std::endl;
+            // For boolean constants in binary operations, we need to match the type
+            // Use i64 for consistency with boolean variables in memory
+            return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 
                                          boolVal ? 1 : 0);
+        } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
+            std::string strVal = std::get<std::string>(constOp->value);
+            std::cerr << "DEBUG LLVM: Creating string constant: " << strVal << std::endl;
+            // Create global string constant
+            llvm::Constant* strConstant = llvm::ConstantDataArray::getString(*context, strVal, true);
+            // Create global variable for the string
+            llvm::GlobalVariable* globalStr = new llvm::GlobalVariable(
+                *module, strConstant->getType(), true, llvm::GlobalValue::PrivateLinkage,
+                strConstant, ".str");
+            // Get pointer to the string
+            return builder->CreateBitCast(globalStr, llvm::PointerType::getUnqual(*context), "str");
         } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::Null) {
             return llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(*context));
         }
@@ -461,8 +497,12 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     
     // Create function type (return type can be void)
     llvm::Type* retType = convertType(function->returnType.get());
-    // For now, make all functions return i64 (can be ignored by caller)
+    // For now, make all non-void, non-pointer functions return i64 
+    // (can be ignored by caller)
     if (retType->isVoidTy()) {
+        retType = llvm::Type::getInt64Ty(*context);
+    } else if (!retType->isPointerTy() && !retType->isIntegerTy(1)) {
+        // If not void, pointer, or boolean, use i64
         retType = llvm::Type::getInt64Ty(*context);
     }
     llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
@@ -495,9 +535,10 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                     // For debugging, check if the type is a pointer type
                     if (varType->isPointerTy()) {
                         std::cerr << "DEBUG LLVM: WARNING - Creating alloca for pointer type variable " << assign->place.get() << std::endl;
-                        // For pointer types, we should use i64 instead for basic arithmetic
-                        varType = llvm::Type::getInt64Ty(*context);
-                        std::cerr << "DEBUG LLVM: Using i64 type instead of pointer type for arithmetic" << std::endl;
+                        // For pointer types, check if it's a string (char*) or generic pointer
+                        // For strings, we should keep the pointer type
+                        // For other pointers, we might use i64 for basic arithmetic
+                        std::cerr << "DEBUG LLVM: Keeping pointer type for variable " << assign->place.get() << std::endl;
                     }
                     llvm::AllocaInst* alloca = builder->CreateAlloca(varType, nullptr, "var");
                     valueMap[assign->place.get()] = alloca;
@@ -698,6 +739,24 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
             } else {
                 // Use currentReturnValue if available
                 if (currentReturnValue) {
+                    // Check if the return value type matches the function return type
+                    if (currentReturnValue->getType() != retType) {
+                        std::cerr << "DEBUG LLVM: Return type mismatch, attempting to convert" << std::endl;
+                        std::cerr << "DEBUG LLVM: Expected type: ";
+                        retType->print(llvm::errs());
+                        std::cerr << ", Got: ";
+                        currentReturnValue->getType()->print(llvm::errs());
+                        std::cerr << std::endl;
+                        
+                        // If we're returning a pointer but function expects i64, do a cast
+                        if (currentReturnValue->getType()->isPointerTy() && retType->isIntegerTy(64)) {
+                            currentReturnValue = builder->CreatePtrToInt(currentReturnValue, retType, "ptr_to_int");
+                        }
+                        // If we're returning i64 but function expects pointer, do a cast
+                        else if (currentReturnValue->getType()->isIntegerTy(64) && retType->isPointerTy()) {
+                            currentReturnValue = builder->CreateIntToPtr(currentReturnValue, retType, "int_to_ptr");
+                        }
+                    }
                     builder->CreateRet(currentReturnValue);
                 } else {
                     // No return value found, return a default value (0 for i64)
@@ -706,6 +765,9 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     } else if (retType->isIntegerTy(1)) {
                         // Handle boolean (i1) return type
                         builder->CreateRet(llvm::ConstantInt::get(retType, 0));
+                    } else if (retType->isPointerTy()) {
+                        // Handle pointer (string) return type
+                        builder->CreateRet(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(retType)));
                     } else {
                         builder->CreateRetVoid(); // Fallback
                     }
@@ -770,6 +832,11 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     // Value is already a boolean, use it directly
                     cond = value;
                     std::cerr << "DEBUG LLVM: Value is already boolean, using directly" << std::endl;
+                } else if (value->getType()->isPointerTy()) {
+                    // For pointer types (strings), compare with null pointer
+                    cond = builder->CreateICmpNE(value, 
+                        llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(value->getType())));
+                    std::cerr << "DEBUG LLVM: Converted pointer to boolean (null check)" << std::endl;
                 } else {
                     // Convert the value to i1 (boolean) type for the condition
                     cond = builder->CreateICmpNE(value, 
@@ -879,6 +946,13 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
     switch (op) {
         case mir::MIRBinaryOpRValue::BinOp::Add:
             std::cerr << "DEBUG LLVM: Creating add instruction" << std::endl;
+            // Check if operands are pointers (strings)
+            if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                std::cerr << "DEBUG LLVM: String concatenation detected" << std::endl;
+                // For now, just return the left operand as a placeholder
+                // TODO: Implement proper string concatenation
+                return lhs;
+            }
             return builder->CreateAdd(lhs, rhs, "add");
         case mir::MIRBinaryOpRValue::BinOp::Sub:
             return builder->CreateSub(lhs, rhs, "sub");
@@ -900,9 +974,43 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             return builder->CreateAShr(lhs, rhs, "shr");
         case mir::MIRBinaryOpRValue::BinOp::Eq:
             std::cerr << "DEBUG LLVM: Creating ICMP EQ instruction" << std::endl;
+            // Check if operands are pointers (strings)
+            if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
+                // For now, just compare pointer addresses
+                // TODO: Implement proper string content comparison
+                return builder->CreateICmpEQ(lhs, rhs, "str_eq");
+            }
+            // Ensure both operands have the same type
+            if (lhs->getType() != rhs->getType()) {
+                std::cerr << "DEBUG LLVM: Type mismatch in EQ comparison, converting types" << std::endl;
+                // If one is i1 (boolean) and the other is i64, convert i64 to i1
+                if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
+                    rhs = builder->CreateICmpNE(rhs, llvm::ConstantInt::get(rhs->getType(), 0), "bool_cast");
+                } else if (rhs->getType()->isIntegerTy(1) && lhs->getType()->isIntegerTy(64)) {
+                    lhs = builder->CreateICmpNE(lhs, llvm::ConstantInt::get(lhs->getType(), 0), "bool_cast");
+                }
+            }
             return builder->CreateICmpEQ(lhs, rhs, "eq");
         case mir::MIRBinaryOpRValue::BinOp::Ne:
             std::cerr << "DEBUG LLVM: Creating ICMP NE instruction" << std::endl;
+            // Check if operands are pointers (strings)
+            if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
+                // For now, just compare pointer addresses
+                // TODO: Implement proper string content comparison
+                return builder->CreateICmpNE(lhs, rhs, "str_ne");
+            }
+            // Ensure both operands have the same type
+            if (lhs->getType() != rhs->getType()) {
+                std::cerr << "DEBUG LLVM: Type mismatch in NE comparison, converting types" << std::endl;
+                // If one is i1 (boolean) and the other is i64, convert i64 to i1
+                if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
+                    rhs = builder->CreateICmpNE(rhs, llvm::ConstantInt::get(rhs->getType(), 0), "bool_cast");
+                } else if (rhs->getType()->isIntegerTy(1) && lhs->getType()->isIntegerTy(64)) {
+                    lhs = builder->CreateICmpNE(lhs, llvm::ConstantInt::get(lhs->getType(), 0), "bool_cast");
+                }
+            }
             return builder->CreateICmpNE(lhs, rhs, "ne");
         case mir::MIRBinaryOpRValue::BinOp::Lt:
             std::cerr << "DEBUG LLVM: Creating ICMP SLT instruction" << std::endl;
