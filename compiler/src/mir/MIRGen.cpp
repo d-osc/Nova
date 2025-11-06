@@ -2,10 +2,21 @@
 #include "nova/MIR/MIRBuilder.h"
 #include <unordered_map>
 #include <iostream>
+#include <set>
+#include <queue>
 
 namespace nova::mir {
 
 // ==================== MIR Generator Implementation ====================
+
+// Loop context structure for tracking break/continue targets
+struct LoopContext {
+    MIRBasicBlock* breakTarget;    // Target for break statements
+    MIRBasicBlock* continueTarget; // Target for continue statements
+    std::shared_ptr<LoopContext> parent; // Parent loop context (for nested loops)
+    
+    LoopContext() : breakTarget(nullptr), continueTarget(nullptr), parent(nullptr) {}
+};
 
 class MIRGenerator {
 private:
@@ -23,6 +34,9 @@ private:
     uint32_t localCounter_;
     uint32_t blockCounter_;
     uint32_t totalBlocks_;
+    
+    // Current loop context for break/continue statements
+    std::shared_ptr<LoopContext> currentLoopContext_;
     
 public:
     MIRGenerator(hir::HIRModule* hirModule, MIRModule* mirModule)
@@ -96,12 +110,133 @@ private:
             case hir::HIRType::Kind::Function:
                 return std::make_shared<MIRType>(MIRType::Kind::Function);
             
+            case hir::HIRType::Kind::Any:
+                return std::make_shared<MIRType>(MIRType::Kind::I64);
+            
             default:
                 return std::make_shared<MIRType>(MIRType::Kind::Void);
         }
     }
     
-    // ==================== Function Translation ====================
+    // ==================== Loop Analysis ====================
+    
+    void analyzeLoops(hir::HIRFunction* hirFunc) {
+        // Reset loop context
+        currentLoopContext_ = nullptr;
+        
+        std::cerr << "DEBUG: Analyzing loops in function with " << hirFunc->basicBlocks.size() << " basic blocks" << std::endl;
+        
+        // Find loop headers by looking for blocks with conditional branches
+        // where one of the successors is a predecessor of the current block
+        for (const auto& hirBlock : hirFunc->basicBlocks) {
+            // Check if this block has a conditional branch terminator
+            if (!hirBlock->instructions.empty()) {
+                auto lastInst = hirBlock->instructions.back().get();
+                if (lastInst->opcode == hir::HIRInstruction::Opcode::CondBr) {
+                    std::cerr << "DEBUG: Found conditional branch in block" << std::endl;
+                    // Check if this is a loop header (has a back edge)
+                    if (isLoopHeader(hirBlock.get())) {
+                        std::cerr << "DEBUG: Found loop header, setting up loop context" << std::endl;
+                        // Set up loop context for this loop
+                        setupLoopContext(hirBlock.get());
+                    }
+                }
+            }
+        }
+    }
+    
+    bool isLoopHeader(hir::HIRBasicBlock* block) {
+        if (block->successors.size() < 2) return false;
+        
+        // Get the successors of the conditional branch
+        auto* trueSuccessor = block->successors[0].get();
+        auto* falseSuccessor = block->successors[1].get();
+        
+        // Check if either successor can reach back to this block
+        return canReachBlock(trueSuccessor, block) || canReachBlock(falseSuccessor, block);
+    }
+    
+    bool canReachBlock(hir::HIRBasicBlock* from, hir::HIRBasicBlock* to) {
+        if (from == to) return true;
+        
+        std::set<hir::HIRBasicBlock*> visited;
+        std::queue<hir::HIRBasicBlock*> worklist;
+        worklist.push(from);
+        visited.insert(from);
+        
+        while (!worklist.empty()) {
+            auto* current = worklist.front();
+            worklist.pop();
+            
+            for (const auto& successor : current->successors) {
+                if (successor.get() == to) {
+                    return true;
+                }
+                if (visited.find(successor.get()) == visited.end()) {
+                    visited.insert(successor.get());
+                    worklist.push(successor.get());
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    void setupLoopContext(hir::HIRBasicBlock* loopHeader) {
+        // Create a new loop context
+        auto loopContext = std::make_shared<LoopContext>();
+        
+        std::cerr << "DEBUG: Setting up loop context for header with " << loopHeader->successors.size() << " successors" << std::endl;
+        
+        // For a while loop, the structure is:
+        // - loopHeader (condition block) -> [bodyBlock, endBlock]
+        // - bodyBlock -> loopHeader (back edge)
+        // So:
+        // - break target should be endBlock (the successor that doesn't lead back to the header)
+        // - continue target should be the loopHeader (condition block)
+        
+        if (loopHeader->successors.size() >= 2) {
+            auto* successor1 = loopHeader->successors[0].get();
+            auto* successor2 = loopHeader->successors[1].get();
+            
+            std::cerr << "DEBUG: Checking successors: " << successor1 << " and " << successor2 << std::endl;
+            
+            // Check which successor can reach back to the loop header (this is the body block)
+            // The other one is the exit block (break target)
+            if (canReachBlock(successor1, loopHeader)) {
+                // successor1 is the body block, successor2 is the exit block
+                loopContext->breakTarget = blockMap_[successor2];
+                loopContext->continueTarget = blockMap_[loopHeader];
+                std::cerr << "DEBUG: Set break target to successor2 (exit block) and continue target to loop header" << std::endl;
+            } else if (canReachBlock(successor2, loopHeader)) {
+                // successor2 is the body block, successor1 is the exit block
+                loopContext->breakTarget = blockMap_[successor1];
+                loopContext->continueTarget = blockMap_[loopHeader];
+                std::cerr << "DEBUG: Set break target to successor1 (exit block) and continue target to loop header" << std::endl;
+            } else {
+                // Default fallback - this shouldn't happen for well-formed loops
+                std::cerr << "DEBUG: Neither successor leads back to loop header, using default assignment" << std::endl;
+                loopContext->breakTarget = blockMap_[successor2];
+                loopContext->continueTarget = blockMap_[successor1];
+            }
+        }
+        
+        // Set the parent context
+        loopContext->parent = currentLoopContext_;
+        
+        // Set as current loop context
+        currentLoopContext_ = loopContext;
+        
+        std::cerr << "DEBUG: Loop context set up with break target: " << loopContext->breakTarget 
+                  << " and continue target: " << loopContext->continueTarget << std::endl;
+    }
+    
+    bool isInLoop(hir::HIRBasicBlock* block, hir::HIRBasicBlock* loopHeader) {
+        // A block is in the loop if it can reach the loop header
+        return canReachBlock(block, loopHeader);
+    }
+
+// ==================== Function Translation ====================
     
     void generateFunction(hir::HIRFunction* hirFunc) {
         if (!hirFunc) return;
@@ -150,41 +285,32 @@ private:
         blockMap_.clear();
         blockCounter_ = 0;
         
-        // Debug: Print HIR basic blocks
-        std::cout << "HIR has " << hirFunc->basicBlocks.size() << " basic blocks" << std::endl;
         
-        // Debug: Print MIR basic blocks
-        std::cout << "MIR has " << currentFunction_->basicBlocks.size() << " basic blocks" << std::endl;
         
-        // First pass: create MIR blocks for non-empty HIR blocks only
-        for (const auto& hirBlock : hirFunc->basicBlocks) {
-            // Skip empty blocks (like if.end blocks with no instructions)
-            if (hirBlock->instructions.empty()) {
-                std::cerr << "Skipping empty HIR block - not creating MIR block" << std::endl;
-                continue;
-            }
-            
-            std::string label = "bb" + std::to_string(currentFunction_->basicBlocks.size());
+        // First pass: create MIR blocks for all HIR blocks
+        for (size_t i = 0; i < hirFunc->basicBlocks.size(); ++i) {
+            const auto& hirBlock = hirFunc->basicBlocks[i];
+            std::string label = "bb" + std::to_string(i);
             auto mirBlock = currentFunction_->createBasicBlock(label);
             blockMap_[hirBlock.get()] = mirBlock.get();
-            std::cout << "Created MIR block " << label << " for non-empty HIR block" << std::endl;
         }
         
-        // Debug: Print MIR basic blocks
-        std::cout << "MIR has " << currentFunction_->basicBlocks.size() << " basic blocks" << std::endl;
+        
+        
+        // Analyze control flow to identify loops and set up loop contexts
+        analyzeLoops(hirFunc);
         
         // Second pass: translate instructions
         for (const auto& hirBlock : hirFunc->basicBlocks) {
-            // Skip empty blocks (like if.end blocks with no instructions)
-            if (hirBlock->instructions.empty()) {
-                std::cerr << "Skipping empty HIR block - no instructions to translate" << std::endl;
-                continue;
-            }
-            
             auto mirBlock = blockMap_[hirBlock.get()];
             if (!mirBlock) continue;
             
             builder_->setInsertPoint(mirBlock);
+            
+            // Still translate instructions for empty blocks (they might have a terminator)
+            if (hirBlock->instructions.empty()) {
+                
+            }
             
             // Debug: Check if block has terminator after processing
             for (const auto& hirInst : hirBlock->instructions) {
@@ -193,18 +319,11 @@ private:
             
             // Debug: Check if this block has a terminator
             if (!mirBlock->terminator) {
-                std::cerr << "MIR Block missing terminator!" << std::endl;
+                
             }
         }
         
-        // Debug: Print all MIR blocks and their terminators
-        std::cout << "MIR Blocks and terminators:" << std::endl;
-        for (size_t i = 0; i < currentFunction_->basicBlocks.size(); i++) {
-            auto* block = currentFunction_->basicBlocks[i].get();
-            std::cout << "  Block " << i << ": " 
-                      << (block->terminator ? "has terminator" : "NO TERMINATOR") 
-                      << ", " << block->statements.size() << " statements" << std::endl;
-        }
+        
     }
     
     // ==================== Instruction Translation ====================
@@ -256,13 +375,25 @@ private:
                 break;
             
             case hir::HIRInstruction::Opcode::Call:
-                std::cerr << "Processing Call instruction" << std::endl;
+                
                 generateCall(hirInst, mirBlock);
                 break;
             
             case hir::HIRInstruction::Opcode::Return:
                 generateReturn(hirInst, mirBlock);
                 break;
+            
+            case hir::HIRInstruction::Opcode::Break:
+                std::cerr << "DEBUG: Processing Break instruction, currentLoopContext_=" << currentLoopContext_ << std::endl;
+                generateBreak(hirInst, mirBlock);
+                // Skip processing any remaining instructions in this block
+                return;
+            
+            case hir::HIRInstruction::Opcode::Continue:
+                std::cerr << "DEBUG: Processing Continue instruction, currentLoopContext_=" << currentLoopContext_ << std::endl;
+                generateContinue(hirInst, mirBlock);
+                // Skip processing any remaining instructions in this block
+                return;
             
             case hir::HIRInstruction::Opcode::Br:
                 generateBr(hirInst, mirBlock);
@@ -479,7 +610,7 @@ private:
         (void)mirBlock;
         if (hirInst->operands.empty()) return;
         
-        std::cerr << "generateCall called with " << hirInst->operands.size() << " operands" << std::endl;
+        
         
         // First operand is the function name (string constant)
         auto funcOperand = translateOperand(hirInst->operands[0].get());
@@ -489,7 +620,7 @@ private:
             args.push_back(translateOperand(hirInst->operands[i].get()));
         }
         
-        std::cerr << "Creating call with " << args.size() << " arguments" << std::endl;
+        
         
         auto dest = getOrCreatePlace(hirInst);
         
@@ -499,7 +630,7 @@ private:
         // Create the call terminator with destination and continuation block
         builder_->createCall(funcOperand, args, dest, contBlock.get(), nullptr);
         
-        std::cerr << "Call terminator created" << std::endl;
+        
         
         // Switch to the continuation block
         builder_->setInsertPoint(contBlock.get());
@@ -517,46 +648,52 @@ private:
         builder_->createReturn();
     }
     
-    void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)hirInst;
-        // Find target block
-        // In HIR, the successor should be in the basic block's successor list
-        if (mirBlock->isCleanup) return;
+        std::cerr << "DEBUG MIR: Entering generateBr" << std::endl;
         
-        // For now, just create a simple goto to the next block
-        // But avoid jumping to the entry block (bb0)
-        if (blockCounter_ < currentFunction_->basicBlocks.size()) {
-            auto targetBlock = currentFunction_->basicBlocks[blockCounter_].get();
-            // Don't jump to the entry block (first block)
-            if (blockCounter_ > 0) {
-                builder_->createGoto(targetBlock);
-            } else {
-                // If we're trying to jump to the entry block, just return instead
-                builder_->createReturn();
+        // Find target block from HIR
+        if (hirInst->parentBlock && !hirInst->parentBlock->successors.empty()) {
+            auto* hirTargetBlock = hirInst->parentBlock->successors[0].get();
+            auto* mirTargetBlock = blockMap_[hirTargetBlock];
+            std::cerr << "DEBUG MIR: Found target block: " << mirTargetBlock << std::endl;
+            
+            if (mirTargetBlock) {
+                std::cerr << "DEBUG MIR: Creating goto to target block" << std::endl;
+                builder_->createGoto(mirTargetBlock);
+                std::cerr << "DEBUG MIR: Goto created" << std::endl;
+                return;
             }
-        } else {
-            builder_->createReturn();
         }
+        
+        // Fallback: create a return if no valid target
+        std::cerr << "DEBUG MIR: No valid target, creating return" << std::endl;
+        builder_->createReturn();
     }
     
     void generateCondBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
         if (hirInst->operands.empty()) return;
         
+        std::cerr << "DEBUG MIR: Entering generateCondBr" << std::endl;
         auto condition = translateOperand(hirInst->operands[0].get());
+        std::cerr << "DEBUG MIR: Condition translated" << std::endl;
         
         // Get the successor blocks from the current HIR block
         if (hirInst->parentBlock && hirInst->parentBlock->successors.size() >= 2) {
             auto* trueBlock = blockMap_[hirInst->parentBlock->successors[0].get()];
             auto* falseBlock = blockMap_[hirInst->parentBlock->successors[1].get()];
             
+            std::cerr << "DEBUG MIR: Found successor blocks: true=" << trueBlock << ", false=" << falseBlock << std::endl;
+            
             // Make sure the blocks exist
             if (trueBlock && falseBlock) {
                 // Create switch on boolean (1 = true, 0 = false)
                 std::vector<std::pair<int64_t, MIRBasicBlock*>> targets;
-                targets.push_back({1, trueBlock});  // If condition == 1, go to trueBlock
-                
+                targets.push_back(std::make_pair(1, trueBlock));  // If condition == 1, go to trueBlock
+                std::cerr << "DEBUG MIR: Creating switch instruction" << std::endl;
                 builder_->createSwitchInt(condition, targets, falseBlock);  // Otherwise go to falseBlock
+                std::cerr << "DEBUG MIR: Switch instruction created" << std::endl;
             } else {
                 // Fallback - create goto to next block
                 if (blockCounter_ < currentFunction_->basicBlocks.size()) {
@@ -575,6 +712,48 @@ private:
                 builder_->createReturn();
             }
         }
+    }
+    
+    void generateBreak(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        (void)hirInst;
+        std::cerr << "DEBUG: Generating break instruction" << std::endl;
+        
+        if (currentLoopContext_) {
+            std::cerr << "DEBUG: Found loop context, break target: " << currentLoopContext_->breakTarget 
+                      << ", creating goto" << std::endl;
+            if (currentLoopContext_->breakTarget) {
+                // Create a direct terminator for the block instead of adding a statement
+                // This ensures the break is the last instruction in the block
+                mirBlock->terminator = std::make_unique<MIRGotoTerminator>(currentLoopContext_->breakTarget);
+                std::cerr << "DEBUG: Break terminator created directly to target: " << currentLoopContext_->breakTarget << std::endl;
+                return;
+            }
+        }
+        
+        std::cerr << "DEBUG: No loop context found, creating return" << std::endl;
+        // Fallback: create a return statement
+        mirBlock->terminator = std::make_unique<MIRReturnTerminator>();
+    }
+    
+    void generateContinue(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        (void)hirInst;
+        std::cerr << "DEBUG: Generating continue instruction" << std::endl;
+        
+        if (currentLoopContext_) {
+            std::cerr << "DEBUG: Found loop context, continue target: " << currentLoopContext_->continueTarget 
+                      << ", creating goto" << std::endl;
+            if (currentLoopContext_->continueTarget) {
+                // Create a direct terminator for the block instead of adding a statement
+                // This ensures the continue is the last instruction in the block
+                mirBlock->terminator = std::make_unique<MIRGotoTerminator>(currentLoopContext_->continueTarget);
+                std::cerr << "DEBUG: Continue terminator created directly to target: " << currentLoopContext_->continueTarget << std::endl;
+                return;
+            }
+        }
+        
+        std::cerr << "DEBUG: No loop context found, creating return" << std::endl;
+        // Fallback: create a return statement
+        mirBlock->terminator = std::make_unique<MIRReturnTerminator>();
     }
     
     void generateCast(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {

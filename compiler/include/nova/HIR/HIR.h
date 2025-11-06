@@ -179,6 +179,7 @@ public:
         GetElement, SetElement,
         // Control Flow
         Br, CondBr, Switch, Return, Unreachable,
+        Break, Continue,
         // Function
         Call, InvokeDirectCall, InvokeVirtual,
         // Type Operations
@@ -218,6 +219,8 @@ public:
     
     std::vector<HIRBasicBlockPtr> predecessors;
     std::vector<HIRBasicBlockPtr> successors;
+    
+    bool hasBreakOrContinue = false;
     
     explicit HIRBasicBlock(const std::string& lbl) : label(lbl) {}
     

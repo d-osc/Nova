@@ -142,6 +142,50 @@ std::unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     return decl;
 }
 
+std::unique_ptr<Stmt> Parser::parseVariableDeclarationWithoutSemicolon() {
+    // Kind already consumed (var/let/const)
+    Token kindToken = peek(-1);
+    VarDeclStmt::Kind kind;
+    if (kindToken.type == TokenType::KeywordVar) {
+        kind = VarDeclStmt::Kind::Var;
+    } else if (kindToken.type == TokenType::KeywordLet) {
+        kind = VarDeclStmt::Kind::Let;
+    } else {
+        kind = VarDeclStmt::Kind::Const;
+    }
+    
+    std::vector<VarDeclStmt::Declarator> declarators;
+    
+    // Parse declarators
+    do {
+        VarDeclStmt::Declarator declarator;
+        
+        // Identifier
+        Token id = consume(TokenType::Identifier, "Expected variable name");
+        declarator.name = id.value;
+        
+        // Optional type annotation
+        if (match(TokenType::Colon)) {
+            declarator.type = parseTypeAnnotation();
+        }
+        
+        // Optional initializer
+        if (match(TokenType::Equal)) {
+            declarator.init = parseAssignmentExpression();
+        }
+        
+        declarators.push_back(std::move(declarator));
+        
+    } while (match(TokenType::Comma));
+    
+    // Note: Don't consume semicolon - this is for for loop initialization
+    
+    auto decl = std::make_unique<VarDeclStmt>(kind, std::move(declarators));
+    decl->location = getCurrentLocation();
+    
+    return decl;
+}
+
 std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     auto func = std::make_unique<FunctionDecl>();
     func->location = getCurrentLocation();
@@ -843,20 +887,17 @@ std::unique_ptr<Stmt> Parser::parseForStatement() {
     ExprPtr update = nullptr;
     
     // Init (optional)
-    bool skipFirstSemicolon = false;
     if (!check(TokenType::Semicolon)) {
         if (check(TokenType::KeywordVar) || check(TokenType::KeywordLet) || check(TokenType::KeywordConst)) {
-            init = parseVariableDeclaration();
-            // Variable declaration already consumes semicolon
-            skipFirstSemicolon = true;
+            // Consume the keyword before calling parseVariableDeclarationWithoutSemicolon
+            Token kindToken = advance();
+            init = parseVariableDeclarationWithoutSemicolon();
         } else {
             auto expr = parseExpression();
             init = std::make_unique<ExpressionStatement>(std::move(expr));
         }
     }
-    if (!skipFirstSemicolon) {
-        consume(TokenType::Semicolon, "Expected ';' after for loop initializer");
-    }
+    consume(TokenType::Semicolon, "Expected ';' after for loop initializer");
     
     // Test (optional)
     if (!check(TokenType::Semicolon)) {

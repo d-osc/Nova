@@ -143,7 +143,11 @@ std::string HIRInstruction::toString() const {
         case Opcode::Store: oss << "store"; break;
         case Opcode::Br: oss << "br"; break;
         case Opcode::CondBr: oss << "br_if"; break;
+        case Opcode::Switch: oss << "switch"; break;
         case Opcode::Return: oss << "return"; break;
+        case Opcode::Unreachable: oss << "unreachable"; break;
+        case Opcode::Break: oss << "break"; break;
+        case Opcode::Continue: oss << "continue"; break;
         case Opcode::Call: oss << "call"; break;
         case Opcode::Cast: oss << "cast"; break;
         default: oss << "unknown"; break;

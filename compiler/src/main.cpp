@@ -115,6 +115,9 @@ int main(int argc, char** argv) {
         else if (arg == "--emit-llvm") {
             emitLLVM = true;
         }
+        else if (arg == "--llvm") {
+            emitLLVM = true;
+        }
         else if (arg == "--emit-mir") {
             emitMIR = true;
         }
@@ -300,6 +303,7 @@ int main(int argc, char** argv) {
         }
         
         if (verbose) std::cout << "⏳ Phase 9: LLVM Optimization Passes..." << std::endl;
+        std::cerr << "DEBUG: Running optimization passes with optLevel=" << optLevel << std::endl;
         codegen.runOptimizationPasses(optLevel);
         
         if (command == "run") {

@@ -4,6 +4,7 @@
 #include <memory>
 #include <unordered_map>
 #include <variant>
+#include <functional>
 
 namespace nova::hir {
 
@@ -371,8 +372,8 @@ public:
     void visit(VarDeclStmt& node) override {
         for (auto& decl : node.declarations) {
             // Allocate storage
-            auto i32Type = std::make_shared<HIRType>(HIRType::Kind::I32);
-            auto alloca = builder_->createAlloca(i32Type.get(), decl.name);
+            auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto alloca = builder_->createAlloca(i64Type.get(), decl.name);
             symbolTable_[decl.name] = alloca;
             
             // Initialize if there's an initializer
@@ -411,49 +412,235 @@ public:
         // Generate then block
         builder_->setInsertPoint(thenBlock);
         node.consequent->accept(*this);
-        builder_->createBr(endBlock);
+        
+        // Only add branch to end block if the then block doesn't end with a return, break, or continue
+        if (thenBlock->instructions.empty() || 
+            (thenBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return &&
+             thenBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Break &&
+             thenBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Continue)) {
+            builder_->createBr(endBlock);
+        }
         
         // Generate else block
         if (elseBlock) {
             builder_->setInsertPoint(elseBlock);
             node.alternate->accept(*this);
-            builder_->createBr(endBlock);
+            
+            // Only add branch to end block if the else block doesn't end with a return, break, or continue
+            if (elseBlock->instructions.empty() || 
+                (elseBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return &&
+                 elseBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Break &&
+                 elseBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Continue)) {
+                builder_->createBr(endBlock);
+            }
         }
         
         // Continue at end block
         builder_->setInsertPoint(endBlock);
+        
+        // If end block is empty (both branches had returns), add unreachable
+        if (builder_->getInsertBlock()->instructions.empty()) {
+            // Create a dummy return instruction
+            auto dummyConst = builder_->createIntConstant(0);
+            builder_->createReturn(dummyConst);
+        }
     }
     
     void visit(WhileStmt& node) override {
+        std::cerr << "DEBUG: Entering WhileStmt generation" << std::endl;
+        
         auto* condBlock = currentFunction_->createBasicBlock("while.cond").get();
         auto* bodyBlock = currentFunction_->createBasicBlock("while.body").get();
         auto* endBlock = currentFunction_->createBasicBlock("while.end").get();
+        
+        std::cerr << "DEBUG: Created while loop blocks: cond=" << condBlock << ", body=" << bodyBlock << ", end=" << endBlock << std::endl;
         
         // Jump to condition
         builder_->createBr(condBlock);
         
         // Condition block
         builder_->setInsertPoint(condBlock);
+        std::cerr << "DEBUG: Evaluating while condition" << std::endl;
         node.test->accept(*this);
+        std::cerr << "DEBUG: While condition evaluated, lastValue_=" << lastValue_ << std::endl;
         builder_->createCondBr(lastValue_, bodyBlock, endBlock);
         
         // Body block
         builder_->setInsertPoint(bodyBlock);
+        std::cerr << "DEBUG: Executing while body" << std::endl;
         node.body->accept(*this);
-        builder_->createBr(condBlock);
+        std::cerr << "DEBUG: While body executed" << std::endl;
+        
+        // Check if the body or any of its successors contain any break or continue instructions
+        bool hasBreakOrContinue = bodyBlock->hasBreakOrContinue;
+        
+        // Check all successors of the body block
+        std::function<void(hir::HIRBasicBlock*, bool&)> checkSuccessors = [&](hir::HIRBasicBlock* block, bool& found) {
+            if (found) return;
+            if (block->hasBreakOrContinue) {
+                found = true;
+                return;
+            }
+            for (const auto& succ : block->successors) {
+                checkSuccessors(succ.get(), found);
+            }
+        };
+        
+        checkSuccessors(bodyBlock, hasBreakOrContinue);
+        
+        // Only add branch back to condition if the body doesn't contain break/continue and doesn't end with a return
+        if (!hasBreakOrContinue && (bodyBlock->instructions.empty() || 
+            bodyBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return)) {
+            std::cerr << "DEBUG: Creating branch back to condition" << std::endl;
+            builder_->createBr(condBlock);
+        } else {
+            std::cerr << "DEBUG: Not creating branch back to condition because body or its successors contain break/continue or body ends with return" << std::endl;
+        }
+        
+        // End block
+        builder_->setInsertPoint(endBlock);
+        std::cerr << "DEBUG: While loop generation completed" << std::endl;
+    }
+    
+    void visit(DoWhileStmt& node) override {
+        // Create basic blocks for the do-while loop
+        auto* bodyBlock = currentFunction_->createBasicBlock("do-while.body").get();
+        auto* condBlock = currentFunction_->createBasicBlock("do-while.cond").get();
+        auto* endBlock = currentFunction_->createBasicBlock("do-while.end").get();
+        
+        // Jump to body block (do-while always executes at least once)
+        builder_->createBr(bodyBlock);
+        
+        // Body block
+        builder_->setInsertPoint(bodyBlock);
+        node.body->accept(*this);
+        
+        // Check if the body or any of its successors contain any break or continue instructions
+        bool hasBreakOrContinue = bodyBlock->hasBreakOrContinue;
+        
+        // Check all successors of the body block
+        std::function<void(hir::HIRBasicBlock*, bool&)> checkSuccessors = [&](hir::HIRBasicBlock* block, bool& found) {
+            if (found) return;
+            if (block->hasBreakOrContinue) {
+                found = true;
+                return;
+            }
+            for (const auto& succ : block->successors) {
+                checkSuccessors(succ.get(), found);
+            }
+        };
+        
+        checkSuccessors(bodyBlock, hasBreakOrContinue);
+        
+        // Only add branch to condition if the body doesn't contain break/continue and doesn't end with a return
+        if (!hasBreakOrContinue && (bodyBlock->instructions.empty() || 
+            bodyBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return)) {
+            // Branch to condition after body
+            builder_->createBr(condBlock);
+        }
+        
+        // Condition block
+        builder_->setInsertPoint(condBlock);
+        node.test->accept(*this);
+        auto* condition = lastValue_;
+        // If condition is true, branch back to body, otherwise go to end
+        builder_->createCondBr(condition, bodyBlock, endBlock);
         
         // End block
         builder_->setInsertPoint(endBlock);
     }
     
-    void visit(DoWhileStmt& node) override {
-        (void)node;
-        // do-while loop
-    }
-    
     void visit(ForStmt& node) override {
-        (void)node;
-        // for loop
+        std::cerr << "DEBUG: Entering ForStmt generation" << std::endl;
+        
+        // Create basic blocks for the for loop
+        auto* initBlock = currentFunction_->createBasicBlock("for.init").get();
+        auto* condBlock = currentFunction_->createBasicBlock("for.cond").get();
+        auto* bodyBlock = currentFunction_->createBasicBlock("for.body").get();
+        auto* updateBlock = currentFunction_->createBasicBlock("for.update").get();
+        auto* endBlock = currentFunction_->createBasicBlock("for.end").get();
+        
+        std::cerr << "DEBUG: Created for loop blocks: init=" << initBlock << ", cond=" << condBlock 
+                  << ", body=" << bodyBlock << ", update=" << updateBlock << ", end=" << endBlock << std::endl;
+        
+        // Branch to init block
+        builder_->createBr(initBlock);
+        
+        // Init block - execute initializer
+        builder_->setInsertPoint(initBlock);
+        std::cerr << "DEBUG: Executing for init" << std::endl;
+        if (node.init) {
+            if (auto* varDeclStmt = dynamic_cast<VarDeclStmt*>(node.init.get())) {
+                varDeclStmt->accept(*this);
+            } else if (auto* exprStmt = dynamic_cast<ExprStmt*>(node.init.get())) {
+                exprStmt->accept(*this);
+            } else {
+                // For expression initializers, wrap in an expression statement
+                node.init->accept(*this);
+            }
+        }
+        std::cerr << "DEBUG: For init executed" << std::endl;
+        // Branch to condition
+        builder_->createBr(condBlock);
+        
+        // Condition block
+        builder_->setInsertPoint(condBlock);
+        std::cerr << "DEBUG: Evaluating for condition" << std::endl;
+        if (node.test) {
+            node.test->accept(*this);
+            auto* condition = lastValue_;
+            std::cerr << "DEBUG: For condition evaluated, condition=" << condition << std::endl;
+            builder_->createCondBr(condition, bodyBlock, endBlock);
+        } else {
+            // No condition means infinite loop
+            std::cerr << "DEBUG: No for condition, creating infinite loop" << std::endl;
+            builder_->createBr(bodyBlock);
+        }
+        
+        // Body block
+        builder_->setInsertPoint(bodyBlock);
+        std::cerr << "DEBUG: Executing for body" << std::endl;
+        node.body->accept(*this);
+        std::cerr << "DEBUG: For body executed" << std::endl;
+        
+        // Check if the body or any of its successors contain any break or continue instructions
+        bool hasBreakOrContinue = bodyBlock->hasBreakOrContinue;
+        
+        // Check all successors of the body block
+        std::function<void(hir::HIRBasicBlock*, bool&)> checkSuccessors = [&](hir::HIRBasicBlock* block, bool& found) {
+            if (found) return;
+            if (block->hasBreakOrContinue) {
+                found = true;
+                return;
+            }
+            for (const auto& succ : block->successors) {
+                checkSuccessors(succ.get(), found);
+            }
+        };
+        
+        checkSuccessors(bodyBlock, hasBreakOrContinue);
+        
+        // Only add branch to update block if the body doesn't contain break/continue and doesn't end with a return
+        if (!hasBreakOrContinue && (bodyBlock->instructions.empty() || 
+            bodyBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return)) {
+            // Branch to update block
+            builder_->createBr(updateBlock);
+        }
+        
+        // Update block
+        builder_->setInsertPoint(updateBlock);
+        std::cerr << "DEBUG: Executing for update" << std::endl;
+        if (node.update) {
+            node.update->accept(*this);
+            // Result of update expression is ignored
+        }
+        std::cerr << "DEBUG: For update executed" << std::endl;
+        // Branch back to condition
+        builder_->createBr(condBlock);
+        
+        // End block
+        builder_->setInsertPoint(endBlock);
+        std::cerr << "DEBUG: For loop generation completed" << std::endl;
     }
     
     void visit(ForInStmt& node) override {
@@ -477,12 +664,30 @@ public:
     
     void visit(BreakStmt& node) override {
         (void)node;
-        // break statement
+        // Create break instruction
+        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+        auto breakInst = std::make_unique<HIRInstruction>(
+            HIRInstruction::Opcode::Break,
+            voidType,
+            ""
+        );
+        auto* currentBlock = builder_->getInsertBlock();
+        currentBlock->addInstruction(std::move(breakInst));
+        currentBlock->hasBreakOrContinue = true;
     }
     
     void visit(ContinueStmt& node) override {
         (void)node;
-        // continue statement
+        // Create continue instruction
+        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+        auto continueInst = std::make_unique<HIRInstruction>(
+            HIRInstruction::Opcode::Continue,
+            voidType,
+            ""
+        );
+        auto* currentBlock = builder_->getInsertBlock();
+        currentBlock->addInstruction(std::move(continueInst));
+        currentBlock->hasBreakOrContinue = true;
     }
     
     void visit(ThrowStmt& node) override {

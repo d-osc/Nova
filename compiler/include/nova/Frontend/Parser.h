@@ -31,6 +31,7 @@ private:
     // Statement parsing
     std::unique_ptr<Stmt> parseStatement();
     std::unique_ptr<Stmt> parseVariableDeclaration();
+    std::unique_ptr<Stmt> parseVariableDeclarationWithoutSemicolon();
     std::unique_ptr<Stmt> parseFunctionDeclaration();
     std::unique_ptr<Stmt> parseClassDeclaration();
     std::unique_ptr<Stmt> parseInterfaceDeclaration();

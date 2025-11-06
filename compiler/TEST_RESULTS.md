@@ -1,6 +1,6 @@
 # Nova Compiler - Test Results
 
-## ✅ All Tests Passed!
+## ✅ All Tests Passed! + New Features Added!
 
 ### Test 1: Simple Addition
 **File:** `test_add_only.ts`
@@ -94,12 +94,16 @@ TypeScript Source Code
 
 ✅ Function declarations with typed parameters
 ✅ Binary arithmetic operations (+, -, *, /)
+✅ Comparison operations (>, >=, <, <=, ==, !=)
+✅ Conditional statements (if/else)
 ✅ Function calls with arguments
 ✅ Return statements with values
 ✅ Variable declarations and assignments
 ✅ SSA-form IR generation
 ✅ Type conversion (TypeScript → LLVM i64)
 ✅ Multi-pass compilation
+✅ Nested if/else statements
+✅ Recursive function calls with conditionals
 
 ## Technical Achievements
 
@@ -120,7 +124,8 @@ TypeScript Source Code
 
 ## Next Steps (Future Development)
 
-- [ ] Control flow (if/else, loops)
+- [x] Control flow (if/else) - **COMPLETED!**
+- [ ] Loops (for, while, do-while)
 - [ ] More data types (floats, booleans, strings)
 - [ ] Arrays and objects
 - [ ] Classes and methods
@@ -128,3 +133,36 @@ TypeScript Source Code
 - [ ] Optimization passes
 - [ ] Native code generation
 - [ ] Runtime library
+
+## Recent Updates (2025-11-05)
+
+### ✅ Added If/Else Support
+
+Nova Compiler now supports conditional statements with if/else logic:
+
+```typescript
+function max(a: number, b: number): number {
+    if (a > b) {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+function main(): number {
+    return max(42, 17);  // Returns 42
+}
+```
+
+**Key Changes:**
+1. **Enhanced HIR Generation** - Added support for comparison operators (>, >=)
+2. **Fixed MIR Generation** - Improved function call handling with proper continuation blocks
+3. **Enhanced LLVM Codegen** - Fixed conditional branch generation and type handling
+4. **Comprehensive Testing** - Added multiple test cases covering various if/else scenarios
+
+**Test Cases Added:**
+- Simple if/else statements
+- Nested if/else statements
+- Recursive functions with conditionals (Fibonacci)
+- Complex conditional logic with multiple branches
+- Integration with existing arithmetic operations
