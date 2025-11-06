@@ -11,7 +11,7 @@ if(MSVC)
     add_compile_options(/W4 /WX /permissive-)
     add_compile_options(/utf-8)
     # Disable specific warnings from LLVM headers
-    add_compile_options(/wd4100 /wd4245 /wd4267 /wd4458 /wd4244 /wd4624 /wd4459 /wd4324 /wd4310)
+    add_compile_options(/wd4100 /wd4245 /wd4267 /wd4458 /wd4244 /wd4624 /wd4459 /wd4324 /wd4310 /wd4146)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 endif()
@@ -48,6 +48,9 @@ llvm_map_components_to_libnames(llvm_libs
     x86codegen
     aarch64codegen
     armcodegen
+    interpreter
+    orcjit
+    nativecodegen
 )
 
 # Include directories

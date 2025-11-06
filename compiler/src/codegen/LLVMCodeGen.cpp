@@ -7,6 +7,7 @@
 #include "nova/CodeGen/LLVMCodeGen.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/Utils.h>
@@ -23,6 +24,13 @@
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/ExecutionEngine/GenericValue.h>
+#include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/ExecutionEngine/SectionMemoryManager.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IRReader/IRReader.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/SourceMgr.h>
 #include <iostream>
 
 #ifdef _MSC_VER
@@ -251,11 +259,70 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
 }
 
 int LLVMCodeGen::executeMain() {
-    // JIT execution is not implemented in this version
-    // Would require LLVM JIT/ORC API which is complex
-    std::cerr << "⚠️  JIT execution not yet implemented" << std::endl;
-    std::cerr << "   Use '--emit-llvm' to generate LLVM IR and compile manually" << std::endl;
-    return 0;
+    // Initialize LLVM Execution Engine
+    std::cerr << "DEBUG LLVM: Initializing JIT execution engine" << std::endl;
+    
+    // Verify the module
+    if (llvm::verifyModule(*module, &llvm::errs())) {
+        std::cerr << "❌ Error: Module verification failed" << std::endl;
+        return 1;
+    }
+    
+    // Save the LLVM IR to a temporary file
+    std::string tempFile = "temp_jit.ll";
+    std::error_code EC;
+    llvm::raw_fd_ostream out(tempFile, EC);
+    if (EC) {
+        std::cerr << "❌ Error: Could not create temporary file: " << EC.message() << std::endl;
+        return 1;
+    }
+    
+    // Write the LLVM IR to file
+    module->print(out, nullptr);
+    out.close();
+    
+    std::cerr << "DEBUG LLVM: LLVM IR saved to " << tempFile << std::endl;
+    
+    // Use llc to compile to assembly and then assemble with clang
+    // This is a workaround for JIT not being available on this system
+    std::string objFile = "temp_jit.o";
+    std::string exeFile = "temp_jit.exe";
+    
+    // Compile LLVM IR to object file
+    std::string llcCmd = "llc -filetype=obj -o \"" + objFile + "\" \"" + tempFile + "\"";
+    std::cerr << "DEBUG LLVM: Running: " << llcCmd << std::endl;
+    int llcResult = system(llcCmd.c_str());
+    if (llcResult != 0) {
+        std::cerr << "❌ Error: llc compilation failed" << std::endl;
+        return 1;
+    }
+    
+    // Link object file to executable
+    std::string linkCmd;
+#ifdef _WIN32
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" -lmsvcrt -lkernel32";
+#else
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" -lc";
+#endif
+    std::cerr << "DEBUG LLVM: Running: " << linkCmd << std::endl;
+    int linkResult = system(linkCmd.c_str());
+    if (linkResult != 0) {
+        std::cerr << "❌ Error: Linking failed" << std::endl;
+        return 1;
+    }
+    
+    // Execute the compiled program
+    std::cerr << "DEBUG LLVM: Executing compiled program..." << std::endl;
+    int execResult = system((".\\\"" + exeFile + "\"").c_str());
+    
+    // Clean up temporary files
+    remove(tempFile.c_str());
+    remove(objFile.c_str());
+    remove(exeFile.c_str());
+    
+    std::cerr << "DEBUG LLVM: Program executed with exit code: " << execResult << std::endl;
+    std::cerr << "DEBUG LLVM: Temporary files cleaned up" << std::endl;
+    return execResult;
 }
 
 // ==================== Type Conversion ====================
@@ -1053,14 +1120,36 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
                 // TODO: Implement proper string content comparison
                 return builder->CreateICmpEQ(lhs, rhs, "str_eq");
             }
-            // Ensure both operands have the same type
+            
+            // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
                 std::cerr << "DEBUG LLVM: Type mismatch in EQ comparison, converting types" << std::endl;
-                // If one is i1 (boolean) and the other is i64, convert i64 to i1
-                if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
-                    rhs = builder->CreateICmpNE(rhs, llvm::ConstantInt::get(rhs->getType(), 0), "bool_cast");
+                
+                // Handle pointer to integer conversion
+                if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
+                    std::cerr << "DEBUG LLVM: Converting LHS pointer to integer for comparison" << std::endl;
+                    lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
+                } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                    std::cerr << "DEBUG LLVM: Converting RHS pointer to integer for comparison" << std::endl;
+                    rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
+                }
+                // Handle boolean to integer conversion
+                else if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
+                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    lhs = builder->CreateZExt(lhs, rhs->getType(), "bool_to_int");
                 } else if (rhs->getType()->isIntegerTy(1) && lhs->getType()->isIntegerTy(64)) {
-                    lhs = builder->CreateICmpNE(lhs, llvm::ConstantInt::get(lhs->getType(), 0), "bool_cast");
+                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    rhs = builder->CreateZExt(rhs, lhs->getType(), "bool_to_int");
+                }
+                // Handle integer width differences
+                else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+                    auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
+                    auto rhsIntTy = static_cast<llvm::IntegerType*>(rhs->getType());
+                    if (lhsIntTy->getBitWidth() > rhsIntTy->getBitWidth()) {
+                        rhs = builder->CreateZExt(rhs, lhs->getType(), "int_ext");
+                    } else {
+                        lhs = builder->CreateZExt(lhs, rhs->getType(), "int_ext");
+                    }
                 }
             }
             return builder->CreateICmpEQ(lhs, rhs, "eq");
@@ -1073,28 +1162,134 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
                 // TODO: Implement proper string content comparison
                 return builder->CreateICmpNE(lhs, rhs, "str_ne");
             }
-            // Ensure both operands have the same type
+            
+            // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
                 std::cerr << "DEBUG LLVM: Type mismatch in NE comparison, converting types" << std::endl;
-                // If one is i1 (boolean) and the other is i64, convert i64 to i1
-                if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
-                    rhs = builder->CreateICmpNE(rhs, llvm::ConstantInt::get(rhs->getType(), 0), "bool_cast");
+                
+                // Handle pointer to integer conversion
+                if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
+                    std::cerr << "DEBUG LLVM: Converting LHS pointer to integer for comparison" << std::endl;
+                    lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
+                } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                    std::cerr << "DEBUG LLVM: Converting RHS pointer to integer for comparison" << std::endl;
+                    rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
+                }
+                // Handle boolean to integer conversion
+                else if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
+                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    lhs = builder->CreateZExt(lhs, rhs->getType(), "bool_to_int");
                 } else if (rhs->getType()->isIntegerTy(1) && lhs->getType()->isIntegerTy(64)) {
-                    lhs = builder->CreateICmpNE(lhs, llvm::ConstantInt::get(lhs->getType(), 0), "bool_cast");
+                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    rhs = builder->CreateZExt(rhs, lhs->getType(), "bool_to_int");
+                }
+                // Handle integer width differences
+                else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+                    auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
+                    auto rhsIntTy = static_cast<llvm::IntegerType*>(rhs->getType());
+                    if (lhsIntTy->getBitWidth() > rhsIntTy->getBitWidth()) {
+                        rhs = builder->CreateZExt(rhs, lhs->getType(), "int_ext");
+                    } else {
+                        lhs = builder->CreateZExt(lhs, rhs->getType(), "int_ext");
+                    }
                 }
             }
             return builder->CreateICmpNE(lhs, rhs, "ne");
         case mir::MIRBinaryOpRValue::BinOp::Lt:
             std::cerr << "DEBUG LLVM: Creating ICMP SLT instruction" << std::endl;
+            // Handle type conversion for comparisons
+            if (lhs->getType() != rhs->getType()) {
+                std::cerr << "DEBUG LLVM: Type mismatch in LT comparison, converting types" << std::endl;
+                
+                // Handle pointer to integer conversion
+                if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
+                    lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
+                } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                    rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
+                }
+                // Handle integer width differences
+                else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+                    auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
+                    auto rhsIntTy = static_cast<llvm::IntegerType*>(rhs->getType());
+                    if (lhsIntTy->getBitWidth() > rhsIntTy->getBitWidth()) {
+                        rhs = builder->CreateSExt(rhs, lhs->getType(), "int_ext");
+                    } else {
+                        lhs = builder->CreateSExt(lhs, rhs->getType(), "int_ext");
+                    }
+                }
+            }
             return builder->CreateICmpSLT(lhs, rhs, "lt");
         case mir::MIRBinaryOpRValue::BinOp::Le:
             std::cerr << "DEBUG LLVM: Creating ICMP SLE instruction" << std::endl;
+            // Handle type conversion for comparisons
+            if (lhs->getType() != rhs->getType()) {
+                std::cerr << "DEBUG LLVM: Type mismatch in LE comparison, converting types" << std::endl;
+                
+                // Handle pointer to integer conversion
+                if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
+                    lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
+                } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                    rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
+                }
+                // Handle integer width differences
+                else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+                    auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
+                    auto rhsIntTy = static_cast<llvm::IntegerType*>(rhs->getType());
+                    if (lhsIntTy->getBitWidth() > rhsIntTy->getBitWidth()) {
+                        rhs = builder->CreateSExt(rhs, lhs->getType(), "int_ext");
+                    } else {
+                        lhs = builder->CreateSExt(lhs, rhs->getType(), "int_ext");
+                    }
+                }
+            }
             return builder->CreateICmpSLE(lhs, rhs, "le");
         case mir::MIRBinaryOpRValue::BinOp::Gt:
             std::cerr << "DEBUG LLVM: Creating ICMP SGT instruction" << std::endl;
+            // Handle type conversion for comparisons
+            if (lhs->getType() != rhs->getType()) {
+                std::cerr << "DEBUG LLVM: Type mismatch in GT comparison, converting types" << std::endl;
+                
+                // Handle pointer to integer conversion
+                if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
+                    lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
+                } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                    rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
+                }
+                // Handle integer width differences
+                else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+                    auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
+                    auto rhsIntTy = static_cast<llvm::IntegerType*>(rhs->getType());
+                    if (lhsIntTy->getBitWidth() > rhsIntTy->getBitWidth()) {
+                        rhs = builder->CreateSExt(rhs, lhs->getType(), "int_ext");
+                    } else {
+                        lhs = builder->CreateSExt(lhs, rhs->getType(), "int_ext");
+                    }
+                }
+            }
             return builder->CreateICmpSGT(lhs, rhs, "gt");
         case mir::MIRBinaryOpRValue::BinOp::Ge:
             std::cerr << "DEBUG LLVM: Creating ICMP SGE instruction" << std::endl;
+            // Handle type conversion for comparisons
+            if (lhs->getType() != rhs->getType()) {
+                std::cerr << "DEBUG LLVM: Type mismatch in GE comparison, converting types" << std::endl;
+                
+                // Handle pointer to integer conversion
+                if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
+                    lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
+                } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
+                    rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
+                }
+                // Handle integer width differences
+                else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+                    auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
+                    auto rhsIntTy = static_cast<llvm::IntegerType*>(rhs->getType());
+                    if (lhsIntTy->getBitWidth() > rhsIntTy->getBitWidth()) {
+                        rhs = builder->CreateSExt(rhs, lhs->getType(), "int_ext");
+                    } else {
+                        lhs = builder->CreateSExt(lhs, rhs->getType(), "int_ext");
+                    }
+                }
+            }
             return builder->CreateICmpSGE(lhs, rhs, "ge");
         default:
             std::cerr << "DEBUG LLVM: Unknown binary operation: " << static_cast<int>(op) << std::endl;
