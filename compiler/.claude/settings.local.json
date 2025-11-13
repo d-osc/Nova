@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./build/Release/nova.exe compile:*)",
+      "Bash(cmake --build:*)",
+      "Bash(./build/Release/nova.exe run:*)",
+      "Bash(./tests/test_while_simple.exe:*)",
+      "Bash(echo:*)",
+      "Bash(cat:*)",
+      "Bash(timeout 10 ./build/Release/nova.exe compile:*)",
+      "Bash(timeout 5 ./build/Release/nova.exe compile:*)",
+      "Bash(timeout 3 ./build/Release/nova.exe compile:*)",
+      "Bash(timeout 15 ./build/Release/nova.exe compile:*)",
+      "Bash(timeout 10 ./build/Release/nova.exe run:*)",
+      "Bash(timeout:*)",
+      "Bash(cmake:*)",
+      "Bash(./build/Release/Release/nova.exe run:*)",
+      "Bash(for test in tests/test_while_simple.ts tests/test_for_simple.ts tests/test_logical_ops.ts tests/test_and_direct.ts tests/test_or_direct.ts)",
+      "Bash(do echo \"Testing $test:\")",
+      "Bash(done)",
+      "Bash(./build/Release/Release/nova.exe compile:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(for test in tests/test_for_simple.ts tests/test_and_direct.ts tests/test_or_direct.ts tests/test_simple_if.ts)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

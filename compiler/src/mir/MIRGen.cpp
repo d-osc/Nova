@@ -427,15 +427,32 @@ private:
         // Create new local for this value
         // For pointer types (like alloca), use the pointee type instead
         hir::HIRType* typeToTranslate = hirValue->type.get();
-        if (auto* ptrType = dynamic_cast<hir::HIRPointerType*>(typeToTranslate)) {
-            if (ptrType->pointeeType) {
-                typeToTranslate = ptrType->pointeeType.get();
-                std::cerr << "DEBUG MIR: Using pointee type for pointer variable: "
-                          << hirValue->name << std::endl;
-            } else {
-                std::cerr << "DEBUG MIR: Warning - pointeeType is null for pointer variable: "
-                          << hirValue->name << std::endl;
+
+        // Debug: Print the original type
+        if (typeToTranslate) {
+            std::cerr << "DEBUG MIR: Original HIR type for " << hirValue->name
+                      << " is kind=" << static_cast<int>(typeToTranslate->kind) << std::endl;
+        } else {
+            std::cerr << "DEBUG MIR: HIR type is null for " << hirValue->name << std::endl;
+        }
+
+        try {
+            if (typeToTranslate) {
+                if (auto* ptrType = dynamic_cast<hir::HIRPointerType*>(typeToTranslate)) {
+                    if (ptrType && ptrType->pointeeType) {
+                        typeToTranslate = ptrType->pointeeType.get();
+                        std::cerr << "DEBUG MIR: Using pointee type for pointer variable: "
+                                  << hirValue->name << std::endl;
+                    } else {
+                        std::cerr << "DEBUG MIR: Warning - pointeeType is null for pointer variable: "
+                                  << hirValue->name << std::endl;
+                    }
+                }
             }
+        } catch (...) {
+            // If cast fails, use the type as-is
+            std::cerr << "DEBUG MIR: Exception during pointer type cast for variable: "
+                      << hirValue->name << std::endl;
         }
 
         auto mirType = translateType(typeToTranslate);
@@ -450,35 +467,44 @@ private:
     
     MIROperandPtr translateOperand(hir::HIRValue* hirValue) {
         // Check if it's a constant
-        auto* constant = dynamic_cast<hir::HIRConstant*>(hirValue);
+        hir::HIRConstant* constant = nullptr;
+        try {
+            if (hirValue) {
+                constant = dynamic_cast<hir::HIRConstant*>(hirValue);
+            }
+        } catch (...) {
+            // If cast fails, treat as non-constant
+            constant = nullptr;
+        }
+
         if (constant) {
             auto mirType = translateType(constant->type.get());
-            
+
             switch (constant->kind) {
                 case hir::HIRConstant::Kind::Integer:
                     return builder_->createIntConstant(
                         std::get<int64_t>(constant->value), mirType);
-                
+
                 case hir::HIRConstant::Kind::Float:
                     return builder_->createFloatConstant(
                         std::get<double>(constant->value), mirType);
-                
+
                 case hir::HIRConstant::Kind::Boolean:
                     return builder_->createBoolConstant(
                         std::get<bool>(constant->value), mirType);
-                
+
                 case hir::HIRConstant::Kind::String:
                     return builder_->createStringConstant(
                         std::get<std::string>(constant->value), mirType);
-                
+
                 case hir::HIRConstant::Kind::Null:
                     return builder_->createNullConstant(mirType);
-                
+
                 default:
                     return builder_->createZeroInitConstant(mirType);
             }
         }
-        
+
         // Otherwise, it's a place reference
         auto place = getOrCreatePlace(hirValue);
         return builder_->createCopyOperand(place);

@@ -15,12 +15,23 @@ std::string HIRBuilder::generateName(const std::string& hint) {
 
 // Arithmetic Operations
 HIRInstruction* HIRBuilder::createAdd(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    // Debug: Check input types
+    std::cerr << "DEBUG HIR: createAdd - lhs type kind="
+              << (lhs && lhs->type ? static_cast<int>(lhs->type->kind) : -1)
+              << ", rhs type kind="
+              << (rhs && rhs->type ? static_cast<int>(rhs->type->kind) : -1) << std::endl;
+
     auto resultType = lhs->type;
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Add, resultType, generateName(name));
+
+    // Debug: Check result type
+    std::cerr << "DEBUG HIR: createAdd - result type kind="
+              << (inst->type ? static_cast<int>(inst->type->kind) : -1) << std::endl;
+
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
     inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
-    
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
@@ -147,11 +158,18 @@ HIRInstruction* HIRBuilder::createGe(HIRValue* lhs, HIRValue* rhs, const std::st
 
 // Memory Operations
 HIRInstruction* HIRBuilder::createAlloca(HIRType* type, const std::string& name) {
-    auto ptrType = std::make_shared<HIRPointerType>(
-        std::shared_ptr<HIRType>(type, [](HIRType*){}), true);
+    // Create a properly owned copy of the type to avoid dangling pointers
+    HIRTypePtr ownedType;
+    if (type) {
+        ownedType = std::make_shared<HIRType>(*type);  // Copy the type
+    } else {
+        ownedType = std::make_shared<HIRType>(HIRType::Kind::Any);
+    }
+
+    auto ptrType = std::make_shared<HIRPointerType>(ownedType, true);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Alloca, ptrType, generateName(name));
-    
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
@@ -161,20 +179,37 @@ HIRInstruction* HIRBuilder::createAlloca(HIRType* type, const std::string& name)
 HIRInstruction* HIRBuilder::createLoad(HIRValue* ptr, const std::string& name) {
     // Extract pointee type from pointer
     HIRTypePtr resultType = std::make_shared<HIRType>(HIRType::Kind::Any);
+
+    std::cerr << "DEBUG HIR: createLoad - ptr=" << ptr
+              << ", ptr->type=" << (ptr ? ptr->type.get() : nullptr) << std::endl;
+
     try {
         if (ptr && ptr->type) {
+            std::cerr << "DEBUG HIR: createLoad - ptr type kind="
+                      << static_cast<int>(ptr->type->kind) << std::endl;
             if (auto* ptrType = dynamic_cast<HIRPointerType*>(ptr->type.get())) {
-                if (ptrType) {
+                if (ptrType && ptrType->pointeeType) {
                     resultType = ptrType->pointeeType;
+                    std::cerr << "DEBUG HIR: createLoad - extracted pointee type kind="
+                              << static_cast<int>(resultType->kind) << std::endl;
+                } else {
+                    std::cerr << "DEBUG HIR: createLoad - pointeeType is null" << std::endl;
                 }
+            } else {
+                std::cerr << "DEBUG HIR: createLoad - not a pointer type, using default Any" << std::endl;
             }
         }
     } catch (...) {
         // If cast fails, use Any type
+        std::cerr << "DEBUG HIR: createLoad - exception during type extraction" << std::endl;
     }
 
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Load, resultType, generateName(name));
+
+    std::cerr << "DEBUG HIR: createLoad - final result type kind="
+              << (inst->type ? static_cast<int>(inst->type->kind) : -1) << std::endl;
+
     inst->addOperand(std::shared_ptr<HIRValue>(ptr, [](HIRValue*){}));
 
     if (currentBlock_) {
@@ -272,12 +307,18 @@ HIRInstruction* HIRBuilder::createCall(HIRFunction* callee, const std::vector<HI
 
 // Type Conversions
 HIRInstruction* HIRBuilder::createCast(HIRValue* value, HIRType* destType, const std::string& name) {
+    // Create a properly owned copy of the type
+    HIRTypePtr ownedDestType;
+    if (destType) {
+        ownedDestType = std::make_shared<HIRType>(*destType);
+    } else {
+        ownedDestType = std::make_shared<HIRType>(HIRType::Kind::Any);
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
-        HIRInstruction::Opcode::Cast, 
-        std::shared_ptr<HIRType>(destType, [](HIRType*){}),
-        generateName(name));
+        HIRInstruction::Opcode::Cast, ownedDestType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(value, [](HIRValue*){}));
-    
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
@@ -334,10 +375,15 @@ HIRConstant* HIRBuilder::createStringConstant(const std::string& value) {
 }
 
 HIRConstant* HIRBuilder::createNullConstant(HIRType* type) {
-    return new HIRConstant(
-        std::shared_ptr<HIRType>(type, [](HIRType*){}),
-        HIRConstant::Kind::Null,
-        0);
+    // Create a properly owned copy of the type
+    HIRTypePtr ownedType;
+    if (type) {
+        ownedType = std::make_shared<HIRType>(*type);
+    } else {
+        ownedType = std::make_shared<HIRType>(HIRType::Kind::Any);
+    }
+
+    return new HIRConstant(ownedType, HIRConstant::Kind::Null, 0);
 }
 
 } // namespace nova::hir

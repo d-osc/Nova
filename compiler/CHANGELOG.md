@@ -1,0 +1,345 @@
+# Nova Compiler - Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased]
+
+### Known Issues
+- 🟡 Logical operations (&&, ||) don't short-circuit properly
+- 🟡 Array indexing not implemented
+- 🟡 Object property access limited
+
+---
+
+## [0.51.0] - 2025-11-12
+
+### Fixed 🎉
+- ✅ **CRITICAL: Fixed for loop compilation - void type handling bug**
+  - Root cause: LLVM cannot create alloca or load instructions for void type
+  - Fixed alloca creation to use i64 placeholder for void-typed intermediate values
+  - Fixed load instruction to use alloca's actual type instead of MIR's void type
+  - For loops now generate correct LLVM IR with proper phi nodes
+- ✅ **For loops now work correctly with runtime conditions**
+  - Loop variables (i, sum) properly tracked through phi nodes
+  - Loop condition uses actual runtime value (not hardcoded)
+  - Clean optimized LLVM IR generation
+
+### Changed
+- Enhanced void type handling in `LLVMCodeGen.cpp`
+  - Alloca creation: void types replaced with i64 placeholder
+  - Load instructions: use alloca type when MIR type is void
+- Improved error detection and recovery for type mismatches
+
+### Tests
+- ✅ test_while_simple.ts - While loop with counter (PASSING - returns 5)
+- ✅ test_for_simple.ts - For loop with accumulator (PASSING - returns 10)
+- Both loops generate clean, optimized LLVM IR
+
+### Technical Details
+**Issue**: For loop compilation hung during alloca creation, then segfaulted on load
+
+**Root Cause**: Void-typed intermediate values in MIR cannot be used with LLVM's alloca or load instructions
+
+**Solution**:
+1. During alloca creation - replace void type with i64
+2. During load - check if MIR type is void but alloca is not, use alloca's type
+
+**Generated IR** (for loop):
+```llvm
+bb2:                                              ; preds = %bb3, %entry
+  %var1.0 = phi i64 [ 0, %entry ], [ %add11, %bb3 ]  ; i
+  %var.0 = phi i64 [ 0, %entry ], [ %add, %bb3 ]     ; sum
+  %lt = icmp slt i64 %var1.0, 5                      ; i < 5
+  br i1 %lt, label %bb3, label %bb5                  ; Runtime condition!
+
+bb3:                                              ; preds = %bb2
+  %add = add i64 %var.0, %var1.0                     ; sum = sum + i
+  %add11 = add i64 %var1.0, 1                         ; i = i + 1
+  br label %bb2
+```
+
+---
+
+## [0.50.0] - 2025-11-12
+
+### Fixed 🎉
+- ✅ **CRITICAL: Fixed while loop condition generation bug**
+  - Root cause: MIR assigned pointer types to number variables instead of i64
+  - Fixed `MIRGen.cpp:getOrCreatePlace()` to extract pointee type from pointer types
+  - Variables now have correct types throughout the compilation pipeline
+- ✅ **Fixed return type mismatch for boolean values**
+  - Added i1 → i64 conversion in return generation
+  - Functions can now return comparison results correctly
+- ✅ **While loops now work correctly with runtime conditions**
+  - Loop conditions use actual runtime values (not hardcoded `br i1 true`)
+  - No unnecessary `ptrtoint` conversions
+  - LLVM optimizer generates proper phi nodes and SSA form
+
+### Changed
+- Improved type handling in MIR generation for alloca instructions
+- Better debug logging for type conversions
+
+### Tests
+- ✅ test_while_simple.ts - While loop with counter (PASSING)
+- Generated LLVM IR is clean and optimized
+
+### Technical Details
+**Before Fix**:
+```llvm
+%var3 = alloca ptr              ← Wrong type!
+%load = load ptr, ptr %var3
+%ptr_to_int = ptrtoint ptr...   ← Unnecessary conversion
+```
+
+**After Fix**:
+```llvm
+%var3.0 = phi i64 [0, %entry], [%add, %bb2]  ← Perfect!
+%lt = icmp slt i64 %var3.0, 5                  ← Direct comparison
+br i1 %lt, label %bb2, label %bb3             ← Runtime condition
+```
+
+---
+
+## [0.45.0] - 2025-11-12
+
+### Analysis & Documentation
+- ✅ Completed comprehensive TypeScript/JavaScript support analysis
+- ✅ Identified overall completion at 45%
+- ✅ Documented 3 critical bugs in loop implementation
+- ✅ Created detailed feature support matrix
+- ✅ Created priority roadmap for next 3-4 months
+- ✅ Created DEVELOPMENT_STATUS.md as living document
+- ✅ Created CHANGELOG.md for tracking changes
+- ✅ Created TODO.md for actionable tasks
+
+### Findings
+- Parser: 90% complete (excellent)
+- Code Generation: 45% complete (needs work)
+- Architecture: Solid and extensible
+- Critical bugs found in loop implementation
+
+---
+
+## [0.40.0] - 2025-11-06
+
+### Added
+- ✅ AOT (Ahead-of-Time) compilation system
+- ✅ Native executable generation (Windows)
+- ✅ Program execution with result capture
+- ✅ Complete comparison operators (==, !=, <, <=, >, >=)
+- ✅ Full compilation pipeline: Nova → AST → HIR → MIR → LLVM IR → Executable
+
+### Documentation
+- ✅ Created EXECUTION_IMPLEMENTATION.md
+- ✅ Updated test suite with execution tests
+
+### Known Issues
+- ⚠️ Loops not working correctly (conditions and scoping issues)
+
+---
+
+## [0.35.0] - 2025-11-05
+
+### Added
+- ✅ If/else statement support
+- ✅ Break and continue statements (partial - has bugs)
+- ✅ Comparison operations with type conversion fixes
+- ✅ Variable assignment and mutation
+
+### Fixed
+- ✅ Type conversion issues in comparison operations
+- ✅ Pointer/integer type handling in LLVM IR
+
+### Documentation
+- ✅ Created BREAK_CONTINUE_IMPLEMENTATION.md
+- ✅ Updated FEATURE_STATUS.md
+
+### Known Issues
+- 🐛 While loops fail to compile (IR generation issues)
+- 🐛 For loops fail to compile (IR generation issues)
+- 🐛 Break/continue generate incorrect IR
+
+---
+
+## [0.30.0] - 2025-11-04
+
+### Added
+- ✅ Complete LLVM IR generation pipeline
+- ✅ MIR (Mid-Level IR) generation
+- ✅ HIR (High-Level IR) generation
+- ✅ Basic optimization passes
+- ✅ SSA-based value mapping
+
+### Fixed
+- ✅ Function call implementation
+- ✅ Return value tracking across basic blocks
+- ✅ Type conversion from dynamic to static types
+
+### Tests
+- ✅ 7/7 tests passing
+- ✅ Zero LLVM verification errors
+- ✅ All generated IR valid and executable
+
+---
+
+## [0.25.0] - 2025-11-03
+
+### Added
+- ✅ Function declarations and calls
+- ✅ Arithmetic operations (+, -, *, /, %)
+- ✅ Variable declarations (let, const, var)
+- ✅ Return statements
+- ✅ Expression statements
+- ✅ Block statements
+
+### Compiler Pipeline
+- ✅ Complete lexer/tokenizer (63 keywords, 65+ operators)
+- ✅ Complete parser (28+ expression types)
+- ✅ Complete AST generation
+- ✅ Visitor pattern implementation
+
+---
+
+## [0.20.0] - 2025-11-02
+
+### Added
+- ✅ Initial parser implementation
+- ✅ Token definitions (all TypeScript/JavaScript tokens)
+- ✅ AST node definitions
+- ✅ Basic expression parsing
+- ✅ Statement parsing
+
+### Architecture
+- ✅ Clean separation of compilation phases
+- ✅ Type-safe C++20 implementation
+- ✅ LLVM 18.1.7 integration
+- ✅ CMake build system
+
+---
+
+## [0.10.0] - 2025-11-01
+
+### Added
+- ✅ Project structure setup
+- ✅ Initial lexer implementation
+- ✅ Basic token recognition
+- ✅ Build system configuration
+
+### Infrastructure
+- ✅ CMake configuration
+- ✅ LLVM integration setup
+- ✅ Test framework setup
+- ✅ Documentation structure
+
+---
+
+## Development History Summary
+
+### Phase 1: Foundation (v0.10 - v0.20)
+- Set up project structure
+- Implemented lexer and parser
+- Defined AST nodes
+- Established build system
+
+### Phase 2: Core Features (v0.20 - v0.30)
+- Implemented basic language features
+- Created IR generation pipeline
+- Added function support
+- Implemented arithmetic operations
+
+### Phase 3: Control Flow (v0.30 - v0.40)
+- Added if/else statements
+- Attempted loop implementations (found bugs)
+- Added comparison operators
+- Improved type handling
+
+### Phase 4: Execution (v0.40 - v0.45)
+- Implemented AOT compilation
+- Added native executable generation
+- Created execution system
+- Comprehensive analysis and documentation
+
+---
+
+## Upcoming Releases
+
+### [0.50.0] - Target: 2-3 weeks
+**Focus**: Fix critical loop bugs
+
+#### Planned
+- [ ] Fix loop condition generation bug
+- [ ] Fix loop variable scoping bug
+- [ ] Fix logical operations (short-circuit)
+- [ ] Add comprehensive loop tests
+- [ ] Test with complex scenarios
+
+---
+
+### [0.60.0] - Target: 4-6 weeks
+**Focus**: High-value features
+
+#### Planned
+- [ ] Implement array indexing
+- [ ] Complete object property access
+- [ ] Complete string operations
+- [ ] Improve error messages
+- [ ] Add more unit tests
+
+---
+
+### [0.75.0] - Target: 8-10 weeks
+**Focus**: Major features
+
+#### Planned
+- [ ] Implement classes
+- [ ] Implement arrow functions
+- [ ] Implement error handling (try/catch)
+- [ ] Standard library basics
+- [ ] Production-ready quality
+
+---
+
+### [1.0.0] - Target: 3-4 months
+**Focus**: Complete language support
+
+#### Planned
+- [ ] Implement async/await
+- [ ] Implement modules (import/export)
+- [ ] Implement destructuring
+- [ ] Implement generators
+- [ ] Complete standard library
+- [ ] Full TypeScript/JavaScript compatibility (90%+)
+
+---
+
+## Version Numbering Guide
+
+- **Major (X.0.0)**: Complete milestones (v1.0.0 = 90% feature complete)
+- **Minor (0.X.0)**: New features or significant changes
+- **Patch (0.0.X)**: Bug fixes and minor improvements
+
+---
+
+## Legend
+
+- ✅ Completed and working
+- ⚠️ Partially implemented
+- 🔴 Critical bug/issue
+- 🟡 Medium priority issue
+- 🟢 Low priority issue
+- 🔵 Future enhancement
+- ❌ Not implemented
+- 🐛 Known bug
+- 📝 Documentation
+- 🧪 Test-related
+
+---
+
+**Last Updated**: 2025-11-12
+**Current Version**: v0.45.0
+**Next Release**: v0.50.0 (Loop bug fixes)
