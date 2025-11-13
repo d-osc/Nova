@@ -418,20 +418,33 @@ private:
         if (!hirValue) {
             return valueMap_[nullptr];  // Return place
         }
-        
+
         auto it = valueMap_.find(hirValue);
         if (it != valueMap_.end()) {
             return it->second;
         }
-        
+
         // Create new local for this value
-        auto mirType = translateType(hirValue->type.get());
+        // For pointer types (like alloca), use the pointee type instead
+        hir::HIRType* typeToTranslate = hirValue->type.get();
+        if (auto* ptrType = dynamic_cast<hir::HIRPointerType*>(typeToTranslate)) {
+            if (ptrType->pointeeType) {
+                typeToTranslate = ptrType->pointeeType.get();
+                std::cerr << "DEBUG MIR: Using pointee type for pointer variable: "
+                          << hirValue->name << std::endl;
+            } else {
+                std::cerr << "DEBUG MIR: Warning - pointeeType is null for pointer variable: "
+                          << hirValue->name << std::endl;
+            }
+        }
+
+        auto mirType = translateType(typeToTranslate);
         auto place = currentFunction_->createLocal(mirType, hirValue->name);
         valueMap_[hirValue] = place;
-        
+
         // Create StorageLive
         builder_->createStorageLive(place);
-        
+
         return place;
     }
     

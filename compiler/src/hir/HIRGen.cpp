@@ -50,21 +50,77 @@ public:
         // Look up variable in symbol table
         auto it = symbolTable_.find(node.name);
         if (it != symbolTable_.end()) {
-            lastValue_ = it->second;
+            auto value = it->second;
+            // Check if this is an alloca (memory location)
+            // Try to cast to HIRInstruction to check the opcode
+            try {
+                if (auto* inst = dynamic_cast<hir::HIRInstruction*>(value)) {
+                    if (inst && inst->opcode == hir::HIRInstruction::Opcode::Alloca) {
+                        // For allocas, we need to load the value
+                        lastValue_ = builder_->createLoad(value, node.name);
+                        return;
+                    }
+                }
+            } catch (...) {
+                // If cast fails, just use the value directly
+            }
+            // For other values (like function parameters), use directly
+            lastValue_ = value;
         }
     }
     
     void visit(BinaryExpr& node) override {
+        using Op = BinaryExpr::Op;
+
+        // Handle logical operators
+        // TODO: Implement proper short-circuit evaluation
+        // For now, evaluate both operands (non-short-circuit)
+        if (node.op == Op::LogicalAnd || node.op == Op::LogicalOr) {
+            // Evaluate both operands
+            node.left->accept(*this);
+            auto lhs = lastValue_;
+
+            node.right->accept(*this);
+            auto rhs = lastValue_;
+
+            // For AND: result is true if both are true
+            // For OR: result is true if either is true
+            // We can implement this using comparison and arithmetic
+            auto zero = builder_->createIntConstant(0);
+            auto lhsBool = builder_->createNe(lhs, zero);
+            auto rhsBool = builder_->createNe(rhs, zero);
+
+            if (node.op == Op::LogicalAnd) {
+                // AND: both must be true
+                // Multiply the booleans: true(1) * true(1) = true(1), otherwise false(0)
+                // This will generate `and i1` in LLVM which is correct
+                lastValue_ = builder_->createMul(lhsBool, rhsBool);
+            } else {
+                // OR: at least one must be true
+                // Use the formula: a OR b = a + b - (a AND b)
+                // This works for boolean values:
+                //   0 OR 0 = 0 + 0 - 0 = 0
+                //   0 OR 1 = 0 + 1 - 0 = 1
+                //   1 OR 0 = 1 + 0 - 0 = 1
+                //   1 OR 1 = 1 + 1 - 1 = 1
+                auto product = builder_->createMul(lhsBool, rhsBool);  // a AND b
+                auto sum = builder_->createAdd(lhsBool, rhsBool);       // a + b
+                lastValue_ = builder_->createSub(sum, product);          // a + b - (a AND b)
+            }
+
+            return;
+        }
+
+        // For non-logical operators, evaluate both operands normally
         // Generate left operand
         node.left->accept(*this);
         auto lhs = lastValue_;
-        
+
         // Generate right operand
         node.right->accept(*this);
         auto rhs = lastValue_;
-        
+
         // Generate operation based on operator
-        using Op = BinaryExpr::Op;
         switch (node.op) {
             case Op::Add:
                 lastValue_ = builder_->createAdd(lhs, rhs);

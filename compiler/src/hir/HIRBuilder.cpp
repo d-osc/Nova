@@ -161,14 +161,22 @@ HIRInstruction* HIRBuilder::createAlloca(HIRType* type, const std::string& name)
 HIRInstruction* HIRBuilder::createLoad(HIRValue* ptr, const std::string& name) {
     // Extract pointee type from pointer
     HIRTypePtr resultType = std::make_shared<HIRType>(HIRType::Kind::Any);
-    if (auto* ptrType = dynamic_cast<HIRPointerType*>(ptr->type.get())) {
-        resultType = ptrType->pointeeType;
+    try {
+        if (ptr && ptr->type) {
+            if (auto* ptrType = dynamic_cast<HIRPointerType*>(ptr->type.get())) {
+                if (ptrType) {
+                    resultType = ptrType->pointeeType;
+                }
+            }
+        }
+    } catch (...) {
+        // If cast fails, use Any type
     }
-    
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Load, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(ptr, [](HIRValue*){}));
-    
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }

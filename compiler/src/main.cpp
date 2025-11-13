@@ -292,20 +292,20 @@ int main(int argc, char** argv) {
             delete hirModule;
             return 1;
         }
-        
+
+        if (verbose) std::cout << "⏳ Phase 9: LLVM Optimization Passes..." << std::endl;
+        std::cerr << "DEBUG: Running optimization passes with optLevel=" << optLevel << std::endl;
+        codegen.runOptimizationPasses(optLevel);
+
         if (emitLLVM) {
-            std::string llFile = outputFile.empty() ? 
+            std::string llFile = outputFile.empty() ?
                 (inputFile.substr(0, inputFile.find_last_of('.')) + ".ll") : outputFile;
             if (verbose) std::cout << "💾 Writing LLVM IR to: " << llFile << std::endl;
             if (!codegen.emitLLVMIR(llFile)) {
                 std::cerr << "❌ Error: Cannot write LLVM IR file" << std::endl;
             }
         }
-        
-        if (verbose) std::cout << "⏳ Phase 9: LLVM Optimization Passes..." << std::endl;
-        std::cerr << "DEBUG: Running optimization passes with optLevel=" << optLevel << std::endl;
-        codegen.runOptimizationPasses(optLevel);
-        
+
         if (command == "run") {
             if (verbose) std::cout << "\n🚀 Executing via JIT...\n" << std::endl;
             int exitCode = codegen.executeMain();

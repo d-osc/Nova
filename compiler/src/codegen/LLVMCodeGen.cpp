@@ -316,7 +316,7 @@ int LLVMCodeGen::executeMain() {
     int execResult = system((".\\\"" + exeFile + "\"").c_str());
     
     // Clean up temporary files
-    remove(tempFile.c_str());
+    // remove(tempFile.c_str());  // Keep temp_jit.ll for debugging
     remove(objFile.c_str());
     remove(exeFile.c_str());
     
@@ -432,15 +432,18 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
             if (llvm::isa<llvm::AllocaInst>(it->second)) {
                 std::cerr << "DEBUG LLVM: Loading from alloca" << std::endl;
                 llvm::Type* loadType = convertType(copyOp->place->type.get());
-                
-                // Check if the type is a pointer type
-                if (loadType->isPointerTy()) {
-                    std::cerr << "DEBUG LLVM: Loading pointer type value" << std::endl;
-                    // Keep the pointer type for strings and other pointers
+
+                // Get the actual alloca type
+                llvm::AllocaInst* alloca = llvm::cast<llvm::AllocaInst>(it->second);
+                llvm::Type* allocaType = alloca->getAllocatedType();
+
+                // If the MIR type is void but alloca is not, use alloca type
+                // This handles the case where void-typed intermediate values were given i64 allocas
+                if (loadType->isVoidTy() && !allocaType->isVoidTy()) {
+                    loadType = allocaType;
                 }
-                
+
                 llvm::LoadInst* loadInst = builder->CreateLoad(loadType, it->second, "load");
-                std::cerr << "DEBUG LLVM: Created load instruction: " << loadInst << std::endl;
                 return loadInst;
             } else {
                 // Fallback for non-alloca values (shouldn't happen with our new approach)
@@ -593,27 +596,57 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     // Create alloca for each variable that might change value
     // This prevents constant folding by using memory instead of SSA
     std::cerr << "DEBUG LLVM: Creating alloca for variables to prevent constant folding" << std::endl;
-    for (const auto& bb : function->basicBlocks) {
-        for (const auto& stmt : bb->statements) {
+    std::cerr << "DEBUG LLVM: Function has " << function->basicBlocks.size() << " basic blocks" << std::endl;
+
+    for (size_t bbIdx = 0; bbIdx < function->basicBlocks.size(); ++bbIdx) {
+        const auto& bb = function->basicBlocks[bbIdx];
+        std::cerr << "DEBUG LLVM: Processing block " << bbIdx << " with " << bb->statements.size() << " statements" << std::endl;
+
+        for (size_t stmtIdx = 0; stmtIdx < bb->statements.size(); ++stmtIdx) {
+            const auto& stmt = bb->statements[stmtIdx];
+            std::cerr << "DEBUG LLVM: Checking statement " << stmtIdx << " kind=" << static_cast<int>(stmt->kind) << std::endl;
+
             if (stmt->kind == mir::MIRStatement::Kind::Assign) {
                 auto* assign = static_cast<mir::MIRAssignStatement*>(stmt.get());
+                std::cerr << "DEBUG LLVM: Found assign statement, place=" << assign->place.get() << std::endl;
+
                 if (assign->place) {
+                    std::cerr << "DEBUG LLVM: Converting type for place..." << std::endl;
                     llvm::Type* varType = convertType(assign->place->type.get());
+                    std::cerr << "DEBUG LLVM: Type converted successfully, type=";
+                    varType->print(llvm::errs());
+                    std::cerr << std::endl;
+
+                    // Skip void types - cannot create alloca for void
+                    if (varType->isVoidTy()) {
+                        std::cerr << "DEBUG LLVM: Skipping void type variable, using i64 placeholder" << std::endl;
+                        varType = llvm::Type::getInt64Ty(*context);
+                    }
+
                     // For debugging, check if the type is a pointer type
                     if (varType->isPointerTy()) {
                         std::cerr << "DEBUG LLVM: WARNING - Creating alloca for pointer type variable " << assign->place.get() << std::endl;
-                        // For pointer types, check if it's a string (char*) or generic pointer
-                        // For strings, we should keep the pointer type
-                        // For other pointers, we might use i64 for basic arithmetic
-                        std::cerr << "DEBUG LLVM: Keeping pointer type for variable " << assign->place.get() << std::endl;
                     }
+
+                    // Check if this place already has an alloca
+                    if (valueMap.find(assign->place.get()) != valueMap.end()) {
+                        std::cerr << "DEBUG LLVM: Variable already has alloca, skipping" << std::endl;
+                        continue;
+                    }
+
+                    std::cerr << "DEBUG LLVM: Creating alloca instruction..." << std::endl;
+                    std::cerr.flush();
                     llvm::AllocaInst* alloca = builder->CreateAlloca(varType, nullptr, "var");
+                    std::cerr << "DEBUG LLVM: Alloca created, adding to valueMap..." << std::endl;
+                    std::cerr.flush();
                     valueMap[assign->place.get()] = alloca;
                     std::cerr << "DEBUG LLVM: Created alloca for variable " << assign->place.get() << std::endl;
                 }
             }
         }
+        std::cerr << "DEBUG LLVM: Finished processing block " << bbIdx << std::endl;
     }
+    std::cerr << "DEBUG LLVM: Finished creating all allocas" << std::endl;
     
     // Map parameters (create allocas for them too)
     auto argIt = llvmFunc->arg_begin();
@@ -822,6 +855,11 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         // If we're returning i64 but function expects pointer, do a cast
                         else if (currentReturnValue->getType()->isIntegerTy(64) && retType->isPointerTy()) {
                             currentReturnValue = builder->CreateIntToPtr(currentReturnValue, retType, "int_to_ptr");
+                        }
+                        // If we're returning i1 (boolean) but function expects i64, extend it
+                        else if (currentReturnValue->getType()->isIntegerTy(1) && retType->isIntegerTy(64)) {
+                            std::cerr << "DEBUG LLVM: Converting i1 return value to i64" << std::endl;
+                            currentReturnValue = builder->CreateZExt(currentReturnValue, retType, "bool_to_i64");
                         }
                     }
                     builder->CreateRet(currentReturnValue);
