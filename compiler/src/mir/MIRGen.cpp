@@ -452,9 +452,17 @@ private:
             if (typeToTranslate) {
                 if (auto* ptrType = dynamic_cast<hir::HIRPointerType*>(typeToTranslate)) {
                     if (ptrType && ptrType->pointeeType) {
-                        typeToTranslate = ptrType->pointeeType.get();
-                        std::cerr << "DEBUG MIR: Using pointee type for pointer variable: "
-                                  << hirValue->name << std::endl;
+                        std::cerr << "DEBUG MIR: Pointer pointee type kind="
+                                  << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
+                        // Don't extract pointee for array pointers - keep them as pointers
+                        if (ptrType->pointeeType->kind != hir::HIRType::Kind::Array) {
+                            typeToTranslate = ptrType->pointeeType.get();
+                            std::cerr << "DEBUG MIR: Using pointee type for pointer variable: "
+                                      << hirValue->name << std::endl;
+                        } else {
+                            std::cerr << "DEBUG MIR: Keeping array pointer as pointer type: "
+                                      << hirValue->name << std::endl;
+                        }
                     } else {
                         std::cerr << "DEBUG MIR: Warning - pointeeType is null for pointer variable: "
                                   << hirValue->name << std::endl;
@@ -825,17 +833,22 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
     void generateArrayConstruct(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
 
-        // For now, treat array as an aggregate value
-        // In a real implementation, this would allocate memory and initialize elements
-        // For our simple case, just create a placeholder value
         auto dest = getOrCreatePlace(hirInst);
 
-        // Create a constant representing the array pointer/handle
-        // This is simplified - a real implementation would need heap allocation
-        auto i64Type = MIRBuilder::getI64Type();
-        auto arrayPtr = builder_->createIntConstant(0, i64Type); // Placeholder pointer
-        auto rvalue = builder_->createUse(arrayPtr);
-        builder_->createAssign(dest, rvalue);
+        // Convert HIR array elements to MIR operands
+        std::vector<MIROperandPtr> mirElements;
+        for (const auto& elem : hirInst->operands) {
+            auto operand = translateOperand(elem.get());
+            mirElements.push_back(operand);
+        }
+
+        // Create aggregate rvalue for array
+        auto aggregateRValue = std::make_shared<MIRAggregateRValue>(
+            MIRAggregateRValue::AggregateKind::Array,
+            mirElements
+        );
+
+        builder_->createAssign(dest, aggregateRValue);
     }
 
     void generateGetElement(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
@@ -844,16 +857,11 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
 
         auto array = translateOperand(hirInst->operands[0].get());
         auto index = translateOperand(hirInst->operands[1].get());
-
-        // For now, just return the first element (simplification)
-        // A real implementation would use GEP (GetElementPtr) or equivalent
-        // to compute the address and load the value
         auto dest = getOrCreatePlace(hirInst);
 
-        // Simplified: return index as placeholder
-        // TODO: Implement proper array element access with memory operations
-        auto rvalue = builder_->createUse(index);
-        builder_->createAssign(dest, rvalue);
+        // Create GetElement rvalue
+        auto getElementRValue = std::make_shared<MIRGetElementRValue>(array, index);
+        builder_->createAssign(dest, getElementRValue);
     }
 
     void generateSetElement(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {

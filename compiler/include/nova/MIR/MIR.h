@@ -205,16 +205,46 @@ public:
         IntToInt, FloatToInt, IntToFloat, FloatToFloat,
         PtrToPtr, Bitcast, Unsize
     };
-    
+
     CastKind castKind;
     MIROperandPtr operand;
     MIRTypePtr targetType;
-    
+
     MIRCastRValue(CastKind ck, MIROperandPtr op, MIRTypePtr type)
         : castKind(ck), operand(op), targetType(type) {
         kind = Kind::Cast;
     }
-    
+
+    std::string toString() const override;
+};
+
+class MIRAggregateRValue : public MIRRValue {
+public:
+    enum class AggregateKind {
+        Array, Tuple, Struct
+    };
+
+    AggregateKind aggregateKind;
+    std::vector<MIROperandPtr> elements;
+
+    MIRAggregateRValue(AggregateKind ak, std::vector<MIROperandPtr> elems)
+        : aggregateKind(ak), elements(std::move(elems)) {
+        kind = Kind::Aggregate;
+    }
+
+    std::string toString() const override;
+};
+
+class MIRGetElementRValue : public MIRRValue {
+public:
+    MIROperandPtr array;   // The array operand
+    MIROperandPtr index;   // The index operand
+
+    MIRGetElementRValue(MIROperandPtr arr, MIROperandPtr idx)
+        : array(arr), index(idx) {
+        kind = Kind::Ref;  // Use Ref kind temporarily (will add GetElement kind later)
+    }
+
     std::string toString() const override;
 };
 

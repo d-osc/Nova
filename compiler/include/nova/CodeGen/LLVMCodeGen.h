@@ -53,7 +53,10 @@ private:
     
     // Basic block mappings
     std::unordered_map<mir::MIRBasicBlock*, llvm::BasicBlock*> blockMap;
-    
+
+    // Array type tracking (maps array pointers to their array types)
+    std::unordered_map<llvm::Value*, llvm::Type*> arrayTypeMap;
+
     // Current function context
     llvm::Function* currentFunction;
     mir::MIRPlace* currentReturnPlace;  // The _0 place for return values
@@ -80,7 +83,11 @@ private:
     // Cast operations
     llvm::Value* generateCast(mir::MIRCastRValue::CastKind kind,
                              llvm::Value* value, llvm::Type* targetType);
-    
+
+    // Aggregate operations (arrays, tuples, structs)
+    llvm::Value* generateAggregate(mir::MIRAggregateRValue* aggOp);
+    llvm::Value* generateGetElement(mir::MIRGetElementRValue* getElemOp);
+
     // Runtime library functions
     void declareRuntimeFunctions();
     llvm::Function* getRuntimeFunction(const std::string& name);

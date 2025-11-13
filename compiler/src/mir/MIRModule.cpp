@@ -135,6 +135,26 @@ std::string MIRCastRValue::toString() const {
     return "Cast(" + castStr + ", " + operand->toString() + ", " + targetType->toString() + ")";
 }
 
+std::string MIRAggregateRValue::toString() const {
+    std::string kindStr;
+    switch (aggregateKind) {
+        case AggregateKind::Array: kindStr = "Array"; break;
+        case AggregateKind::Tuple: kindStr = "Tuple"; break;
+        case AggregateKind::Struct: kindStr = "Struct"; break;
+    }
+    std::string result = "Aggregate(" + kindStr + ", [";
+    for (size_t i = 0; i < elements.size(); ++i) {
+        if (i > 0) result += ", ";
+        result += elements[i]->toString();
+    }
+    result += "])";
+    return result;
+}
+
+std::string MIRGetElementRValue::toString() const {
+    return "GetElement(" + array->toString() + ", " + index->toString() + ")";
+}
+
 // ==================== MIRStatement Implementation ====================
 
 std::string MIRAssignStatement::toString() const {

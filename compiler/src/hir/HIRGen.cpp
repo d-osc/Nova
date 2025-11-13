@@ -468,15 +468,29 @@ public:
     
     void visit(VarDeclStmt& node) override {
         for (auto& decl : node.declarations) {
-            // Allocate storage
-            auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
-            auto alloca = builder_->createAlloca(i64Type.get(), decl.name);
-            symbolTable_[decl.name] = alloca;
-            
-            // Initialize if there's an initializer
+            // Evaluate the initializer first to get its type
+            HIRValue* initValue = nullptr;
             if (decl.init) {
                 decl.init->accept(*this);
-                builder_->createStore(lastValue_, alloca);
+                initValue = lastValue_;
+            }
+
+            // Use the initializer's type for the alloca, or default to i64
+            HIRType* allocaType = nullptr;
+            if (initValue && initValue->type) {
+                allocaType = initValue->type.get();
+            } else {
+                auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                allocaType = i64Type.get();
+            }
+
+            // Allocate storage with the correct type
+            auto alloca = builder_->createAlloca(allocaType, decl.name);
+            symbolTable_[decl.name] = alloca;
+
+            // Store the initializer value if present
+            if (initValue) {
+                builder_->createStore(initValue, alloca);
             }
         }
     }

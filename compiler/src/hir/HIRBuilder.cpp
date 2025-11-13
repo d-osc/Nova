@@ -371,8 +371,11 @@ HIRInstruction* HIRBuilder::createArrayConstruct(const std::vector<HIRValue*>& e
     auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);  // For now, assume i64 arrays
     auto arrayType = std::make_shared<HIRArrayType>(elementType, elements.size());
 
+    // ArrayConstruct returns a pointer to the array, not the array itself
+    auto ptrToArray = std::make_shared<HIRPointerType>(arrayType, true);
+
     auto inst = std::make_shared<HIRInstruction>(
-        HIRInstruction::Opcode::ArrayConstruct, arrayType, generateName(name));
+        HIRInstruction::Opcode::ArrayConstruct, ptrToArray, generateName(name));
 
     // Add all elements as operands
     for (auto* elem : elements) {

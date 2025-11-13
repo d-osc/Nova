@@ -542,7 +542,24 @@ switch (rvalue->kind) {
             llvm::Type* targetType = convertType(castOp->targetType.get());
             return generateCast(castOp->castKind, value, targetType);
         }
-        
+
+        case mir::MIRRValue::Kind::Aggregate: {
+            std::cerr << "DEBUG LLVM: Processing Aggregate rvalue" << std::endl;
+            auto* aggOp = static_cast<mir::MIRAggregateRValue*>(rvalue);
+            return generateAggregate(aggOp);
+        }
+
+        case mir::MIRRValue::Kind::Ref: {
+            // Ref kind is used for GetElement temporarily
+            std::cerr << "DEBUG LLVM: Processing Ref rvalue (possibly GetElement)" << std::endl;
+            auto* getElemOp = dynamic_cast<mir::MIRGetElementRValue*>(rvalue);
+            if (getElemOp) {
+                std::cerr << "DEBUG LLVM: Confirmed GetElement operation" << std::endl;
+                return generateGetElement(getElemOp);
+            }
+            return nullptr;
+        }
+
         default:
             return nullptr;
     }
@@ -787,6 +804,23 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                     if (llvm::isa<llvm::AllocaInst>(it->second)) {
                         std::cerr << "DEBUG LLVM: Storing value in alloca" << std::endl;
                         builder->CreateStore(value, it->second);
+
+                        // If the value is an array pointer, propagate the array type to the variable's alloca
+                        auto arrayTypeIt = arrayTypeMap.find(value);
+                        if (arrayTypeIt != arrayTypeMap.end()) {
+                            arrayTypeMap[it->second] = arrayTypeIt->second;
+                            std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from value" << std::endl;
+                        } else {
+                            // Check if we're loading from a variable that has array type
+                            if (llvm::LoadInst* loadInst = llvm::dyn_cast<llvm::LoadInst>(value)) {
+                                llvm::Value* loadSource = loadInst->getPointerOperand();
+                                auto sourceArrayTypeIt = arrayTypeMap.find(loadSource);
+                                if (sourceArrayTypeIt != arrayTypeMap.end()) {
+                                    arrayTypeMap[it->second] = sourceArrayTypeIt->second;
+                                    std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from source" << std::endl;
+                                }
+                            }
+                        }
                     } else {
                         std::cerr << "DEBUG LLVM: WARNING - No alloca found, creating one" << std::endl;
                         llvm::AllocaInst* alloca = builder->CreateAlloca(value->getType(), nullptr, "var_alloca");
@@ -1373,6 +1407,149 @@ llvm::Value* LLVMCodeGen::generateCast(mir::MIRCastRValue::CastKind kind,
         default:
             return nullptr;
     }
+}
+
+// ==================== Aggregate Operations ====================
+
+llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
+    if (!aggOp) return nullptr;
+
+    std::cerr << "DEBUG LLVM: generateAggregate called with " << aggOp->elements.size() << " elements" << std::endl;
+
+    // For arrays: allocate array on stack and initialize elements
+    if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Array) {
+        size_t arraySize = aggOp->elements.size();
+
+        // Create array type [N x i64]
+        llvm::Type* elementType = llvm::Type::getInt64Ty(*context);
+        llvm::ArrayType* arrayType = llvm::ArrayType::get(elementType, arraySize);
+
+        // Allocate array on stack
+        llvm::AllocaInst* arrayAlloca = builder->CreateAlloca(arrayType, nullptr, "array");
+
+        // Initialize each element
+        for (size_t i = 0; i < arraySize; ++i) {
+            llvm::Value* elementValue = convertOperand(aggOp->elements[i].get());
+            if (!elementValue) continue;
+
+            // Get pointer to element using GEP
+            std::vector<llvm::Value*> indices = {
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), // array index
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), i)  // element index
+            };
+            llvm::Value* elementPtr = builder->CreateGEP(arrayType, arrayAlloca, indices, "elem_ptr");
+
+            // Store element value
+            builder->CreateStore(elementValue, elementPtr);
+        }
+
+        std::cerr << "DEBUG LLVM: Array allocated and initialized, returning pointer" << std::endl;
+
+        // Store the array type for later GEP operations
+        arrayTypeMap[arrayAlloca] = arrayType;
+        std::cerr << "DEBUG LLVM: Stored array type in arrayTypeMap" << std::endl;
+
+        // Return pointer to the array
+        return arrayAlloca;
+    }
+
+    std::cerr << "DEBUG LLVM: Unsupported aggregate kind" << std::endl;
+    return nullptr;
+}
+
+llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp) {
+    if (!getElemOp) return nullptr;
+
+    std::cerr << "DEBUG LLVM: generateGetElement called" << std::endl;
+
+    // Get the array pointer (should be from a Copy operand)
+    llvm::Value* arrayPtr = convertOperand(getElemOp->array.get());
+    if (!arrayPtr) {
+        std::cerr << "DEBUG LLVM: Failed to convert array operand" << std::endl;
+        return nullptr;
+    }
+
+    // Get the index value
+    llvm::Value* indexValue = convertOperand(getElemOp->index.get());
+    if (!indexValue) {
+        std::cerr << "DEBUG LLVM: Failed to convert index operand" << std::endl;
+        return nullptr;
+    }
+
+    std::cerr << "DEBUG LLVM: arrayPtr type: " << arrayPtr->getType()->getTypeID() << std::endl;
+    std::cerr << "DEBUG LLVM: Using GEP to access array element" << std::endl;
+
+    // Save the loaded array pointer for use in GEP
+    llvm::Value* loadedArrayPtr = arrayPtr;
+
+    // Get the alloca instruction to look up array type
+    llvm::AllocaInst* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr);
+
+    // If arrayPtr is a load instruction, get the pointer operand (the variable's alloca)
+    if (!allocaInst) {
+        if (llvm::LoadInst* loadInst = llvm::dyn_cast<llvm::LoadInst>(arrayPtr)) {
+            std::cerr << "DEBUG LLVM: arrayPtr is a load, getting pointer operand" << std::endl;
+            arrayPtr = loadInst->getPointerOperand();
+            allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr);
+        }
+    }
+
+    if (!allocaInst) {
+        std::cerr << "DEBUG LLVM: arrayPtr is not an alloca (even after unwrapping load)" << std::endl;
+        return nullptr;
+    }
+
+    // Look up the array type from our tracking map
+    auto arrayTypeIt = arrayTypeMap.find(allocaInst);
+    if (arrayTypeIt == arrayTypeMap.end()) {
+        std::cerr << "DEBUG LLVM: ERROR - Array type not found in arrayTypeMap for alloca" << std::endl;
+        return nullptr;
+    }
+
+    llvm::Type* arrayType = arrayTypeIt->second;
+    std::cerr << "DEBUG LLVM: Array type retrieved from arrayTypeMap: ";
+    arrayType->print(llvm::errs());
+    std::cerr << std::endl;
+
+    std::cerr << "DEBUG LLVM: loadedArrayPtr type: ";
+    loadedArrayPtr->getType()->print(llvm::errs());
+    std::cerr << std::endl;
+
+    std::cerr << "DEBUG LLVM: loadedArrayPtr is ";
+    if (llvm::isa<llvm::AllocaInst>(loadedArrayPtr)) {
+        std::cerr << "an AllocaInst";
+    } else if (llvm::isa<llvm::LoadInst>(loadedArrayPtr)) {
+        std::cerr << "a LoadInst";
+    } else {
+        std::cerr << "something else: ";
+        loadedArrayPtr->print(llvm::errs());
+    }
+    std::cerr << std::endl;
+
+    // Use GEP to get pointer to the element
+    // loadedArrayPtr is the pointer to the array (either directly or loaded from variable)
+    std::vector<llvm::Value*> indices = {
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),  // Dereference array pointer
+        indexValue                                                      // Element index
+    };
+
+    llvm::Value* elementPtr = builder->CreateGEP(
+        arrayType,
+        loadedArrayPtr,  // Use the loaded array pointer, not the alloca
+        indices,
+        "elem_ptr"
+    );
+
+    // Load the element value
+    llvm::Value* elementValue = builder->CreateLoad(
+        llvm::Type::getInt64Ty(*context),
+        elementPtr,
+        "elem_value"
+    );
+
+    std::cerr << "DEBUG LLVM: Element loaded successfully" << std::endl;
+
+    return elementValue;
 }
 
 // ==================== Runtime Functions ====================
