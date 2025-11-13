@@ -158,15 +158,17 @@ HIRInstruction* HIRBuilder::createGe(HIRValue* lhs, HIRValue* rhs, const std::st
 
 // Memory Operations
 HIRInstruction* HIRBuilder::createAlloca(HIRType* type, const std::string& name) {
-    // Create a properly owned copy of the type to avoid dangling pointers
-    HIRTypePtr ownedType;
+    // Don't copy the type - it causes object slicing for derived types
+    // Instead, wrap the existing type pointer in a non-owning shared_ptr
+    HIRTypePtr typePtr;
     if (type) {
-        ownedType = std::make_shared<HIRType>(*type);  // Copy the type
+        // Create non-owning shared_ptr (types are managed elsewhere)
+        typePtr = std::shared_ptr<HIRType>(type, [](HIRType*){});
     } else {
-        ownedType = std::make_shared<HIRType>(HIRType::Kind::Any);
+        typePtr = std::make_shared<HIRType>(HIRType::Kind::Any);
     }
 
-    auto ptrType = std::make_shared<HIRPointerType>(ownedType, true);
+    auto ptrType = std::make_shared<HIRPointerType>(typePtr, true);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Alloca, ptrType, generateName(name));
 
@@ -189,9 +191,24 @@ HIRInstruction* HIRBuilder::createLoad(HIRValue* ptr, const std::string& name) {
                       << static_cast<int>(ptr->type->kind) << std::endl;
             if (auto* ptrType = dynamic_cast<HIRPointerType*>(ptr->type.get())) {
                 if (ptrType && ptrType->pointeeType) {
-                    resultType = ptrType->pointeeType;
-                    std::cerr << "DEBUG HIR: createLoad - extracted pointee type kind="
-                              << static_cast<int>(resultType->kind) << std::endl;
+                    // Check if the pointee is a pointer to array/struct
+                    bool keepPointerType = false;
+                    if (auto* innerPtr = dynamic_cast<HIRPointerType*>(ptrType->pointeeType.get())) {
+                        if (innerPtr->pointeeType &&
+                            (innerPtr->pointeeType->kind == HIRType::Kind::Array ||
+                             innerPtr->pointeeType->kind == HIRType::Kind::Struct)) {
+                            keepPointerType = true;
+                        }
+                    }
+
+                    if (keepPointerType) {
+                        resultType = ptrType->pointeeType;  // Extract one level but keep ptr-to-array/struct
+                        std::cerr << "DEBUG HIR: createLoad - keeping pointer-to-array/struct type" << std::endl;
+                    } else {
+                        resultType = ptrType->pointeeType;
+                        std::cerr << "DEBUG HIR: createLoad - extracted pointee type kind="
+                                  << static_cast<int>(resultType->kind) << std::endl;
+                    }
                 } else {
                     std::cerr << "DEBUG HIR: createLoad - pointeeType is null" << std::endl;
                 }
@@ -204,11 +221,20 @@ HIRInstruction* HIRBuilder::createLoad(HIRValue* ptr, const std::string& name) {
         std::cerr << "DEBUG HIR: createLoad - exception during type extraction" << std::endl;
     }
 
+    std::cerr << "DEBUG HIR: createLoad - before creating instruction, resultType.get()=" << resultType.get() << std::endl;
+    HIRPointerType* checkResultType = dynamic_cast<HIRPointerType*>(resultType.get());
+    std::cerr << "DEBUG HIR: createLoad - resultType dynamic_cast to HIRPointerType=" << checkResultType << std::endl;
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Load, resultType, generateName(name));
 
     std::cerr << "DEBUG HIR: createLoad - final result type kind="
               << (inst->type ? static_cast<int>(inst->type->kind) : -1) << std::endl;
+    std::cerr << "DEBUG HIR: createLoad - inst->type.get()=" << inst->type.get() << std::endl;
+
+    // Check if it's actually an HIRPointerType
+    HIRPointerType* checkPtr = dynamic_cast<HIRPointerType*>(inst->type.get());
+    std::cerr << "DEBUG HIR: createLoad - dynamic_cast to HIRPointerType=" << checkPtr << std::endl;
 
     inst->addOperand(std::shared_ptr<HIRValue>(ptr, [](HIRValue*){}));
 
@@ -327,12 +353,28 @@ HIRInstruction* HIRBuilder::createCast(HIRValue* value, HIRType* destType, const
 
 // Aggregate Operations
 HIRInstruction* HIRBuilder::createGetField(HIRValue* struct_, uint32_t fieldIndex, const std::string& name) {
-    (void)fieldIndex;
-    auto anyType = std::make_shared<HIRType>(HIRType::Kind::Any);
+    // Determine the result type from the struct type
+    HIRTypePtr resultType = std::make_shared<HIRType>(HIRType::Kind::Any);
+
+    if (struct_ && struct_->type) {
+        // Check if it's a pointer to struct
+        if (auto ptrType = dynamic_cast<HIRPointerType*>(struct_->type.get())) {
+            if (auto structType = dynamic_cast<HIRStructType*>(ptrType->pointeeType.get())) {
+                if (fieldIndex < structType->fields.size()) {
+                    resultType = structType->fields[fieldIndex].type;
+                }
+            }
+        }
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
-        HIRInstruction::Opcode::GetField, anyType, generateName(name));
+        HIRInstruction::Opcode::GetField, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(struct_, [](HIRValue*){}));
-    
+
+    // Store the field index as a constant operand
+    auto indexConstant = createIntConstant(fieldIndex);
+    inst->addOperand(std::shared_ptr<HIRValue>(indexConstant, [](HIRValue*){}));
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
@@ -380,6 +422,27 @@ HIRInstruction* HIRBuilder::createArrayConstruct(const std::vector<HIRValue*>& e
     // Add all elements as operands
     for (auto* elem : elements) {
         inst->addOperand(std::shared_ptr<HIRValue>(elem, [](HIRValue*){}));
+    }
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createStructConstruct(HIRStructType* structType, const std::vector<HIRValue*>& fieldValues, const std::string& name) {
+    // Create a pointer-to-struct type (struct construction returns a pointer)
+    auto ptrToStruct = std::make_shared<HIRPointerType>(
+        std::shared_ptr<HIRStructType>(structType, [](HIRStructType*){}),
+        true
+    );
+
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::StructConstruct, ptrToStruct, generateName(name));
+
+    // Add all field values as operands
+    for (auto* fieldValue : fieldValues) {
+        inst->addOperand(std::shared_ptr<HIRValue>(fieldValue, [](HIRValue*){}));
     }
 
     if (currentBlock_) {

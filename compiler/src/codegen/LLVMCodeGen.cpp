@@ -1453,6 +1453,44 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
         return arrayAlloca;
     }
 
+    // For structs: allocate struct on stack and initialize fields
+    if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Struct) {
+        size_t numFields = aggOp->elements.size();
+        std::cerr << "DEBUG LLVM: Generating struct with " << numFields << " fields" << std::endl;
+
+        // Create struct type with all i64 fields for now (simplified)
+        std::vector<llvm::Type*> fieldTypes(numFields, llvm::Type::getInt64Ty(*context));
+        llvm::StructType* structType = llvm::StructType::create(*context, fieldTypes, "anon_struct");
+
+        // Allocate struct on stack
+        llvm::AllocaInst* structAlloca = builder->CreateAlloca(structType, nullptr, "struct");
+
+        // Initialize each field
+        for (size_t i = 0; i < numFields; ++i) {
+            llvm::Value* fieldValue = convertOperand(aggOp->elements[i].get());
+            if (!fieldValue) continue;
+
+            // Get pointer to field using GEP
+            std::vector<llvm::Value*> indices = {
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), // struct index
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), i)  // field index
+            };
+            llvm::Value* fieldPtr = builder->CreateGEP(structType, structAlloca, indices, "field_ptr");
+
+            // Store field value
+            builder->CreateStore(fieldValue, fieldPtr);
+        }
+
+        std::cerr << "DEBUG LLVM: Struct allocated and initialized, returning pointer" << std::endl;
+
+        // Store the struct type for later GEP operations
+        arrayTypeMap[structAlloca] = structType;
+        std::cerr << "DEBUG LLVM: Stored struct type in arrayTypeMap" << std::endl;
+
+        // Return pointer to the struct
+        return structAlloca;
+    }
+
     std::cerr << "DEBUG LLVM: Unsupported aggregate kind" << std::endl;
     return nullptr;
 }
@@ -1527,15 +1565,27 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
     std::cerr << std::endl;
 
     // Use GEP to get pointer to the element
-    // loadedArrayPtr is the pointer to the array (either directly or loaded from variable)
+    // loadedArrayPtr is the pointer to the array/struct (either directly or loaded from variable)
+
+    // For structs, field indices must be i32 constants
+    llvm::Value* secondIndex = indexValue;
+    if (llvm::isa<llvm::StructType>(arrayType)) {
+        // For structs, convert the index to i32 constant
+        if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+            secondIndex = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context),
+                                                  constIndex->getZExtValue());
+            std::cerr << "DEBUG LLVM: Converted struct field index to i32" << std::endl;
+        }
+    }
+
     std::vector<llvm::Value*> indices = {
-        llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),  // Dereference array pointer
-        indexValue                                                      // Element index
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),  // Dereference pointer
+        secondIndex                                                     // Element/field index
     };
 
     llvm::Value* elementPtr = builder->CreateGEP(
         arrayType,
-        loadedArrayPtr,  // Use the loaded array pointer, not the alloca
+        loadedArrayPtr,  // Use the loaded pointer
         indices,
         "elem_ptr"
     );

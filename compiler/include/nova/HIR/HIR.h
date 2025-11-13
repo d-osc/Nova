@@ -352,6 +352,7 @@ public:
     HIRInstruction* createGetElement(HIRValue* array, HIRValue* index, const std::string& name = "");
     HIRInstruction* createSetElement(HIRValue* array, HIRValue* index, HIRValue* value);
     HIRInstruction* createArrayConstruct(const std::vector<HIRValue*>& elements, const std::string& name = "");
+    HIRInstruction* createStructConstruct(HIRStructType* structType, const std::vector<HIRValue*>& fieldValues, const std::string& name = "");
     
     // Constants
     HIRConstant* createIntConstant(int64_t value, uint32_t bitWidth = 64);

@@ -224,12 +224,55 @@ public:
             // Create GetElement instruction for array indexing
             lastValue_ = builder_->createGetElement(object, index, "elem");
         } else {
-            // Regular member: obj.property
-            // Not yet implemented for object property access
+            // Regular member: obj.property (struct field access)
             if (auto propExpr = dynamic_cast<Identifier*>(node.property.get())) {
-                // Simple property access
-                // For now, just return 0 as placeholder
-                lastValue_ = builder_->createIntConstant(0);
+                std::string propertyName = propExpr->name;
+
+                // Try to get the struct type from the object
+                uint32_t fieldIndex = 0;
+                bool found = false;
+
+                std::cerr << "DEBUG HIRGen: Accessing property '" << propertyName << "' on object" << std::endl;
+                if (object && object->type) {
+                    std::cerr << "DEBUG HIRGen: Object type kind=" << static_cast<int>(object->type->kind) << std::endl;
+                    std::cerr << "DEBUG HIRGen: Object type ptr=" << object->type.get() << std::endl;
+
+                    // Try to cast to HIRPointerType
+                    hir::HIRPointerType* ptrTypeCast = dynamic_cast<hir::HIRPointerType*>(object->type.get());
+                    std::cerr << "DEBUG HIRGen: dynamic_cast result=" << ptrTypeCast << std::endl;
+
+                    // Check if it's a pointer to struct
+                    if (auto ptrType = ptrTypeCast) {
+                        std::cerr << "DEBUG HIRGen: Object is a pointer type" << std::endl;
+                        if (ptrType->pointeeType) {
+                            std::cerr << "DEBUG HIRGen: Pointee type kind=" << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
+                        }
+                        if (auto structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get())) {
+                            std::cerr << "DEBUG HIRGen: Pointee is a struct with " << structType->fields.size() << " fields" << std::endl;
+                            // Find the field index by name
+                            for (size_t i = 0; i < structType->fields.size(); ++i) {
+                                if (structType->fields[i].name == propertyName) {
+                                    fieldIndex = static_cast<uint32_t>(i);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (found) {
+                    // Create GetField instruction with the correct field index
+                    std::cerr << "DEBUG HIRGen: Found property '" << propertyName << "' at index " << fieldIndex << std::endl;
+                    lastValue_ = builder_->createGetField(object, fieldIndex, propertyName);
+                } else {
+                    // Property not found, return 0 as placeholder
+                    std::cerr << "Warning: Property '" << propertyName << "' not found in struct" << std::endl;
+                    if (object && object->type) {
+                        std::cerr << "  Object type: kind=" << static_cast<int>(object->type->kind) << std::endl;
+                    }
+                    lastValue_ = builder_->createIntConstant(0);
+                }
             }
         }
     }
@@ -257,17 +300,38 @@ public:
     
     void visit(ObjectExpr& node) override {
         // Object literal construction
-        // For now, just create a placeholder value representing the object
-        // TODO: Implement proper object allocation and property initialization
-        
-        // Create a simple placeholder for the object
-        // In a real implementation, this would:
-        // 1. Allocate memory for the object
-        // 2. Initialize each property with the provided values
-        // 3. Return a pointer to the allocated object
-        
-        // For now, just return the number of properties as a placeholder
-        lastValue_ = builder_->createIntConstant(static_cast<int>(node.properties.size()));
+        // Create struct type with fields for each property
+        std::vector<hir::HIRStructType::Field> fields;
+        std::vector<hir::HIRValue*> fieldValues;
+        std::string structName = "anon_obj";
+
+        // Evaluate all property values and build field list
+        for (size_t i = 0; i < node.properties.size(); ++i) {
+            auto& prop = node.properties[i];
+
+            // Get the property name from the key
+            std::string fieldName = "field" + std::to_string(i);  // Default name
+            if (auto identifier = dynamic_cast<Identifier*>(prop.key.get())) {
+                fieldName = identifier->name;
+            }
+
+            // Evaluate the property value
+            prop.value->accept(*this);
+            fieldValues.push_back(lastValue_);
+
+            // Create field descriptor
+            hir::HIRStructType::Field field;
+            field.name = fieldName;
+            field.type = lastValue_->type;  // Use the value's type
+            field.isPublic = true;
+            fields.push_back(field);
+        }
+
+        // Create the struct type
+        auto structType = new hir::HIRStructType(structName, fields);
+
+        // Create struct construction instruction
+        lastValue_ = builder_->createStructConstruct(structType, fieldValues, "obj");
     }
     
     void visit(FunctionExpr& node) override {

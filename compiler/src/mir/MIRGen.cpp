@@ -419,6 +419,14 @@ private:
                 generateSetElement(hirInst, mirBlock);
                 break;
 
+            case hir::HIRInstruction::Opcode::StructConstruct:
+                generateStructConstruct(hirInst, mirBlock);
+                break;
+
+            case hir::HIRInstruction::Opcode::GetField:
+                generateGetField(hirInst, mirBlock);
+                break;
+
             default:
                 // For unsupported instructions, create a nop or placeholder
                 std::cerr << "Unsupported HIR instruction: " << hirInst->toString() << std::endl;
@@ -454,13 +462,14 @@ private:
                     if (ptrType && ptrType->pointeeType) {
                         std::cerr << "DEBUG MIR: Pointer pointee type kind="
                                   << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
-                        // Don't extract pointee for array pointers - keep them as pointers
-                        if (ptrType->pointeeType->kind != hir::HIRType::Kind::Array) {
+                        // Don't extract pointee for array/struct pointers - keep them as pointers
+                        if (ptrType->pointeeType->kind != hir::HIRType::Kind::Array &&
+                            ptrType->pointeeType->kind != hir::HIRType::Kind::Struct) {
                             typeToTranslate = ptrType->pointeeType.get();
                             std::cerr << "DEBUG MIR: Using pointee type for pointer variable: "
                                       << hirValue->name << std::endl;
                         } else {
-                            std::cerr << "DEBUG MIR: Keeping array pointer as pointer type: "
+                            std::cerr << "DEBUG MIR: Keeping array/struct pointer as pointer type: "
                                       << hirValue->name << std::endl;
                         }
                     } else {
@@ -879,6 +888,46 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)array;
         (void)index;
         (void)value;
+    }
+
+    void generateStructConstruct(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        (void)mirBlock;
+
+        auto dest = getOrCreatePlace(hirInst);
+
+        // Convert HIR struct fields to MIR operands
+        std::vector<MIROperandPtr> mirFields;
+        for (const auto& field : hirInst->operands) {
+            auto operand = translateOperand(field.get());
+            mirFields.push_back(operand);
+        }
+
+        // Create aggregate rvalue for struct
+        auto aggregateRValue = std::make_shared<MIRAggregateRValue>(
+            MIRAggregateRValue::AggregateKind::Struct,
+            mirFields
+        );
+
+        builder_->createAssign(dest, aggregateRValue);
+    }
+
+    void generateGetField(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        (void)mirBlock;
+
+        if (hirInst->operands.size() < 2) {
+            std::cerr << "ERROR: GetField requires at least 2 operands (struct, index)" << std::endl;
+            return;
+        }
+
+        // operands[0] = struct pointer, operands[1] = field index constant
+        auto structPtr = translateOperand(hirInst->operands[0].get());
+        auto fieldIndex = translateOperand(hirInst->operands[1].get());
+        auto dest = getOrCreatePlace(hirInst);
+
+        // Create GetElement rvalue for field access (similar to array indexing)
+        auto getFieldRValue = std::make_shared<MIRGetElementRValue>(structPtr, fieldIndex);
+
+        builder_->createAssign(dest, getFieldRValue);
     }
 };
 
