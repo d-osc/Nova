@@ -1,38 +1,44 @@
 # 🚀 Nova Compiler
 
-**Production-ready TypeScript/JavaScript compiler with LLVM backend**
+**TypeScript/JavaScript compiler with LLVM backend - Now with control flow and loops!**
 
-[![Status](https://img.shields.io/badge/status-production%20ready-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-7%2F7%20passing-brightgreen)]()
+[![Status](https://img.shields.io/badge/status-beta-blue)]()
+[![Tests](https://img.shields.io/badge/tests-15%2F15%20passing-brightgreen)]()
 [![Performance](https://img.shields.io/badge/compile%20time-~10ms-blue)]()
 [![LLVM](https://img.shields.io/badge/LLVM-18.1.7-orange)]()
 
 Nova compiles TypeScript and JavaScript to LLVM IR through a multi-stage compilation pipeline:
 
 ```
-TypeScript/JavaScript → HIR → MIR → LLVM IR
+TypeScript/JavaScript → HIR → MIR → LLVM IR → Native Code
 ```
 
-## ✨ Features (v1.0.0)
+## ✨ Features (v0.6.0)
 
 ### ✅ Currently Supported
 - ✅ **Function Declarations** - Full function support with parameters and return values
+- ✅ **Control Flow** - if/else statements with proper branching
+- ✅ **Loops** - while loops and for loops with break/continue support
+- ✅ **Logical Operators** - AND (&&), OR (||) with short-circuit evaluation
+- ✅ **Comparison Operators** - <, >, ==, !=, ===, !== for all numeric comparisons
 - ✅ **Arithmetic Operations** - Addition, subtraction, multiplication, division
+- ✅ **Variable Declarations** - let with proper scoping
 - ✅ **Function Calls** - Direct calls, nested calls, and chained composition
 - ✅ **Return Values** - Proper value propagation across basic blocks
-- ✅ **SSA Form** - Clean SSA-style IR generation without allocas
+- ✅ **SSA Form** - Clean SSA-style IR generation with phi nodes
 - ✅ **Type Conversion** - Dynamic to static type conversion (number → i64)
 - ✅ **LLVM IR Generation** - Valid, verifiable LLVM IR output
 
 ### 📊 Performance
-- **Average Compilation Time**: ~10.56ms per file
+- **Average Compilation Time**: ~10ms per file
 - **Performance Grade**: EXCELLENT ⚡
-- **Test Success Rate**: 100% (7/7 passing)
+- **Test Success Rate**: 100% (15/15 passing)
 - **Generated IR Quality**: Zero verification errors
+- **Features Implemented**: Control flow, loops, operators, functions
 
 ## 🏗️ Architecture
 
-### Compilation Pipeline (v1.0.0)
+### Compilation Pipeline (v0.6.0)
 
 ```
 ┌─────────────────┐
@@ -138,107 +144,108 @@ cmake --build build --config Release
 # Creates: app.hir, app.mir, app.ll
 ```
 
-### Example Program
+### Example Programs
 
-Create `hello.ts`:
+**Simple Loop:**
 ```typescript
-function add(a: number, b: number): number {
-    return a + b;
-}
-
-function main(): number {
-    const result = add(5, 3);
-    return result;
+function testWhile(): number {
+    let count: number = 0;
+    while (count < 5) {
+        count = count + 1;
+    }
+    return count;  // Returns 5
 }
 ```
 
-Compile:
+**For Loop:**
+```typescript
+function testFor(): number {
+    let sum: number = 0;
+    for (let i: number = 0; i < 5; i = i + 1) {
+        sum = sum + i;
+    }
+    return sum;  // Returns 10 (0+1+2+3+4)
+}
+```
+
+**Conditionals and Logical Operators:**
+```typescript
+function testLogic(x: number, y: number): number {
+    if (x > 0 && y > 0) {
+        return 1;  // Both positive
+    } else if (x > 0 || y > 0) {
+        return 2;  // At least one positive
+    }
+    return 0;  // Both non-positive
+}
+```
+
+Compile and run:
 ```powershell
-.\build\Release\nova.exe compile hello.ts --emit-all
-nova run app.ts
+# Compile to LLVM IR
+.\build\Release\nova.exe compile example.ts
 
-# Show IR pipeline
-nova compile app.ts --emit-all --verbose
+# Compile to native executable (using clang)
+clang example.ll -o example.exe
+
+# Run the executable
+.\example.exe
+echo $?  # Shows return value
 ```
 
-Output: `hello.ll` (LLVM IR)
-```llvm
-define i64 @add(i64 %arg0, i64 %arg1) {
-bb0:
-  %add = add i64 %arg0, %arg1
-  ret i64 %add
-}
+## 📚 More Examples
 
-define i64 @main() {
-bb0:
-  %0 = call i64 @add(i64 5, i64 3)
-  br label %bb1
-bb1:
-  ret i64 %0
-}
-```
-
-## 📚 Examples
-
-### Simple Arithmetic
+### Complex Control Flow
 
 ```typescript
-function calculate(): number {
-    return 2 + 3 * 4;
+function fibonacci(n: number): number {
+    if (n === 0) return 0;
+    if (n === 1) return 1;
+
+    let prev: number = 0;
+    let curr: number = 1;
+    let i: number = 2;
+
+    while (i <= n) {
+        let next: number = prev + curr;
+        prev = curr;
+        curr = next;
+        i = i + 1;
+    }
+
+    return curr;
 }
 ```
 
-### Multiple Operations
+### Nested Conditionals
 
 ```typescript
-function math(a: number, b: number): number {
-    const sum = a + b;
-    const product = sum * 2;
-    const result = product / 2;
-    return result;
+function gradeCalculator(score: number): number {
+    if (score >= 90) {
+        return 4;  // A
+    } else if (score >= 80) {
+        return 3;  // B
+    } else if (score >= 70) {
+        return 2;  // C
+    } else if (score >= 60) {
+        return 1;  // D
+    }
+    return 0;  // F
 }
 ```
 
-### Nested Function Calls
+### Nested Loops
 
 ```typescript
-function add(a: number, b: number): number {
-    return a + b;
+function multiplicationTable(n: number): number {
+    let sum: number = 0;
+    for (let i: number = 1; i <= n; i = i + 1) {
+        for (let j: number = 1; j <= n; j = j + 1) {
+            sum = sum + (i * j);
+        }
+    }
+    return sum;
 }
-
-function multiply(a: number, b: number): number {
-    return a * b;
-}
-
-function complex(): number {
-    return multiply(add(1, 2), add(3, 4));
-}
-```
-
-### More Examples
-
-See the `examples.ts` file for 27+ working examples demonstrating all supported features
-
-### Classes and OOP
-
-```typescript
-// oop.ts
-class Animal {
-  constructor(public name: string) {}
-  
-  speak(): void {
-    console.log(`${this.name} makes a sound`);
-  }
-}
-
-class Dog extends Animal {
-  speak(): void {
-    console.log(`${this.name} barks`);
-  }
-}
-
-const dog = new Dog("Buddy");
-dog.speak(); // Output: Buddy barks
 ```
 
 ## 🧪 Testing
@@ -256,17 +263,29 @@ dog.speak(); // Output: Buddy barks
 .\run_tests.ps1
 ```
 
-### Test Results (v1.0.0)
+### Test Results (v0.6.0)
 
-- ✅ `test_add_only.ts` - Simple addition (PASSED)
-- ✅ `test_simple.ts` - Function calls (PASSED)
-- ✅ `test_math.ts` - All arithmetic (PASSED)
-- ✅ `test_complex.ts` - Chained calls (PASSED)
-- ✅ `test_nested.ts` - Nested calls (PASSED)
-- ✅ `test_advanced.ts` - Fibonacci & factorial (PASSED)
-- ✅ `showcase.ts` - Feature showcase (PASSED)
+**All 15 tests passing (100%)**
 
-**Total: 7/7 tests passing (100%)**
+| Test | Feature | Exit Code | Status |
+|------|---------|-----------|--------|
+| test_while_simple | While loops | 5 | ✅ |
+| test_for_simple | For loops | 10 | ✅ |
+| test_and_direct | Logical AND | 1 | ✅ |
+| test_or_direct | Logical OR | 3 | ✅ |
+| test_simple_if | If statement | 1 | ✅ |
+| test_logical_ops | Complex logic | 42 | ✅ |
+| test_and_local | Local variables | 1 | ✅ |
+| test_and_local_var | Scoped vars | 1 | ✅ |
+| test_and_only | AND only | 1 | ✅ |
+| test_assign_check | Assignments | 42 | ✅ |
+| test_logical_runtime | Runtime logic | 42 | ✅ |
+| test_logical_simple | Simple logic | 1 | ✅ |
+| test_return_value | Return values | 42 | ✅ |
+| test_simple_assign | Variable assign | 10 | ✅ |
+| test_simple_return | Return stmt | 42 | ✅ |
+
+**Total: 15/15 tests passing (100%)**
 
 ## � Documentation
 
@@ -376,28 +395,35 @@ Compilation performance (7 test files):
 
 ## ⚠️ Current Limitations
 
-### Not Yet Implemented (v1.0.0)
+### Not Yet Implemented (v0.6.0)
 
-- ❌ Control flow (if/else, switch)
-- ❌ Loops (while, for, do-while)
-- ❌ Boolean operations (&&, ||, !)
-- ❌ Comparison operators (<, >, ==, !=, ===, !==)
-- ❌ Arrays and objects
-- ❌ String operations
+- ❌ Switch statements
+- ❌ Do-while loops
+- ❌ Boolean negation (!) operator
+- ❌ Arrays and array indexing
+- ❌ Objects and property access
+- ❌ String operations and concatenation
 - ❌ Classes and interfaces
+- ❌ Arrow functions
 - ❌ Async/await
 - ❌ Imports/exports
 - ❌ Type checking/inference
+- ❌ Try/catch error handling
 
-### What Works (v1.0.0)
+### What Works (v0.6.0)
 
-- ✅ Function declarations with parameters
-- ✅ Number type (converted to i64)
+- ✅ Function declarations with parameters and return types
+- ✅ Control flow (if/else with multiple branches)
+- ✅ Loops (while, for with proper phi nodes)
+- ✅ Logical operators (&&, || with short-circuit evaluation)
+- ✅ Comparison operators (<, >, ==, !=, ===, !==)
 - ✅ Arithmetic operations (+, -, *, /)
 - ✅ Function calls (direct, nested, chained)
-- ✅ Variable declarations (const)
+- ✅ Variable declarations (let with proper scoping)
 - ✅ Return statements
-- ✅ Multi-stage IR generation
+- ✅ Number type (converted to i64)
+- ✅ Multi-stage IR generation (HIR → MIR → LLVM IR)
+- ✅ SSA form with phi nodes
 
 ## 🙏 Acknowledgments
 
@@ -407,45 +433,52 @@ Compilation performance (7 test files):
 
 ## 🗺️ Roadmap
 
-### v1.0.0 (Current) ✅
+### v0.6.0 (Current) ✅
 - [x] TypeScript/JavaScript parser
-- [x] Function declarations
-- [x] Arithmetic operations
+- [x] Function declarations with parameters
+- [x] Control flow (if/else)
+- [x] Loops (while, for)
+- [x] Logical operators (&&, ||)
+- [x] Comparison operators (<, >, ==, !=, ===, !==)
+- [x] Arithmetic operations (+, -, *, /)
+- [x] Variable declarations (let)
 - [x] HIR generation
-- [x] MIR generation
+- [x] MIR generation with SSA form
 - [x] LLVM IR codegen
-- [x] SSA-form value mapping
-- [x] Basic testing framework
+- [x] Comprehensive testing (15 tests)
 
-### v1.1.0 (Planned)
-- [ ] Control flow (if/else)
-- [ ] Boolean operations
-- [ ] Comparison operators
-- [ ] Basic type checking
+### v0.7.0 (Next - Planned)
+- [ ] Arrays and array indexing (`arr[0]`, `arr[1] = 10`)
+- [ ] Object literals and property access (`obj.name`)
+- [ ] String operations (concatenation, `.length`)
+- [ ] Boolean negation (!) operator
+- [ ] Switch statements
 
-### v1.2.0 (Planned)
-- [ ] Loops (while, for)
-- [ ] Arrays
-- [ ] String operations
-- [ ] Enhanced error messages
+### v0.8.0 (Planned)
+- [ ] Arrow functions (`(x) => x + 1`)
+- [ ] Do-while loops
+- [ ] Enhanced error messages with line numbers
+- [ ] Type checking and inference
 
-### v2.0.0 (Future)
-- [ ] Objects and classes
-- [ ] Type inference
+### v1.0.0 (Future)
+- [ ] Classes and interfaces
+- [ ] Try/catch error handling
+- [ ] Module system (import/export)
+- [ ] Async/await
 - [ ] Optimization passes
-- [ ] Native code generation
-- [ ] Incremental compilation
+- [ ] Direct executable generation (no external clang needed)
 
 ---
 
 ## 📈 Project Status
 
-**Version**: 1.0.0  
-**Status**: ✅ Production Ready  
-**Last Updated**: November 5, 2025  
-**Build Status**: ✅ Passing  
-**Test Coverage**: 100% (7/7 tests)  
-**Performance**: EXCELLENT (avg 10.56ms)  
+**Version**: 0.6.0
+**Status**: 🔵 Beta - Feature Complete for Control Flow
+**Last Updated**: November 13, 2025
+**Build Status**: ✅ Passing
+**Test Coverage**: 100% (15/15 tests)
+**Performance**: EXCELLENT (avg ~10ms)
+**Features**: Control flow, loops, operators, functions all working  
 
 ### Quick Links
 
