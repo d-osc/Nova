@@ -406,7 +406,19 @@ private:
             case hir::HIRInstruction::Opcode::Cast:
                 generateCast(hirInst, mirBlock);
                 break;
-            
+
+            case hir::HIRInstruction::Opcode::ArrayConstruct:
+                generateArrayConstruct(hirInst, mirBlock);
+                break;
+
+            case hir::HIRInstruction::Opcode::GetElement:
+                generateGetElement(hirInst, mirBlock);
+                break;
+
+            case hir::HIRInstruction::Opcode::SetElement:
+                generateSetElement(hirInst, mirBlock);
+                break;
+
             default:
                 // For unsupported instructions, create a nop or placeholder
                 std::cerr << "Unsupported HIR instruction: " << hirInst->toString() << std::endl;
@@ -798,16 +810,67 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
     void generateCast(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
         if (hirInst->operands.empty()) return;
-        
+
         auto operand = translateOperand(hirInst->operands[0].get());
         auto targetType = translateType(hirInst->type.get());
-        
+
         // Determine cast kind based on types
         MIRCastRValue::CastKind castKind = MIRCastRValue::CastKind::IntToInt;
-        
+
         auto rvalue = builder_->createCast(castKind, operand, targetType);
         auto dest = getOrCreatePlace(hirInst);
         builder_->createAssign(dest, rvalue);
+    }
+
+    void generateArrayConstruct(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        (void)mirBlock;
+
+        // For now, treat array as an aggregate value
+        // In a real implementation, this would allocate memory and initialize elements
+        // For our simple case, just create a placeholder value
+        auto dest = getOrCreatePlace(hirInst);
+
+        // Create a constant representing the array pointer/handle
+        // This is simplified - a real implementation would need heap allocation
+        auto i64Type = MIRBuilder::getI64Type();
+        auto arrayPtr = builder_->createIntConstant(0, i64Type); // Placeholder pointer
+        auto rvalue = builder_->createUse(arrayPtr);
+        builder_->createAssign(dest, rvalue);
+    }
+
+    void generateGetElement(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        (void)mirBlock;
+        if (hirInst->operands.size() < 2) return;
+
+        auto array = translateOperand(hirInst->operands[0].get());
+        auto index = translateOperand(hirInst->operands[1].get());
+
+        // For now, just return the first element (simplification)
+        // A real implementation would use GEP (GetElementPtr) or equivalent
+        // to compute the address and load the value
+        auto dest = getOrCreatePlace(hirInst);
+
+        // Simplified: return index as placeholder
+        // TODO: Implement proper array element access with memory operations
+        auto rvalue = builder_->createUse(index);
+        builder_->createAssign(dest, rvalue);
+    }
+
+    void generateSetElement(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        (void)mirBlock;
+        if (hirInst->operands.size() < 3) return;
+
+        // array, index, value
+        auto array = translateOperand(hirInst->operands[0].get());
+        auto index = translateOperand(hirInst->operands[1].get());
+        auto value = translateOperand(hirInst->operands[2].get());
+
+        // For now, this is a no-op placeholder
+        // A real implementation would compute the address and store the value
+        // TODO: Implement proper array element assignment
+        (void)array;
+        (void)index;
+        (void)value;
     }
 };
 

@@ -212,21 +212,20 @@ public:
     }
     
     void visit(MemberExpr& node) override {
+        // Evaluate the object/array
         node.object->accept(*this);
-        // Suppress unused variable warning
-        (void)lastValue_;
-        
+        auto object = lastValue_;
+
         if (node.isComputed) {
             // Computed member: obj[property] e.g., arr[index]
             node.property->accept(*this);
-            auto property = lastValue_;
-            
-            // For now, just pass through the property value
-            // TODO: Implement proper array access with bounds checking
-            lastValue_ = property;
+            auto index = lastValue_;
+
+            // Create GetElement instruction for array indexing
+            lastValue_ = builder_->createGetElement(object, index, "elem");
         } else {
             // Regular member: obj.property
-            // Not yet implemented for array access
+            // Not yet implemented for object property access
             if (auto propExpr = dynamic_cast<Identifier*>(node.property.get())) {
                 // Simple property access
                 // For now, just return 0 as placeholder
@@ -242,17 +241,18 @@ public:
     
     void visit(ArrayExpr& node) override {
         // Array literal construction
-        // For now, just create a placeholder value representing the array
-        // TODO: Implement proper array allocation and initialization
-        
-        // Create a simple placeholder for the array
-        // In a real implementation, this would:
-        // 1. Allocate memory for the array
-        // 2. Initialize each element with the provided values
-        // 3. Return a pointer to the allocated array
-        
-        // For now, just return the size as a placeholder
-        lastValue_ = builder_->createIntConstant(static_cast<int>(node.elements.size()));
+        std::vector<HIRValue*> elementValues;
+
+        // Evaluate all elements
+        for (const auto& elem : node.elements) {
+            elem->accept(*this);
+            if (lastValue_) {
+                elementValues.push_back(lastValue_);
+            }
+        }
+
+        // Create array construction instruction
+        lastValue_ = builder_->createArrayConstruct(elementValues, "arr");
     }
     
     void visit(ObjectExpr& node) override {

@@ -345,7 +345,40 @@ HIRInstruction* HIRBuilder::createGetElement(HIRValue* array, HIRValue* index, c
         HIRInstruction::Opcode::GetElement, anyType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(array, [](HIRValue*){}));
     inst->addOperand(std::shared_ptr<HIRValue>(index, [](HIRValue*){}));
-    
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createSetElement(HIRValue* array, HIRValue* index, HIRValue* value) {
+    auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::SetElement, voidType, "");
+    inst->addOperand(std::shared_ptr<HIRValue>(array, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(index, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(value, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createArrayConstruct(const std::vector<HIRValue*>& elements, const std::string& name) {
+    // Create array type based on elements
+    auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);  // For now, assume i64 arrays
+    auto arrayType = std::make_shared<HIRArrayType>(elementType, elements.size());
+
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::ArrayConstruct, arrayType, generateName(name));
+
+    // Add all elements as operands
+    for (auto* elem : elements) {
+        inst->addOperand(std::shared_ptr<HIRValue>(elem, [](HIRValue*){}));
+    }
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
