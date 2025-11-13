@@ -135,9 +135,11 @@ public:
                 lastValue_ = builder_->createDiv(lhs, rhs);
                 break;
             case Op::Equal:
+            case Op::StrictEqual:  // === works same as == for primitive types
                 lastValue_ = builder_->createEq(lhs, rhs);
                 break;
             case Op::NotEqual:
+            case Op::StrictNotEqual:  // !== works same as != for primitive types
                 lastValue_ = builder_->createNe(lhs, rhs);
                 break;
             case Op::Less:
