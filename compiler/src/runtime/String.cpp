@@ -83,3 +83,31 @@ int32 string_compare(String* a, String* b) {
 
 } // namespace runtime
 } // namespace nova
+
+// ==================== C-Style String Functions (for AOT compatibility) ====================
+
+extern "C" {
+
+// Simple C-string concatenation for LLVM code generation
+const char* nova_string_concat_cstr(const char* a, const char* b) {
+    if (!a && !b) return "";
+    if (!a) return b;
+    if (!b) return a;
+
+    size_t len_a = std::strlen(a);
+    size_t len_b = std::strlen(b);
+    size_t total_len = len_a + len_b;
+
+    // Allocate memory for result (using malloc for simplicity)
+    char* result = static_cast<char*>(malloc(total_len + 1));
+    if (!result) return "";
+
+    // Copy strings
+    std::memcpy(result, a, len_a);
+    std::memcpy(result + len_a, b, len_b);
+    result[total_len] = '\0';
+
+    return result;
+}
+
+}

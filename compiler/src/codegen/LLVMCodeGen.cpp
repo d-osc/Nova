@@ -1126,7 +1126,13 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
     std::cerr << "DEBUG LLVM: Creating binary operation with op=" << static_cast<int>(op) << std::endl;
     
     // Convert operands to compatible types for arithmetic operations
-    if (op != mir::MIRBinaryOpRValue::BinOp::Eq && 
+    // Special case: Don't convert pointers to integers for string concatenation
+    bool isStringConcat = (op == mir::MIRBinaryOpRValue::BinOp::Add &&
+                          lhs->getType()->isPointerTy() &&
+                          rhs->getType()->isPointerTy());
+
+    if (!isStringConcat &&
+        op != mir::MIRBinaryOpRValue::BinOp::Eq &&
         op != mir::MIRBinaryOpRValue::BinOp::Ne &&
         op != mir::MIRBinaryOpRValue::BinOp::Lt &&
         op != mir::MIRBinaryOpRValue::BinOp::Le &&
@@ -1141,7 +1147,7 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             // Convert pointer to integer
             std::cerr << "DEBUG LLVM: Converting pointer to integer in binary operation" << std::endl;
             rhs = builder->CreatePtrToInt(rhs, llvm::Type::getInt64Ty(*context), "ptr_to_int");
-        } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy() && 
+        } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy() &&
                    lhs->getType() != rhs->getType()) {
             // Convert integers to the same width
             auto lhsIntTy = static_cast<llvm::IntegerType*>(lhs->getType());
@@ -1159,10 +1165,24 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             std::cerr << "DEBUG LLVM: Creating add instruction" << std::endl;
             // Check if operands are pointers (strings)
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-                std::cerr << "DEBUG LLVM: String concatenation detected" << std::endl;
-                // For now, just return the left operand as a placeholder
-                // TODO: Implement proper string concatenation
-                return lhs;
+                // Declare nova_string_concat_cstr if not already declared
+                llvm::Function* concatFunc = module->getFunction("nova_string_concat_cstr");
+                if (!concatFunc) {
+                    llvm::FunctionType* concatFuncTy = llvm::FunctionType::get(
+                        llvm::PointerType::getUnqual(*context),  // returns ptr
+                        {llvm::PointerType::getUnqual(*context), llvm::PointerType::getUnqual(*context)},  // takes two ptrs
+                        false  // not variadic
+                    );
+                    concatFunc = llvm::Function::Create(
+                        concatFuncTy,
+                        llvm::Function::ExternalLinkage,
+                        "nova_string_concat_cstr",
+                        *module
+                    );
+                }
+
+                // Call the concat function
+                return builder->CreateCall(concatFunc, {lhs, rhs}, "str_concat");
             }
             return builder->CreateAdd(lhs, rhs, "add");
         case mir::MIRBinaryOpRValue::BinOp::Sub:

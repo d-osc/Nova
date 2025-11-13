@@ -99,17 +99,18 @@ private:
             
             case hir::HIRType::Kind::Pointer:
             case hir::HIRType::Kind::Reference:
+            case hir::HIRType::Kind::String:  // Strings are represented as pointers
                 return std::make_shared<MIRType>(MIRType::Kind::Pointer);
-            
+
             case hir::HIRType::Kind::Array:
                 return std::make_shared<MIRType>(MIRType::Kind::Array);
-            
+
             case hir::HIRType::Kind::Struct:
                 return std::make_shared<MIRType>(MIRType::Kind::Struct);
-            
+
             case hir::HIRType::Kind::Function:
                 return std::make_shared<MIRType>(MIRType::Kind::Function);
-            
+
             case hir::HIRType::Kind::Any:
                 return std::make_shared<MIRType>(MIRType::Kind::I64);
             
