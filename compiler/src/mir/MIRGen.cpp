@@ -882,17 +882,28 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
         if (hirInst->operands.size() < 3) return;
 
-        // array, index, value
-        auto array = translateOperand(hirInst->operands[0].get());
+        // operands[0] = array pointer, operands[1] = index, operands[2] = value to store
+        auto arrayPtr = translateOperand(hirInst->operands[0].get());
         auto index = translateOperand(hirInst->operands[1].get());
         auto value = translateOperand(hirInst->operands[2].get());
 
-        // For now, this is a no-op placeholder
-        // A real implementation would compute the address and store the value
-        // TODO: Implement proper array element assignment
-        (void)array;
-        (void)index;
-        (void)value;
+        // Encode as special 3-element aggregate (same pattern as SetField)
+        std::vector<MIROperandPtr> elements;
+        elements.push_back(arrayPtr);
+        elements.push_back(index);
+        elements.push_back(value);
+
+        // Use Array aggregate kind to differentiate from SetField
+        auto setElemRValue = std::make_shared<MIRAggregateRValue>(
+            MIRAggregateRValue::AggregateKind::Array,  // Use Array kind for SetElement
+            elements
+        );
+
+        // Create a dummy place for the result
+        auto resultPlace = getOrCreatePlace(hirInst);
+
+        // This assignment signals "execute the SetElement operation"
+        builder_->createAssign(resultPlace, setElemRValue);
     }
 
     void generateStructConstruct(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
@@ -966,6 +977,7 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         // This assignment signals "execute the SetField operation"
         builder_->createAssign(resultPlace, setFieldRValue);
     }
+
 };
 
 // ==================== Public API ====================

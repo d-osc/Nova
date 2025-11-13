@@ -1440,6 +1440,44 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
     if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Array) {
         size_t arraySize = aggOp->elements.size();
 
+        // Check if this is SetElement operation (array with 3 elements)
+        // elements[0] = array pointer, elements[1] = index, elements[2] = value to store
+        if (arraySize == 3) {
+            llvm::Value* arrayPtr = convertOperand(aggOp->elements[0].get());
+            llvm::Value* indexValue = convertOperand(aggOp->elements[1].get());
+            llvm::Value* valueToStore = convertOperand(aggOp->elements[2].get());
+
+            if (arrayPtr && indexValue && valueToStore) {
+                // This is a SetElement operation - generate GEP + Store
+                llvm::Value* basePtr = arrayPtr;
+
+                // If arrayPtr is a load, get the pointer operand
+                if (llvm::LoadInst* loadInst = llvm::dyn_cast<llvm::LoadInst>(arrayPtr)) {
+                    basePtr = loadInst->getPointerOperand();
+                }
+
+                // Look up array type
+                auto typeIt = arrayTypeMap.find(basePtr);
+                if (typeIt != arrayTypeMap.end()) {
+                    llvm::Type* arrayType = typeIt->second;
+
+                    // Create GEP to get element pointer
+                    // IMPORTANT: Use arrayPtr (loaded value), not basePtr (alloca)!
+                    std::vector<llvm::Value*> indices = {
+                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),
+                        indexValue
+                    };
+                    llvm::Value* elementPtr = builder->CreateGEP(arrayType, arrayPtr, indices, "setelem_ptr");
+
+                    // Store the value to the element
+                    builder->CreateStore(valueToStore, elementPtr);
+
+                    // Return a dummy value (void represented as 0)
+                    return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+                }
+            }
+        }
+
         // Create array type [N x i64]
         llvm::Type* elementType = llvm::Type::getInt64Ty(*context);
         llvm::ArrayType* arrayType = llvm::ArrayType::get(elementType, arraySize);

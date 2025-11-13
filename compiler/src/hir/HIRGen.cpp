@@ -426,13 +426,19 @@ public:
                 builder_->createStore(value, it->second);
             }
         } else if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.left.get())) {
-            // Object property assignment: obj.x = value
-            // Get the object
+            // Get the object/array
             memberExpr->object->accept(*this);
             auto object = lastValue_;
 
-            // Get property name
-            if (auto propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+            if (memberExpr->isComputed) {
+                // Array element assignment: arr[index] = value
+                memberExpr->property->accept(*this);
+                auto index = lastValue_;
+
+                // Use SetElement to store value directly to the array element
+                builder_->createSetElement(object, index, value);
+            } else if (auto propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                // Object property assignment: obj.x = value
                 std::string propertyName = propExpr->name;
 
                 // Find field index
