@@ -349,6 +349,7 @@ public:
     
     // Aggregate Operations
     HIRInstruction* createGetField(HIRValue* struct_, uint32_t fieldIndex, const std::string& name = "");
+    HIRInstruction* createSetField(HIRValue* struct_, uint32_t fieldIndex, HIRValue* value, const std::string& name = "");
     HIRInstruction* createGetElement(HIRValue* array, HIRValue* index, const std::string& name = "");
     HIRInstruction* createSetElement(HIRValue* array, HIRValue* index, HIRValue* value);
     HIRInstruction* createArrayConstruct(const std::vector<HIRValue*>& elements, const std::string& name = "");

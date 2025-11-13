@@ -428,6 +428,10 @@ private:
                 generateGetField(hirInst, mirBlock);
                 break;
 
+            case hir::HIRInstruction::Opcode::SetField:
+                generateSetField(hirInst, mirBlock);
+                break;
+
             default:
                 // For unsupported instructions, create a nop or placeholder
                 std::cerr << "Unsupported HIR instruction: " << hirInst->toString() << std::endl;
@@ -929,6 +933,38 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         auto getFieldRValue = std::make_shared<MIRGetElementRValue>(structPtr, fieldIndex);
 
         builder_->createAssign(dest, getFieldRValue);
+    }
+
+    void generateSetField(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+        if (hirInst->operands.size() < 3) {
+            std::cerr << "ERROR: SetField requires 3 operands (struct, index, value)" << std::endl;
+            return;
+        }
+
+        // operands[0] = struct pointer, operands[1] = field index, operands[2] = value to store
+        auto structPtr = translateOperand(hirInst->operands[0].get());
+        auto fieldIndex = translateOperand(hirInst->operands[1].get());
+        auto value = translateOperand(hirInst->operands[2].get());
+
+        // Create a SetElement RValue that encodes the store operation
+        // We create a special aggregate-like operation with the value to store
+        std::vector<MIROperandPtr> elements;
+        elements.push_back(structPtr);
+        elements.push_back(fieldIndex);
+        elements.push_back(value);
+
+        // Use a special aggregate kind to signal this is a SetField
+        // The LLVM backend will recognize this pattern
+        auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
+            MIRAggregateRValue::AggregateKind::Struct,  // Reuse struct kind with 3 elements as marker
+            elements
+        );
+
+        // Create a dummy place for the result (void type)
+        auto resultPlace = getOrCreatePlace(hirInst);
+
+        // This assignment signals "execute the SetField operation"
+        builder_->createAssign(resultPlace, setFieldRValue);
     }
 };
 

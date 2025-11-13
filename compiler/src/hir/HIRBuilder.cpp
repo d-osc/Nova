@@ -381,6 +381,25 @@ HIRInstruction* HIRBuilder::createGetField(HIRValue* struct_, uint32_t fieldInde
     return inst.get();
 }
 
+HIRInstruction* HIRBuilder::createSetField(HIRValue* struct_, uint32_t fieldIndex, HIRValue* value, const std::string& name) {
+    auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::SetField, voidType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(struct_, [](HIRValue*){}));
+
+    // Add field index as a constant
+    auto indexConstant = createIntConstant(fieldIndex);
+    inst->addOperand(std::shared_ptr<HIRValue>(indexConstant, [](HIRValue*){}));
+
+    // Add value to store
+    inst->addOperand(std::shared_ptr<HIRValue>(value, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
 HIRInstruction* HIRBuilder::createGetElement(HIRValue* array, HIRValue* index, const std::string& name) {
     auto anyType = std::make_shared<HIRType>(HIRType::Kind::Any);
     auto inst = std::make_shared<HIRInstruction>(

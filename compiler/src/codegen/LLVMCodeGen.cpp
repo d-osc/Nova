@@ -1478,6 +1478,54 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
         size_t numFields = aggOp->elements.size();
         std::cerr << "DEBUG LLVM: Generating struct with " << numFields << " fields" << std::endl;
 
+        // Check if this is actually a SetField operation (encoded as struct with 3 elements)
+        // elements[0] = struct pointer, elements[1] = field index, elements[2] = value to store
+        if (numFields == 3) {
+            // Try to get the struct pointer, index, and value
+            llvm::Value* structPtr = convertOperand(aggOp->elements[0].get());
+            llvm::Value* indexValue = convertOperand(aggOp->elements[1].get());
+            llvm::Value* valueToStore = convertOperand(aggOp->elements[2].get());
+
+            if (structPtr && indexValue && valueToStore) {
+
+                // This is a SetField operation - generate GEP + Store
+                // Get the struct type from arrayTypeMap
+                llvm::Value* basePtr = structPtr;
+
+                // If structPtr is a load, get the pointer operand
+                if (llvm::LoadInst* loadInst = llvm::dyn_cast<llvm::LoadInst>(structPtr)) {
+                    basePtr = loadInst->getPointerOperand();
+                }
+
+                // Look up struct type
+                auto typeIt = arrayTypeMap.find(basePtr);
+                if (typeIt != arrayTypeMap.end()) {
+                    llvm::Type* structType = typeIt->second;
+
+                    // Convert field index to i32 for struct GEP
+                    llvm::Value* fieldIndex = indexValue;
+                    if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+                        uint64_t indexVal = constIndex->getZExtValue();
+                        fieldIndex = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), indexVal);
+                    }
+
+                    // Create GEP to get field pointer
+                    // IMPORTANT: Use structPtr (the loaded value), not basePtr (the alloca)!
+                    std::vector<llvm::Value*> indices = {
+                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),
+                        fieldIndex
+                    };
+                    llvm::Value* fieldPtr = builder->CreateGEP(structType, structPtr, indices, "setfield_ptr");
+
+                    // Store the value to the field
+                    builder->CreateStore(valueToStore, fieldPtr);
+                }
+
+                // Return a dummy value (void represented as 0)
+                return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+            }
+        }
+
         // Create struct type with all i64 fields for now (simplified)
         std::vector<llvm::Type*> fieldTypes(numFields, llvm::Type::getInt64Ty(*context));
         llvm::StructType* structType = llvm::StructType::create(*context, fieldTypes, "anon_struct");

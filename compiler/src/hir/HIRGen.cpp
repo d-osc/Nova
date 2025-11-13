@@ -417,12 +417,48 @@ public:
         // Generate right side
         node.right->accept(*this);
         auto value = lastValue_;
-        
+
         // Store to left side
         if (auto* id = dynamic_cast<Identifier*>(node.left.get())) {
+            // Simple variable assignment
             auto it = symbolTable_.find(id->name);
             if (it != symbolTable_.end()) {
                 builder_->createStore(value, it->second);
+            }
+        } else if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.left.get())) {
+            // Object property assignment: obj.x = value
+            // Get the object
+            memberExpr->object->accept(*this);
+            auto object = lastValue_;
+
+            // Get property name
+            if (auto propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                std::string propertyName = propExpr->name;
+
+                // Find field index
+                uint32_t fieldIndex = 0;
+                bool found = false;
+
+                if (object && object->type) {
+                    if (auto ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get())) {
+                        if (auto structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get())) {
+                            for (size_t i = 0; i < structType->fields.size(); ++i) {
+                                if (structType->fields[i].name == propertyName) {
+                                    fieldIndex = static_cast<uint32_t>(i);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (found) {
+                    // Use SetField to store value directly to the field
+                    builder_->createSetField(object, fieldIndex, value, propertyName);
+                } else {
+                    std::cerr << "Warning: Property '" << propertyName << "' not found for assignment" << std::endl;
+                }
             }
         }
     }
