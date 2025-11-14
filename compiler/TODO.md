@@ -125,45 +125,55 @@ let x = obj.x;             // ✅ Works - Returns 10
 
 ## 🎯 HIGH PRIORITY - Next Up (P1)
 
-### 7. Complete Object Property Access 🟡
+### 7. Object and Array Assignment ✅
 **Priority**: P1 - High
-**Estimated Time**: 2-3 days remaining
-**Status**: Partially completed - property reading works ✅
+**Completed**: 2025-11-14
+**Status**: COMPLETED ✅ - All features working including nested objects!
 
 **What Works**:
 ```typescript
 let obj = {x: 10, y: 20};  // ✅ Works
 let x = obj.x;             // ✅ Works - Returns 10
+obj.x = 42;                // ✅ Works - Property assignment!
+let arr = [10, 20, 30];    // ✅ Works
+arr[0] = 42;               // ✅ Works - Array assignment!
 ```
 
-**What's Missing**:
+**What Works**:
 ```typescript
-obj.age = 31;              // ❌ Not implemented - property assignment
-let nested = obj.child.x;  // ❌ Not implemented - nested objects
+let obj = {x: 10, child: {value: 42}};  // ✅ Works
+let nested = obj.child.value;            // ✅ Works - Nested object access!
 ```
 
 **Already Completed**:
 - [x] Implement object literals with HIRStructType
 - [x] Implement property reading in HIR (GetField)
+- [x] Implement property assignment in HIR (SetField)
 - [x] Implement struct construction in MIR
 - [x] Implement field access in MIR
 - [x] Implement LLVM codegen for structs with GEP
+- [x] Fixed critical GEP bug (use loaded value not alloca)
 - [x] Test with simple property access
+- [x] Test with property assignment
+- [x] Implement array literals
+- [x] Implement array indexing (reading)
+- [x] Implement array element assignment (SetElement)
+- [x] Test with array assignment
 - [x] Fixed object slicing bug in type preservation
+- [x] Implement nested object access (obj.child.x) ✅
+- [x] Added nestedStructTypeMap for tracking nested struct types
+- [x] Propagate nested struct types when copying variables
+- [x] Test with nested objects ✅
 
 **Remaining Action Items**:
-- [ ] Implement property assignment (writing)
-  - [ ] Handle SetField in HIR
-  - [ ] Generate store instructions for struct fields
-- [ ] Test with property assignment
-- [ ] Implement nested object access
-- [ ] Test with nested objects
 - [ ] Document in CHANGELOG.md
 
 **Success Criteria**:
 - ✅ Can read object properties: `obj.name`
-- ❌ Can write object properties: `obj.name = "Jane"`
-- ❌ Nested objects work: `obj.child.value`
+- ✅ Can write object properties: `obj.name = "Jane"`
+- ✅ Can read array elements: `arr[0]`
+- ✅ Can write array elements: `arr[0] = 42`
+- ✅ Nested objects work: `obj.child.value` ✅ COMPLETED!
 
 ---
 

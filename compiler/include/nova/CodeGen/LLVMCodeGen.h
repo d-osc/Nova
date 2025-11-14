@@ -9,6 +9,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/BasicBlock.h>
 #include <unordered_map>
+#include <map>
 #include <memory>
 
 namespace nova::codegen {
@@ -56,6 +57,10 @@ private:
 
     // Array type tracking (maps array pointers to their array types)
     std::unordered_map<llvm::Value*, llvm::Type*> arrayTypeMap;
+
+    // Nested struct type tracking (maps (parent value, field index) to nested struct type)
+    // Used for tracking struct types of pointer fields in structs
+    std::map<std::pair<llvm::Value*, unsigned>, llvm::Type*> nestedStructTypeMap;
 
     // Current function context
     llvm::Function* currentFunction;

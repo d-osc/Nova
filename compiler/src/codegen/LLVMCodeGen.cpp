@@ -810,6 +810,18 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                         if (arrayTypeIt != arrayTypeMap.end()) {
                             arrayTypeMap[it->second] = arrayTypeIt->second;
                             std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from value" << std::endl;
+
+                            // Also propagate nested struct types for all fields
+                            if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayTypeIt->second)) {
+                                for (unsigned fieldIdx = 0; fieldIdx < structType->getNumElements(); ++fieldIdx) {
+                                    auto nestedKey = std::make_pair(value, fieldIdx);
+                                    auto nestedIt = nestedStructTypeMap.find(nestedKey);
+                                    if (nestedIt != nestedStructTypeMap.end()) {
+                                        nestedStructTypeMap[std::make_pair(it->second, fieldIdx)] = nestedIt->second;
+                                        std::cerr << "DEBUG LLVM: Propagated nested struct type for field " << fieldIdx << std::endl;
+                                    }
+                                }
+                            }
                         } else {
                             // Check if we're loading from a variable that has array type
                             if (llvm::LoadInst* loadInst = llvm::dyn_cast<llvm::LoadInst>(value)) {
@@ -818,6 +830,18 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                                 if (sourceArrayTypeIt != arrayTypeMap.end()) {
                                     arrayTypeMap[it->second] = sourceArrayTypeIt->second;
                                     std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from source" << std::endl;
+
+                                    // Also propagate nested struct types for all fields
+                                    if (auto* structType = llvm::dyn_cast<llvm::StructType>(sourceArrayTypeIt->second)) {
+                                        for (unsigned fieldIdx = 0; fieldIdx < structType->getNumElements(); ++fieldIdx) {
+                                            auto nestedKey = std::make_pair(loadSource, fieldIdx);
+                                            auto nestedIt = nestedStructTypeMap.find(nestedKey);
+                                            if (nestedIt != nestedStructTypeMap.end()) {
+                                                nestedStructTypeMap[std::make_pair(it->second, fieldIdx)] = nestedIt->second;
+                                                std::cerr << "DEBUG LLVM: Propagated nested struct type for field " << fieldIdx << " from source" << std::endl;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1564,8 +1588,55 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             }
         }
 
-        // Create struct type with all i64 fields for now (simplified)
-        std::vector<llvm::Type*> fieldTypes(numFields, llvm::Type::getInt64Ty(*context));
+        // First pass: convert all field values to determine their types
+        std::vector<llvm::Value*> fieldValues;
+        std::vector<llvm::Type*> fieldTypes;
+        std::vector<llvm::Type*> nestedStructTypes; // Track actual struct types for nested structs
+
+        for (size_t i = 0; i < numFields; ++i) {
+            llvm::Value* fieldValue = convertOperand(aggOp->elements[i].get());
+            if (!fieldValue) {
+                fieldValue = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+            }
+
+            fieldValues.push_back(fieldValue);
+
+            // Determine the field type from the actual value
+            llvm::Type* fieldType = fieldValue->getType();
+            fieldTypes.push_back(fieldType);
+
+            // If this is a pointer (potential nested struct/array), track the struct type
+            if (fieldType->isPointerTy()) {
+                // Try to find the struct type this pointer points to
+                llvm::Value* sourceAlloca = fieldValue;
+
+                // If fieldValue is a load instruction, unwrap it to get the alloca
+                if (auto* loadInst = llvm::dyn_cast<llvm::LoadInst>(fieldValue)) {
+                    sourceAlloca = loadInst->getPointerOperand();
+                    std::cerr << "DEBUG LLVM: Field " << i << " is loaded pointer, unwrapped to get source alloca" << std::endl;
+                }
+
+                // Now try to find the struct type
+                auto it = arrayTypeMap.find(sourceAlloca);
+                if (it != arrayTypeMap.end()) {
+                    nestedStructTypes.push_back(it->second);
+                    std::cerr << "DEBUG LLVM: Field " << i << " is pointer to struct/array type: ";
+                    it->second->print(llvm::errs());
+                    std::cerr << std::endl;
+                } else {
+                    nestedStructTypes.push_back(nullptr);
+                    std::cerr << "DEBUG LLVM: Field " << i << " is pointer but no struct type found in arrayTypeMap" << std::endl;
+                }
+            } else {
+                nestedStructTypes.push_back(nullptr);
+            }
+
+            std::cerr << "DEBUG LLVM: Field " << i << " type: ";
+            fieldType->print(llvm::errs());
+            std::cerr << std::endl;
+        }
+
+        // Create struct type with the actual field types
         llvm::StructType* structType = llvm::StructType::create(*context, fieldTypes, "anon_struct");
 
         // Allocate struct on stack
@@ -1573,9 +1644,6 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
 
         // Initialize each field
         for (size_t i = 0; i < numFields; ++i) {
-            llvm::Value* fieldValue = convertOperand(aggOp->elements[i].get());
-            if (!fieldValue) continue;
-
             // Get pointer to field using GEP
             std::vector<llvm::Value*> indices = {
                 llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), // struct index
@@ -1584,7 +1652,17 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             llvm::Value* fieldPtr = builder->CreateGEP(structType, structAlloca, indices, "field_ptr");
 
             // Store field value
-            builder->CreateStore(fieldValue, fieldPtr);
+            builder->CreateStore(fieldValues[i], fieldPtr);
+
+            // If this field is a pointer to a struct/array, track it in nestedStructTypeMap
+            if (nestedStructTypes[i]) {
+                // Store the nested struct type using (parent alloca, field index) as key
+                // This allows nested field access to work
+                nestedStructTypeMap[std::make_pair(structAlloca, i)] = nestedStructTypes[i];
+                std::cerr << "DEBUG LLVM: Stored nested struct type for field " << i << " in nestedStructTypeMap: ";
+                nestedStructTypes[i]->print(llvm::errs());
+                std::cerr << std::endl;
+            }
         }
 
         std::cerr << "DEBUG LLVM: Struct allocated and initialized, returning pointer" << std::endl;
@@ -1696,14 +1774,78 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         "elem_ptr"
     );
 
-    // Load the element value
+    // Determine the actual type of the element from the array/struct type
+    llvm::Type* elementType = nullptr;
+    if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
+        // For struct types, get the type of the specific field
+        if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+            unsigned fieldIndex = constIndex->getZExtValue();
+            if (fieldIndex < structType->getNumElements()) {
+                elementType = structType->getElementType(fieldIndex);
+                std::cerr << "DEBUG LLVM: Field type at index " << fieldIndex << ": ";
+                elementType->print(llvm::errs());
+                std::cerr << std::endl;
+            }
+        }
+    } else if (auto* arrayType_llvm = llvm::dyn_cast<llvm::ArrayType>(arrayType)) {
+        // For array types, all elements have the same type
+        elementType = arrayType_llvm->getElementType();
+    }
+
+    // Load the element value with the correct type
+    llvm::Type* loadType = elementType ? elementType : llvm::Type::getInt64Ty(*context);
     llvm::Value* elementValue = builder->CreateLoad(
-        llvm::Type::getInt64Ty(*context),
+        loadType,
         elementPtr,
         "elem_value"
     );
 
     std::cerr << "DEBUG LLVM: Element loaded successfully" << std::endl;
+
+    // If the element is a pointer type (nested struct/array), we need to track its type
+    // for potential nested field access
+    if (elementType && elementType->isPointerTy()) {
+        std::cerr << "DEBUG LLVM: Element is a pointer type, checking for nested struct type" << std::endl;
+
+        // Look up if we stored the nested struct type for this field
+        // We need the parent alloca and field index
+        if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+            unsigned fieldIndex = constIndex->getZExtValue();
+            auto nestedTypeKey = std::make_pair(static_cast<llvm::Value*>(allocaInst), fieldIndex);
+            auto nestedTypeIt = nestedStructTypeMap.find(nestedTypeKey);
+
+            if (nestedTypeIt != nestedStructTypeMap.end()) {
+                std::cerr << "DEBUG LLVM: Found nested struct type in nestedStructTypeMap for field " << fieldIndex << ": ";
+                nestedTypeIt->second->print(llvm::errs());
+                std::cerr << std::endl;
+
+                // Create a temporary alloca to store the loaded pointer
+                // This allows us to do GEP on it for nested field access
+                llvm::AllocaInst* tempAlloca = builder->CreateAlloca(
+                    elementType,
+                    nullptr,
+                    "nested_ptr"
+                );
+
+                // Store the loaded pointer
+                builder->CreateStore(elementValue, tempAlloca);
+
+                // Track the nested struct type for this temporary alloca
+                // This is critical - it allows the next GetElement to find the struct type
+                arrayTypeMap[tempAlloca] = nestedTypeIt->second;
+                std::cerr << "DEBUG LLVM: Stored nested struct type for temp alloca in arrayTypeMap" << std::endl;
+
+                // Return a load from the alloca
+                // This ensures that future operations can unwrap the load to find the alloca
+                llvm::Value* reloaded = builder->CreateLoad(elementType, tempAlloca, "nested_reload");
+                std::cerr << "DEBUG LLVM: Returning reloaded value from temp alloca" << std::endl;
+                return reloaded;
+            } else {
+                std::cerr << "DEBUG LLVM: No nested struct type found for parent=" << allocaInst
+                          << ", field=" << fieldIndex << std::endl;
+            }
+        }
+    }
 
     return elementValue;
 }

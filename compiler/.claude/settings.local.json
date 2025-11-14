@@ -50,7 +50,8 @@
       "Bash(do exefile=$test%.ts.exe)",
       "Bash(if [ -f $exefile ])",
       "Bash(then ./$exefile)",
-      "Bash(/dev/null)"
+      "Bash(/dev/null)",
+      "Bash(./tests/test_nested_obj.exe:*)"
     ],
     "deny": [],
     "ask": []
