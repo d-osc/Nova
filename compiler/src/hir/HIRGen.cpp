@@ -163,7 +163,7 @@ public:
     void visit(UnaryExpr& node) override {
         node.operand->accept(*this);
         auto operand = lastValue_;
-        
+
         using Op = UnaryExpr::Op;
         switch (node.op) {
             case Op::Minus:
@@ -178,6 +178,45 @@ public:
                 {
                     auto falsVal = builder_->createBoolConstant(false);
                     lastValue_ = builder_->createEq(operand, falsVal);
+                }
+                break;
+            case Op::Typeof:
+                // typeof operator - return string representation of type
+                {
+                    std::string typeStr = "unknown";
+
+                    if (operand && operand->type) {
+                        switch (operand->type->kind) {
+                            case HIRType::Kind::I64:
+                            case HIRType::Kind::I32:
+                            case HIRType::Kind::I8:
+                                typeStr = "number";
+                                break;
+                            case HIRType::Kind::String:
+                                typeStr = "string";
+                                break;
+                            case HIRType::Kind::Bool:
+                                typeStr = "boolean";
+                                break;
+                            case HIRType::Kind::Array:
+                            case HIRType::Kind::Struct:
+                            case HIRType::Kind::Pointer:
+                                typeStr = "object";
+                                break;
+                            case HIRType::Kind::Function:
+                                typeStr = "function";
+                                break;
+                            case HIRType::Kind::Void:
+                                typeStr = "undefined";
+                                break;
+                            default:
+                                typeStr = "unknown";
+                                break;
+                        }
+                    }
+
+                    std::cerr << "DEBUG HIRGen: typeof operator returns '" << typeStr << "'" << std::endl;
+                    lastValue_ = builder_->createStringConstant(typeStr);
                 }
                 break;
             default:

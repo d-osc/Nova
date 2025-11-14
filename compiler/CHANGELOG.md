@@ -16,6 +16,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.5] - 2025-11-14
+
+### Added - typeof Operator 🎉
+- ✅ **typeof operator now works!**
+  - Returns string representing the type of a value
+  - Compile-time type detection
+  - Works with all basic types
+
+**Supported Types**:
+```typescript
+typeof 42         // "number"
+typeof "hello"    // "string"
+typeof true       // "boolean"
+typeof [1, 2, 3]  // "object"
+typeof {x: 10}    // "object"
+```
+
+**Example**:
+```typescript
+let num = 42;
+let t = typeof num;  // "number"
+let len = t.length;  // 6
+```
+
+### Implementation Details
+**HIR Generation (`src/hir/HIRGen.cpp`)**:
+- Added typeof case in UnaryExpr visitor
+- Maps HIR types to JavaScript type strings:
+  - I64/I32/I8 → "number"
+  - String → "string"
+  - Bool → "boolean"
+  - Array/Struct/Pointer → "object"
+  - Function → "function"
+  - Void → "undefined"
+- Returns string constant at compile-time
+
+### Tests
+- ✅ test_typeof.ts - typeof with number, string, array (returns 6 for "number".length)
+- ✅ test_typeof_bool.ts - typeof with boolean (returns 7 for "boolean".length)
+- ✅ test_typeof_comprehensive.ts - All types (returns 25 = 6+6+7+6)
+
+### Technical Notes
+- typeof is evaluated at compile-time using static type information
+- No runtime type checking overhead
+- Type strings are compatible with JavaScript/TypeScript
+
+### Breaking Changes
+- None - fully backward compatible
+
+---
+
 ## [0.9.0] - 2025-11-14
 
 ### Added - Array.length Property 🎉

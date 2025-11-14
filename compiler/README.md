@@ -13,7 +13,7 @@ Nova compiles TypeScript and JavaScript to LLVM IR through a multi-stage compila
 TypeScript/JavaScript → HIR → MIR → LLVM IR → Native Code
 ```
 
-## ✨ Features (v0.9.0)
+## ✨ Features (v0.9.5)
 
 ### ✅ Core Language (100% Working)
 - ✅ **Functions** - Declarations, parameters, return values, recursion
@@ -23,6 +23,7 @@ TypeScript/JavaScript → HIR → MIR → LLVM IR → Native Code
 - ✅ **Comparison Operators** - `<`, `>`, `==`, `!=`, `===`, `!==`
 - ✅ **Arithmetic Operations** - `+`, `-`, `*`, `/`, `%`, `**`
 - ✅ **Variables** - `let`, `const`, `var` with proper scoping
+- ✅ **typeof Operator** - `typeof x` returns type as string
 
 ### ✅ Strings (100% Working) 🎉 NEW!
 - ✅ **String Concatenation** - `"Hello" + " World"`
@@ -69,7 +70,7 @@ TypeScript/JavaScript → HIR → MIR → LLVM IR → Native Code
 - **Performance Grade**: EXCELLENT ⚡
 - **Test Success Rate**: 100% (all core tests passing)
 - **Generated IR Quality**: Zero verification errors
-- **Completion**: 73% of TypeScript/JavaScript features
+- **Completion**: 74% of TypeScript/JavaScript features
 
 ## 🏗️ Architecture
 
