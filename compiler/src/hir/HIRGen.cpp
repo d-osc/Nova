@@ -577,13 +577,52 @@ public:
     }
     
     void visit(NewExpr& node) override {
-        (void)node;
-        // new expression
+        std::cerr << "DEBUG HIRGen: Processing 'new' expression" << std::endl;
+
+        // Get class name from callee (should be an Identifier)
+        std::string className;
+        if (auto* id = dynamic_cast<Identifier*>(node.callee.get())) {
+            className = id->name;
+            std::cerr << "  DEBUG: Class name: " << className << std::endl;
+        } else {
+            std::cerr << "  ERROR: 'new' expression with non-identifier callee" << std::endl;
+            lastValue_ = builder_->createIntConstant(0);
+            return;
+        }
+
+        // Constructor function name: ClassName_constructor
+        std::string constructorName = className + "_constructor";
+
+        // Evaluate arguments
+        std::vector<HIRValue*> args;
+        for (auto& arg : node.arguments) {
+            arg->accept(*this);
+            args.push_back(lastValue_);
+        }
+
+        // Call constructor function
+        auto constructorFunc = module_->getFunction(constructorName);
+        if (!constructorFunc) {
+            std::cerr << "  ERROR: Constructor function not found: " << constructorName << std::endl;
+            lastValue_ = builder_->createIntConstant(0);
+            return;
+        }
+
+        lastValue_ = builder_->createCall(constructorFunc.get(), args, "new_instance");
+        std::cerr << "  DEBUG: Created call to constructor: " << constructorName << std::endl;
     }
     
     void visit(ThisExpr& node) override {
         (void)node;
-        // this reference
+        std::cerr << "DEBUG HIRGen: Processing 'this' expression" << std::endl;
+        if (currentThis_) {
+            lastValue_ = currentThis_;
+            std::cerr << "  DEBUG: Using current 'this' context" << std::endl;
+        } else {
+            std::cerr << "  ERROR: 'this' used outside of method context!" << std::endl;
+            // Create placeholder to avoid crash
+            lastValue_ = builder_->createIntConstant(0);
+        }
     }
     
     void visit(SuperExpr& node) override {
@@ -1280,8 +1319,201 @@ public:
     }
     
     void visit(ClassDecl& node) override {
-        // Create struct type for class
-        (void)module_->createStructType(node.name);
+        std::cerr << "DEBUG HIRGen: Processing class declaration: " << node.name << std::endl;
+
+        // Helper to convert AST Type::Kind to HIR HIRType::Kind (same as in FunctionDecl)
+        auto convertTypeKind = [](Type::Kind astKind) -> HIRType::Kind {
+            switch (astKind) {
+                case Type::Kind::Void: return HIRType::Kind::Void;
+                case Type::Kind::Number: return HIRType::Kind::I64;
+                case Type::Kind::String: return HIRType::Kind::String;
+                case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::Any: return HIRType::Kind::Any;
+                case Type::Kind::Unknown: return HIRType::Kind::Unknown;
+                case Type::Kind::Never: return HIRType::Kind::Never;
+                case Type::Kind::Null: return HIRType::Kind::Any;
+                case Type::Kind::Undefined: return HIRType::Kind::Any;
+                default: return HIRType::Kind::Any;
+            }
+        };
+
+        // 1. Create struct type for class data
+        std::vector<hir::HIRStructType::Field> fields;
+        for (const auto& prop : node.properties) {
+            // Convert property type to HIR type
+            hir::HIRType::Kind typeKind = hir::HIRType::Kind::I64;  // Default to i64
+            if (prop.type) {
+                typeKind = convertTypeKind(prop.type->kind);
+            }
+            auto fieldType = std::make_shared<hir::HIRType>(typeKind);
+            fields.push_back({prop.name, fieldType, true});
+            std::cerr << "  DEBUG: Added field: " << prop.name << std::endl;
+        }
+
+        auto structType = module_->createStructType(node.name);
+        structType->fields = fields;
+        std::cerr << "  DEBUG: Created struct type with " << fields.size() << " fields" << std::endl;
+
+        // 2. Find constructor and generate constructor function
+        ClassDecl::Method* constructor = nullptr;
+        for (auto& method : node.methods) {
+            if (method.kind == ClassDecl::Method::Kind::Constructor) {
+                constructor = &method;
+                break;
+            }
+        }
+
+        if (constructor) {
+            std::cerr << "  DEBUG: Generating constructor function" << std::endl;
+            generateConstructorFunction(node.name, *constructor, structType, convertTypeKind);
+        }
+
+        // 3. Generate method functions
+        for (const auto& method : node.methods) {
+            if (method.kind == ClassDecl::Method::Kind::Method) {
+                std::cerr << "  DEBUG: Generating method: " << method.name << std::endl;
+                generateMethodFunction(node.name, method, structType, convertTypeKind);
+            }
+        }
+
+        std::cerr << "DEBUG HIRGen: Completed class declaration: " << node.name << std::endl;
+    }
+
+    void generateConstructorFunction(const std::string& className,
+                                     const ClassDecl::Method& constructor,
+                                     hir::HIRStructType* structType,
+                                     std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
+        // Constructor function name: ClassName_constructor
+        std::string funcName = className + "_constructor";
+
+        // Parameter types (from constructor parameters)
+        std::vector<hir::HIRTypePtr> paramTypes;
+        for (size_t i = 0; i < constructor.params.size(); ++i) {
+            paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64));
+        }
+
+        // Return type is pointer to struct (use Any for now)
+        auto returnType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any);
+
+        // Create function type
+        auto funcType = new HIRFunctionType(paramTypes, returnType);
+
+        // Create HIR function
+        auto func = module_->createFunction(funcName, funcType);
+
+        // Save current function
+        HIRFunction* savedFunction = currentFunction_;
+        currentFunction_ = func.get();
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Create builder
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // Add parameters to symbol table
+        for (size_t i = 0; i < constructor.params.size(); ++i) {
+            symbolTable_[constructor.params[i]] = func->parameters[i];
+        }
+
+        // Allocate memory for class instance (this will be handled by runtime)
+        // For now, just create a placeholder integer to represent the allocated instance
+        // TODO: Implement malloc call for class instance
+        auto instancePtr = builder_->createIntConstant(0);  // Placeholder
+
+        // Save current 'this' context (for nested classes)
+        hir::HIRValue* savedThis = currentThis_;
+        // Set 'this' to the allocated instance
+        currentThis_ = instancePtr;
+
+        // Process constructor body
+        if (constructor.body) {
+            constructor.body->accept(*this);
+        }
+
+        // Add implicit return of instance if needed
+        if (!entryBlock->hasTerminator()) {
+            builder_->createReturn(instancePtr);
+        }
+
+        // Restore 'this' context
+        currentThis_ = savedThis;
+        currentFunction_ = savedFunction;
+
+        std::cerr << "    DEBUG: Created constructor function: " << funcName << std::endl;
+    }
+
+    void generateMethodFunction(const std::string& className,
+                                const ClassDecl::Method& method,
+                                hir::HIRStructType* structType,
+                                std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
+        // Method function name: ClassName_methodName
+        std::string funcName = className + "_" + method.name;
+
+        // Parameter types: 'this' pointer + method parameters
+        std::vector<hir::HIRTypePtr> paramTypes;
+        // First parameter is 'this' (pointer to struct)
+        paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any));
+
+        // Add method parameters
+        for (size_t i = 0; i < method.params.size(); ++i) {
+            paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64));
+        }
+
+        // Return type
+        hir::HIRTypePtr returnType;
+        if (method.returnType) {
+            returnType = std::make_shared<hir::HIRType>(convertTypeKind(method.returnType->kind));
+        } else {
+            returnType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64);
+        }
+
+        // Create function type
+        auto funcType = new HIRFunctionType(paramTypes, returnType);
+
+        // Create HIR function
+        auto func = module_->createFunction(funcName, funcType);
+
+        // Save current function
+        HIRFunction* savedFunction = currentFunction_;
+        currentFunction_ = func.get();
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Create builder
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // First parameter is 'this'
+        symbolTable_["this"] = func->parameters[0];
+
+        // Add method parameters to symbol table (starting from index 1)
+        for (size_t i = 0; i < method.params.size(); ++i) {
+            symbolTable_[method.params[i]] = func->parameters[i + 1];
+        }
+
+        // Save current 'this' context
+        hir::HIRValue* savedThis = currentThis_;
+        // Set 'this' to the first parameter
+        currentThis_ = func->parameters[0];
+
+        // Process method body
+        if (method.body) {
+            method.body->accept(*this);
+        }
+
+        // Add implicit return if needed
+        if (!entryBlock->hasTerminator()) {
+            builder_->createReturn(nullptr);
+        }
+
+        // Restore 'this' context
+        currentThis_ = savedThis;
+        currentFunction_ = savedFunction;
+
+        std::cerr << "    DEBUG: Created method function: " << funcName << std::endl;
     }
     
     void visit(InterfaceDecl& node) override {
@@ -1319,6 +1551,7 @@ private:
     HIRModule* module_;
     std::unique_ptr<HIRBuilder> builder_;
     HIRFunction* currentFunction_;
+    HIRValue* currentThis_ = nullptr;  // Current 'this' context for methods
     HIRValue* lastValue_ = nullptr;
     std::unordered_map<std::string, HIRValue*> symbolTable_;
 };
