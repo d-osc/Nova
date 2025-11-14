@@ -1061,7 +1061,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         callee = module->getFunction(funcName);
 
                         if (!callee && funcName == "strlen") {
-                            // Create strlen declaration: i64 @strlen(i8*)
+                            // Create strlen declaration: i64 @strlen(ptr)
                             std::cerr << "DEBUG LLVM: Creating external strlen declaration" << std::endl;
                             llvm::FunctionType* strlenType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
@@ -1075,6 +1075,59 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                             std::cerr << "DEBUG LLVM: Created strlen declaration" << std::endl;
+                        }
+
+                        // Create declarations for string method runtime functions
+                        if (!callee && funcName == "nova_string_substring") {
+                            // ptr @nova_string_substring(ptr, i64, i64)
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_substring declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_substring",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_string_indexOf") {
+                            // i64 @nova_string_indexOf(ptr, ptr)
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_indexOf declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_indexOf",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_string_charAt") {
+                            // ptr @nova_string_charAt(ptr, i64)
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_charAt declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_charAt",
+                                module.get()
+                            );
                         }
                     }
                 }

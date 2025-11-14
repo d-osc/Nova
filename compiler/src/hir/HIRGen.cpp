@@ -192,16 +192,93 @@ public:
     }
     
     void visit(CallExpr& node) override {
+        // Check if this is a string method call: str.substring(...)
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            // Get the object and method name
+            memberExpr->object->accept(*this);
+            HIRValue* object = lastValue_;
+
+            if (auto* propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                std::string methodName = propExpr->name;
+
+                // Check if object is a string type
+                bool isStringMethod = object && object->type &&
+                                     object->type->kind == hir::HIRType::Kind::String;
+
+                if (isStringMethod) {
+                    std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
+
+                    // Generate arguments
+                    std::vector<HIRValue*> args;
+                    args.push_back(object);  // First argument is the string itself
+                    for (auto& arg : node.arguments) {
+                        arg->accept(*this);
+                        args.push_back(lastValue_);
+                    }
+
+                    // Create or get runtime function based on method name
+                    std::string runtimeFuncName;
+                    std::vector<HIRTypePtr> paramTypes;
+                    HIRTypePtr returnType;
+
+                    if (methodName == "substring") {
+                        runtimeFuncName = "nova_string_substring";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else if (methodName == "indexOf") {
+                        runtimeFuncName = "nova_string_indexOf";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    } else if (methodName == "charAt") {
+                        runtimeFuncName = "nova_string_charAt";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else {
+                        std::cerr << "DEBUG HIRGen: Unknown string method: " << methodName << std::endl;
+                        lastValue_ = nullptr;
+                        return;
+                    }
+
+                    // Check if function already exists
+                    HIRFunction* runtimeFunc = nullptr;
+                    auto& functions = module_->functions;
+                    for (auto& func : functions) {
+                        if (func->name == runtimeFuncName) {
+                            runtimeFunc = func.get();
+                            break;
+                        }
+                    }
+
+                    // Create function if it doesn't exist
+                    if (!runtimeFunc) {
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                        HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        runtimeFunc = funcPtr.get();
+                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    }
+
+                    // Create call to runtime function
+                    lastValue_ = builder_->createCall(runtimeFunc, args, "str_method");
+                    return;
+                }
+            }
+        }
+
         // Generate callee
         node.callee->accept(*this);
-        
+
         // Generate arguments
         std::vector<HIRValue*> args;
         for (auto& arg : node.arguments) {
             arg->accept(*this);
             args.push_back(lastValue_);
         }
-        
+
         // Lookup function
         if (auto* id = dynamic_cast<Identifier*>(node.callee.get())) {
             auto func = module_->getFunction(id->name);
