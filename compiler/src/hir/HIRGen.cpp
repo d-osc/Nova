@@ -226,8 +226,48 @@ public:
     }
     
     void visit(UpdateExpr& node) override {
-        // ++x or x++ implementation
-        node.argument->accept(*this);
+        // Increment/Decrement operators: ++x, x++, --x, x--
+        // The argument must be a variable (identifier)
+        auto* identifier = dynamic_cast<Identifier*>(node.argument.get());
+        if (!identifier) {
+            std::cerr << "ERROR: UpdateExpr argument must be an identifier" << std::endl;
+            return;
+        }
+
+        // Get the variable's current value
+        auto it = symbolTable_.find(identifier->name);
+        if (it == symbolTable_.end()) {
+            std::cerr << "ERROR: Undefined variable: " << identifier->name << std::endl;
+            return;
+        }
+
+        HIRValue* varAlloca = it->second;
+
+        // Load current value
+        auto currentValue = builder_->createLoad(varAlloca);
+
+        // Create constant 1 for increment/decrement
+        auto one = builder_->createIntConstant(1);
+
+        // Calculate new value
+        HIRValue* newValue;
+        if (node.op == UpdateExpr::Op::Increment) {
+            newValue = builder_->createAdd(currentValue, one);
+        } else {  // Decrement
+            newValue = builder_->createSub(currentValue, one);
+        }
+
+        // Store new value back to variable
+        builder_->createStore(newValue, varAlloca);
+
+        // Return value depends on prefix vs postfix
+        if (node.isPrefix) {
+            // Prefix: ++x or --x returns new value
+            lastValue_ = newValue;
+        } else {
+            // Postfix: x++ or x-- returns old value
+            lastValue_ = currentValue;
+        }
     }
     
     void visit(CallExpr& node) override {
