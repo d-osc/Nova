@@ -50,6 +50,11 @@ public:
     void generate() {
         // Generate all functions
         for (const auto& hirFunc : hirModule_->functions) {
+            // Skip external functions (declarations only, no body to generate)
+            if (hirFunc->linkage == hir::HIRFunction::Linkage::External) {
+                std::cerr << "DEBUG MIR: Skipping external function: " << hirFunc->name << std::endl;
+                continue;
+            }
             generateFunction(hirFunc.get());
         }
     }

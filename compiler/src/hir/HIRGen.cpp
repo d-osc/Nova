@@ -270,22 +270,8 @@ public:
                     if (object && object->type && object->type->kind == hir::HIRType::Kind::String && propertyName == "length") {
                         std::cerr << "DEBUG HIRGen: Accessing built-in string.length property" << std::endl;
 
-                        // Try to find the string constant, either directly or through a load
+                        // Try to find if this is a string literal constant
                         hir::HIRConstant* strConst = dynamic_cast<hir::HIRConstant*>(object);
-
-                        // If object is a load instruction, try to get the source value
-                        if (!strConst) {
-                            if (auto* loadInst = dynamic_cast<hir::HIRLoad*>(object)) {
-                                std::cerr << "DEBUG HIRGen: Object is a load instruction, checking source" << std::endl;
-                                // Try to get the source value from the pointer
-                                if (auto* ptrVal = loadInst->ptr) {
-                                    // Check if it's a local variable that was initialized with a string constant
-                                    // For now, we can't easily trace back to the initialization
-                                    // This requires dataflow analysis or SSA form
-                                    std::cerr << "DEBUG HIRGen: Cannot trace string value through load, need dataflow analysis" << std::endl;
-                                }
-                            }
-                        }
 
                         // Check if we found a string literal constant
                         if (strConst && strConst->kind == hir::HIRConstant::Kind::String) {
@@ -295,11 +281,47 @@ public:
                             std::cerr << "DEBUG HIRGen: String literal '" << strVal << "' length = " << length << std::endl;
                             lastValue_ = builder_->createIntConstant(length);
                         } else {
-                            // For dynamic strings (from concat, variables, etc.), we need runtime support
-                            // For now, return 0 as placeholder
-                            // TODO: Implement proper runtime string length support
-                            std::cerr << "Warning: Dynamic string.length not yet implemented, returning 0" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
+                            // For dynamic strings (from concat, variables, etc.), call strlen runtime function
+                            std::cerr << "DEBUG HIRGen: Creating strlen call for dynamic string" << std::endl;
+
+                            // Create or get strlen intrinsic function
+                            // We'll create a temporary HIRFunction for strlen
+                            // The actual implementation will be provided at link time
+                            hir::HIRFunction* strlenFunc = nullptr;
+
+                            // Check if strlen function already exists in module
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == "strlen") {
+                                    strlenFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            // If not found, create it
+                            if (!strlenFunc) {
+                                std::cerr << "DEBUG HIRGen: Creating strlen intrinsic function declaration" << std::endl;
+
+                                // Create function type: i64 strlen(i8*)
+                                std::vector<HIRTypePtr> paramTypes;
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+
+                                HIRTypePtr retType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, retType);
+
+                                // Create function using module's createFunction
+                                HIRFunctionPtr strlenFuncPtr = module_->createFunction("strlen", funcType);
+
+                                // Set linkage to external (will be provided at link time)
+                                strlenFuncPtr->linkage = HIRFunction::Linkage::External;
+
+                                strlenFunc = strlenFuncPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created strlen function with external linkage" << std::endl;
+                            }
+
+                            // Create call to strlen
+                            std::vector<HIRValue*> args = { object };
+                            lastValue_ = builder_->createCall(strlenFunc, args, "str_len");
                         }
                     } else {
                         // Property not found, return 0 as placeholder

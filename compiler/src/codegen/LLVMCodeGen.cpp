@@ -1049,9 +1049,33 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
             if (auto* constOp = dynamic_cast<mir::MIRConstOperand*>(callTerm->func.get())) {
                 if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
                     std::string funcName = std::get<std::string>(constOp->value);
+                    std::cerr << "DEBUG LLVM: Looking for function: " << funcName << std::endl;
+
                     auto it = functionMap.find(funcName);
                     if (it != functionMap.end()) {
                         callee = it->second;
+                        std::cerr << "DEBUG LLVM: Found function in functionMap" << std::endl;
+                    } else {
+                        // Function not found in map - may be an external/intrinsic function
+                        // Try to find it in the LLVM module
+                        callee = module->getFunction(funcName);
+
+                        if (!callee && funcName == "strlen") {
+                            // Create strlen declaration: i64 @strlen(i8*)
+                            std::cerr << "DEBUG LLVM: Creating external strlen declaration" << std::endl;
+                            llvm::FunctionType* strlenType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                strlenType,
+                                llvm::Function::ExternalLinkage,
+                                "strlen",
+                                module.get()
+                            );
+                            std::cerr << "DEBUG LLVM: Created strlen declaration" << std::endl;
+                        }
                     }
                 }
             }

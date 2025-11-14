@@ -51,7 +51,8 @@
       "Bash(if [ -f $exefile ])",
       "Bash(then ./$exefile)",
       "Bash(/dev/null)",
-      "Bash(./tests/test_nested_obj.exe:*)"
+      "Bash(./tests/test_nested_obj.exe:*)",
+      "Bash(./tests/test_strlen_direct.exe:*)"
     ],
     "deny": [],
     "ask": []
