@@ -110,4 +110,58 @@ const char* nova_string_concat_cstr(const char* a, const char* b) {
     return result;
 }
 
+// Get character at index (returns 0 if out of bounds)
+int64_t nova_string_charAt(const char* str, int64_t index) {
+    if (!str) return 0;
+
+    size_t len = std::strlen(str);
+    if (index < 0 || static_cast<size_t>(index) >= len) {
+        return 0; // Out of bounds
+    }
+
+    return static_cast<int64_t>(str[index]);
+}
+
+// Find first occurrence of substring, returns -1 if not found
+int64_t nova_string_indexOf(const char* str, const char* search) {
+    if (!str || !search) return -1;
+
+    const char* found = std::strstr(str, search);
+    if (!found) return -1;
+
+    return static_cast<int64_t>(found - str);
+}
+
+// Extract substring from start to end (exclusive)
+const char* nova_string_substring(const char* str, int64_t start, int64_t end) {
+    if (!str) return "";
+
+    size_t len = std::strlen(str);
+
+    // Clamp start and end to valid range
+    if (start < 0) start = 0;
+    if (end < 0) end = 0;
+    if (static_cast<size_t>(start) > len) start = len;
+    if (static_cast<size_t>(end) > len) end = len;
+    if (start > end) {
+        // Swap if needed
+        int64_t temp = start;
+        start = end;
+        end = temp;
+    }
+
+    int64_t substr_len = end - start;
+    if (substr_len <= 0) return "";
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(substr_len + 1));
+    if (!result) return "";
+
+    // Copy substring
+    std::memcpy(result, str + start, substr_len);
+    result[substr_len] = '\0';
+
+    return result;
+}
+
 }
