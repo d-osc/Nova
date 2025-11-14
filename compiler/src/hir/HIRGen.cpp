@@ -966,7 +966,38 @@ public:
     void visit(AssignmentExpr& node) override {
         // Generate right side
         node.right->accept(*this);
-        auto value = lastValue_;
+        auto rightValue = lastValue_;
+
+        // For compound assignments (+=, -=, etc.), need to read current value first
+        hir::HIRValue* finalValue = rightValue;
+        if (node.op != AssignmentExpr::Op::Assign) {
+            // Get current value of left side
+            node.left->accept(*this);
+            auto leftValue = lastValue_;
+
+            // Perform the binary operation
+            switch (node.op) {
+                case AssignmentExpr::Op::AddAssign:
+                    finalValue = builder_->createAdd(leftValue, rightValue);
+                    break;
+                case AssignmentExpr::Op::SubAssign:
+                    finalValue = builder_->createSub(leftValue, rightValue);
+                    break;
+                case AssignmentExpr::Op::MulAssign:
+                    finalValue = builder_->createMul(leftValue, rightValue);
+                    break;
+                case AssignmentExpr::Op::DivAssign:
+                    finalValue = builder_->createDiv(leftValue, rightValue);
+                    break;
+                case AssignmentExpr::Op::ModAssign:
+                    finalValue = builder_->createRem(leftValue, rightValue);
+                    break;
+                default:
+                    std::cerr << "Warning: Unsupported compound assignment operator" << std::endl;
+                    break;
+            }
+        }
+        auto value = finalValue;
 
         // Store to left side
         if (auto* id = dynamic_cast<Identifier*>(node.left.get())) {
