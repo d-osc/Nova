@@ -62,12 +62,13 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
     if (check(TokenType::Identifier) && !isAsync) {
         size_t savedPos = current_;
         Token id = advance();
-        
+
         if (match(TokenType::Arrow)) {
             auto arrow = std::make_unique<ArrowFunctionExpr>();
             arrow->location = id.location;
             arrow->params.push_back(id.value);
-            
+            arrow->paramTypes.push_back(nullptr);  // No type annotation for single param
+
             // Parse body
             if (check(TokenType::LeftBrace)) {
                 arrow->body = parseBlockStatement();
@@ -76,13 +77,13 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
                 auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
                 arrow->body = std::move(exprStmt);
             }
-            
+
             return arrow;
         } else {
             current_ = savedPos;
         }
     }
-    
+
     // Check for async single param: async x => body
     if (isAsync && check(TokenType::Identifier)) {
         Token id = advance();
@@ -91,7 +92,8 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
             arrow->location = id.location;
             arrow->isAsync = true;
             arrow->params.push_back(id.value);
-            
+            arrow->paramTypes.push_back(nullptr);  // No type annotation for single param
+
             if (check(TokenType::LeftBrace)) {
                 arrow->body = parseBlockStatement();
             } else {
@@ -99,7 +101,7 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
                 auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
                 arrow->body = std::move(exprStmt);
             }
-            
+
             return arrow;
         }
     }
@@ -615,7 +617,8 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
                 advance();
                 auto arrow = std::make_unique<ArrowFunctionExpr>();
                 arrow->location = getCurrentLocation();
-                
+                // Empty params and paramTypes (no parameters)
+
                 if (check(TokenType::LeftBrace)) {
                     arrow->body = parseBlockStatement();
                 } else {
@@ -634,16 +637,18 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
         }
         
         // Try parsing as parameter list
+        std::vector<TypePtr> paramTypes;
         while (!check(TokenType::RightParen) && !isAtEnd()) {
             if (check(TokenType::Identifier)) {
                 params.push_back(advance().value);
-                
+
                 // Optional type annotation
+                TypePtr paramType = nullptr;
                 if (match(TokenType::Colon)) {
-                    // Skip type annotation
-                    parseTypeAnnotation();
+                    paramType = parseTypeAnnotation();
                 }
-                
+                paramTypes.push_back(std::move(paramType));
+
                 if (check(TokenType::RightParen)) break;
                 if (!match(TokenType::Comma)) {
                     couldBeArrow = false;
@@ -654,12 +659,13 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
                 break;
             }
         }
-        
+
         if (couldBeArrow && match(TokenType::RightParen) && check(TokenType::Arrow)) {
             advance(); // consume '=>'
             auto arrow = std::make_unique<ArrowFunctionExpr>();
             arrow->location = getCurrentLocation();
             arrow->params = std::move(params);
+            arrow->paramTypes = std::move(paramTypes);
             
             if (check(TokenType::LeftBrace)) {
                 arrow->body = parseBlockStatement();

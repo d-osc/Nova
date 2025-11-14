@@ -399,8 +399,99 @@ public:
     }
     
     void visit(ArrowFunctionExpr& node) override {
-        (void)node;
-        // Arrow function expression
+        // Arrow function: (a, b) => a + b
+        // For now, treat as anonymous function with auto-generated name
+
+        // Helper to convert AST Type::Kind to HIR HIRType::Kind
+        auto convertTypeKind = [](Type::Kind astKind) -> HIRType::Kind {
+            switch (astKind) {
+                case Type::Kind::Void: return HIRType::Kind::Void;
+                case Type::Kind::Number: return HIRType::Kind::I64;
+                case Type::Kind::String: return HIRType::Kind::String;
+                case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::Any: return HIRType::Kind::Any;
+                default: return HIRType::Kind::Any;
+            }
+        };
+
+        // Create function type with parameter types
+        std::vector<HIRTypePtr> paramTypes;
+        for (size_t i = 0; i < node.params.size(); ++i) {
+            HIRType::Kind typeKind = HIRType::Kind::Any;
+            if (i < node.paramTypes.size() && node.paramTypes[i]) {
+                typeKind = convertTypeKind(node.paramTypes[i]->kind);
+            }
+            paramTypes.push_back(std::make_shared<HIRType>(typeKind));
+        }
+
+        // Return type
+        HIRType::Kind retTypeKind = HIRType::Kind::Any;
+        if (node.returnType) {
+            retTypeKind = convertTypeKind(node.returnType->kind);
+        }
+        auto retType = std::make_shared<HIRType>(retTypeKind);
+
+        auto funcType = new HIRFunctionType(paramTypes, retType);
+
+        // Generate unique name for arrow function
+        static int arrowFuncCounter = 0;
+        std::string funcName = "__arrow_" + std::to_string(arrowFuncCounter++);
+
+        // Create function
+        auto func = module_->createFunction(funcName, funcType);
+        func->isAsync = node.isAsync;
+
+        // Save current function context
+        HIRFunction* savedFunction = currentFunction_;
+        currentFunction_ = func.get();
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Save current builder
+        auto savedBuilder = std::move(builder_);
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // Save current symbol table
+        auto savedSymbolTable = symbolTable_;
+
+        // Add parameters to symbol table
+        for (size_t i = 0; i < node.params.size(); ++i) {
+            symbolTable_[node.params[i]] = func->parameters[i];
+        }
+
+        // Generate function body
+        if (node.body) {
+            // Check if body is an expression statement (implicit return)
+            if (auto* exprStmt = dynamic_cast<ExprStmt*>(node.body.get())) {
+                // Arrow function with expression body: x => x + 1
+                // This should return the expression value
+                exprStmt->expression->accept(*this);
+                builder_->createReturn(lastValue_);
+            } else {
+                // Arrow function with block body: x => { return x + 1; }
+                node.body->accept(*this);
+
+                // Add implicit return if needed
+                if (!entryBlock->hasTerminator()) {
+                    builder_->createReturn(nullptr);
+                }
+            }
+        }
+
+        // Restore context
+        symbolTable_ = savedSymbolTable;
+        builder_ = std::move(savedBuilder);
+        currentFunction_ = savedFunction;
+
+        // For now, arrow functions as values are not fully supported
+        // We just create the function and leave lastValue_ as nullptr
+        // In the future, this should return a function pointer
+        lastValue_ = nullptr;
+
+        std::cerr << "DEBUG HIRGen: Created arrow function '" << funcName << "' with "
+                  << node.params.size() << " parameters" << std::endl;
     }
     
     void visit(ClassExpr& node) override {

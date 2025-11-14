@@ -217,10 +217,11 @@ public:
 class ArrowFunctionExpr : public Expr {
 public:
     std::vector<std::string> params;
+    std::vector<TypePtr> paramTypes;  // Type annotations for parameters
     StmtPtr body;  // Always a block statement or expression statement
     bool isAsync = false;
     TypePtr returnType;
-    
+
     ArrowFunctionExpr() = default;
     void accept(ASTVisitor& visitor) override;
 };

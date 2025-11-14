@@ -277,26 +277,44 @@ let idx = s.indexOf("ll");     // ❌ Not implemented - String methods
 
 ## 📝 MEDIUM PRIORITY - After Quick Wins (P2)
 
-### 7. Implement Arrow Functions 🟢
+### 9. Implement Arrow Functions 🟡
 **Priority**: P2 - Medium
-**Estimated Time**: 2-3 days
+**Status**: Partially Implemented - Functions compile but not usable as values yet
 
-**What's Missing**:
+**What Works**:
 ```typescript
-const add = (a, b) => a + b;           // ❌ Not implemented
-const greet = name => `Hello ${name}`; // ❌ Not implemented
+// Arrow function compiles and generates correct LLVM IR
+const add = (a, b) => a + b;  // ✅ Compiles to __arrow_0 function
 ```
 
-**Action Items**:
-- [ ] Parser already supports arrow functions
-- [ ] Implement arrow function in HIR generation
-- [ ] Handle implicit return (expression body)
-- [ ] Handle block body with explicit return
+**What Doesn't Work Yet**:
+```typescript
+const add = (a, b) => a + b;
+let result = add(5, 3);  // ❌ Cannot call through variable (no function pointers)
+```
+
+**Already Completed**:
+- [x] Parser fully supports arrow functions ✅
+- [x] Added paramTypes to ArrowFunctionExpr AST ✅
+- [x] Parser saves parameter type annotations ✅
+- [x] Implemented HIR generation for arrow functions ✅
+- [x] Handle implicit return (expression body) ✅
+- [x] Handle block body with explicit return ✅
+- [x] Arrow functions compile to LLVM IR ✅
+
+**Remaining Action Items**:
+- [ ] Implement first-class functions (function pointers/closures)
+  - [ ] Add function pointer type to HIR/MIR
+  - [ ] Store function references in variables
+  - [ ] Enable calling functions through variables
 - [ ] Implement lexical `this` binding (future)
-- [ ] Test with simple arrow functions
-- [ ] Test with complex arrow functions
-- [ ] Add unit tests
+- [ ] Add more unit tests
 - [ ] Document in CHANGELOG.md
+
+**Current Limitation**:
+Arrow functions generate correct LLVM IR functions (e.g., `__arrow_0`) but cannot
+be stored in variables or passed around as values. This requires implementing
+first-class function support with function pointers.
 
 ---
 
