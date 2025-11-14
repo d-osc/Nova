@@ -429,8 +429,46 @@ public:
     }
     
     void visit(TemplateLiteralExpr& node) override {
-        (void)node;
-        // Template literal
+        // Template literal: `Hello ${name}!` becomes "Hello " + name + "!"
+        // quasis: ["Hello ", "!"]
+        // expressions: [name]
+
+        std::cerr << "DEBUG HIRGen: Processing template literal with " << node.quasis.size()
+                  << " quasis and " << node.expressions.size() << " expressions" << std::endl;
+
+        // If there are no expressions, this is just a simple string
+        if (node.expressions.empty()) {
+            if (!node.quasis.empty()) {
+                lastValue_ = builder_->createStringConstant(node.quasis[0]);
+            } else {
+                lastValue_ = builder_->createStringConstant("");
+            }
+            return;
+        }
+
+        // Start with the first quasi (string before first ${})
+        HIRValue* result = builder_->createStringConstant(node.quasis[0]);
+
+        // For each expression, concatenate: result + expression + next_quasi
+        for (size_t i = 0; i < node.expressions.size(); ++i) {
+            // Evaluate the expression
+            node.expressions[i]->accept(*this);
+            HIRValue* exprValue = lastValue_;
+
+            // TODO: Convert non-string values to strings
+            // For now, assume all expressions are already strings or numbers
+
+            // Concatenate result with the expression
+            result = builder_->createAdd(result, exprValue);
+
+            // Concatenate with the next quasi (string after this ${})
+            if (i + 1 < node.quasis.size() && !node.quasis[i + 1].empty()) {
+                HIRValue* nextQuasi = builder_->createStringConstant(node.quasis[i + 1]);
+                result = builder_->createAdd(result, nextQuasi);
+            }
+        }
+
+        lastValue_ = result;
     }
     
     void visit(AwaitExpr& node) override {
