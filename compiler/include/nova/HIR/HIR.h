@@ -322,7 +322,15 @@ public:
     HIRInstruction* createMul(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createDiv(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createRem(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
-    
+
+    // Bitwise Operations
+    HIRInstruction* createAnd(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createOr(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createXor(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createShl(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createShr(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createNot(HIRValue* operand, const std::string& name = "");
+
     // Comparison
     HIRInstruction* createEq(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createNe(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");

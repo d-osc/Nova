@@ -90,6 +90,84 @@ HIRInstruction* HIRBuilder::createRem(HIRValue* lhs, HIRValue* rhs, const std::s
     return inst.get();
 }
 
+// Bitwise Operations
+HIRInstruction* HIRBuilder::createAnd(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::And, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createOr(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Or, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createXor(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Xor, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createShl(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Shl, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createShr(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Shr, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createNot(HIRValue* operand, const std::string& name) {
+    auto resultType = operand->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Not, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(operand, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
 // Comparison Operations
 HIRInstruction* HIRBuilder::createEq(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
     auto boolType = std::make_shared<HIRType>(HIRType::Kind::Bool);

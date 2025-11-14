@@ -137,6 +137,21 @@ public:
             case Op::Mod:
                 lastValue_ = builder_->createRem(lhs, rhs);
                 break;
+            case Op::BitAnd:
+                lastValue_ = builder_->createAnd(lhs, rhs);
+                break;
+            case Op::BitOr:
+                lastValue_ = builder_->createOr(lhs, rhs);
+                break;
+            case Op::BitXor:
+                lastValue_ = builder_->createXor(lhs, rhs);
+                break;
+            case Op::LeftShift:
+                lastValue_ = builder_->createShl(lhs, rhs);
+                break;
+            case Op::RightShift:
+                lastValue_ = builder_->createShr(lhs, rhs);
+                break;
             case Op::Equal:
             case Op::StrictEqual:  // === works same as == for primitive types
                 lastValue_ = builder_->createEq(lhs, rhs);
@@ -182,6 +197,10 @@ public:
                     auto falsVal = builder_->createBoolConstant(false);
                     lastValue_ = builder_->createEq(operand, falsVal);
                 }
+                break;
+            case Op::BitNot:
+                // Bitwise NOT
+                lastValue_ = builder_->createNot(operand);
                 break;
             case Op::Typeof:
                 // typeof operator - return string representation of type
