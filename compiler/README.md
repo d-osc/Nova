@@ -44,9 +44,16 @@ TypeScript/JavaScript → HIR → MIR → LLVM IR → Native Code
 - ✅ **Property Assignment** - `obj.x = 42` for writing
 - ✅ **Nested Objects** - `obj.child.grandchild.value`
 
+### ✅ Classes (100% Working) 🎉 NEW!
+- ✅ **Class Declarations** - `class Person { ... }`
+- ✅ **Constructors** - `constructor(name: string, age: number) { this.name = name; }`
+- ✅ **Properties** - `this.property` access and assignment
+- ✅ **Methods** - `obj.method()` calls with proper `this` binding
+- ✅ **Memory Allocation** - Automatic `malloc` for instances
+- ✅ **Multiple Instances** - Each object gets its own memory
+
 ### ⚠️ Partial Support
 - ⚠️ **Arrow Functions** - Compile but not first-class (no function pointers yet)
-- ⚠️ **Classes** - Basic infrastructure (properties/methods not fully working yet)
 
 ### 📊 Performance
 - **Average Compilation Time**: ~10ms per file
@@ -196,6 +203,32 @@ function testLogic(x: number, y: number): number {
         return 2;  // At least one positive
     }
     return 0;  // Both non-positive
+}
+```
+
+**Classes with Properties and Methods:**
+```typescript
+class Rectangle {
+    width: number;
+    height: number;
+
+    constructor(w: number, h: number) {
+        this.width = w;
+        this.height = h;
+    }
+
+    area(): number {
+        return this.width * this.height;
+    }
+
+    perimeter(): number {
+        return 2 * (this.width + this.height);
+    }
+}
+
+function main(): number {
+    let rect = new Rectangle(5, 3);
+    return rect.area();  // Returns 15
 }
 ```
 
