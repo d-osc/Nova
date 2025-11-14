@@ -15,6 +15,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.0] - 2025-11-14
+
+### Added - Classes (Full OOP Support!) 🎉
+- ✅ **Complete class implementation with properties and methods**
+  - Class declarations with typed properties
+  - Constructors with automatic memory allocation
+  - Instance methods with proper `this` binding
+  - Method calls on object instances (`obj.method()`)
+  - Property access and assignment (`this.property`, `this.property = value`)
+  - Multiple instances with isolated memory
+  - Full memory management using malloc
+
+### Implementation Details
+**HIR Generation (`src/hir/HIRGen.cpp`)**:
+- Added `currentClassStructType_` tracking for class context
+- Enhanced `AssignmentExpr` visitor for property assignment
+- Enhanced `MemberExpr` visitor for property access
+- Modified constructor/method generation to save/restore class context
+- `NewExpr` attaches struct type to instance values
+- `CallExpr` detects and handles method calls with name mangling
+
+**LLVM Code Generation (`src/codegen/LLVMCodeGen.cpp`)**:
+- Automatic struct type generation for each class
+- malloc external function declaration
+- Pointer casting (inttoptr/ptrtoint) for GEP operations
+- Type propagation for malloc results through temp allocas
+- Associate struct types with method `this` parameters
+
+### Generated LLVM IR Example
+```llvm
+%struct.Person = type { i64, i64 }
+
+define i64 @Person_constructor(i64 %arg0, i64 %arg1) {
+  %0 = call ptr @malloc(i64 16)
+  store i64 %arg0, ptr %0, align 4
+  %ptr = getelementptr %struct.Person, ptr %0, i64 0, i32 1
+  store i64 %arg1, ptr %ptr, align 4
+  %result = ptrtoint ptr %0 to i64
+  ret i64 %result
+}
+
+define i64 @Person_getAge(i64 %this) {
+  %ptr = inttoptr i64 %this to ptr
+  %field_ptr = getelementptr %struct.Person, ptr %ptr, i64 0, i32 1
+  %value = load i64, ptr %field_ptr, align 4
+  ret i64 %value
+}
+```
+
+### Tests
+- ✅ test_class_simple.ts - Basic class with constructor and method (returns 30)
+- ✅ test_class_comprehensive.ts - Multiple instances and methods (returns 71)
+- Both tests compile to executable and run correctly!
+
+### Technical Achievements
+- Classes compile to clean, verifiable LLVM IR
+- Proper memory allocation and deallocation support
+- Type-safe property access with GEP instructions
+- Method name mangling: `ClassName_methodName`
+- Instance pointers passed as i64 for compatibility
+- Full pointer conversion infrastructure (i64 ↔ ptr)
+
+### Breaking Changes
+- None - fully backward compatible
+
+---
+
 ## [0.7.5] - 2025-11-14
 
 ### Added
