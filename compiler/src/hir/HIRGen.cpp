@@ -332,6 +332,25 @@ public:
 
         // Lookup function
         if (auto* id = dynamic_cast<Identifier*>(node.callee.get())) {
+            // First check if this identifier is a function reference
+            auto funcRefIt = functionReferences_.find(id->name);
+            if (funcRefIt != functionReferences_.end()) {
+                // This is an indirect call through a function reference
+                std::string funcName = funcRefIt->second;
+                std::cerr << "DEBUG HIRGen: Indirect call through variable '" << id->name
+                          << "' to function '" << funcName << "'" << std::endl;
+                auto func = module_->getFunction(funcName);
+                if (func) {
+                    lastValue_ = builder_->createCall(func.get(), args, "indirect_call");
+                    return;
+                } else {
+                    std::cerr << "ERROR HIRGen: Function '" << funcName << "' not found" << std::endl;
+                    lastValue_ = nullptr;
+                    return;
+                }
+            }
+
+            // Direct function call
             auto func = module_->getFunction(id->name);
             if (func) {
                 lastValue_ = builder_->createCall(func.get(), args);
@@ -626,10 +645,13 @@ public:
         builder_ = std::move(savedBuilder);
         currentFunction_ = savedFunction;
 
-        // For now, arrow functions as values are not fully supported
-        // We just create the function and leave lastValue_ as nullptr
-        // In the future, this should return a function pointer
-        lastValue_ = nullptr;
+        // Store the function name so it can be associated with a variable
+        lastFunctionName_ = funcName;
+
+        // Return a placeholder value (the function exists in the module)
+        // For now, we create a simple integer constant as a marker
+        // The actual function reference will be tracked separately
+        lastValue_ = builder_->createIntConstant(0);  // Placeholder value
 
         std::cerr << "DEBUG HIRGen: Created arrow function '" << funcName << "' with "
                   << node.params.size() << " parameters" << std::endl;
@@ -986,6 +1008,15 @@ public:
             if (decl.init) {
                 decl.init->accept(*this);
                 initValue = lastValue_;
+            }
+
+            // Check if this is a function reference assignment
+            if (!lastFunctionName_.empty()) {
+                // Register this variable as holding a function reference
+                functionReferences_[decl.name] = lastFunctionName_;
+                std::cerr << "DEBUG HIRGen: Registered function reference: " << decl.name
+                          << " -> " << lastFunctionName_ << std::endl;
+                lastFunctionName_.clear();  // Clear for next declaration
             }
 
             // Use the initializer's type for the alloca, or default to i64
@@ -1695,6 +1726,8 @@ private:
     hir::HIRStructType* currentClassStructType_ = nullptr;  // Current class struct type
     HIRValue* lastValue_ = nullptr;
     std::unordered_map<std::string, HIRValue*> symbolTable_;
+    std::unordered_map<std::string, std::string> functionReferences_;  // Maps variable names to function names
+    std::string lastFunctionName_;  // Tracks the last created arrow function name
 };
 
 // Public API to generate HIR from AST

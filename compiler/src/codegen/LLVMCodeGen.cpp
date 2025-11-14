@@ -63,6 +63,44 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
         // This is especially important for comparison operations in loops
         std::cerr << "DEBUG LLVM: Disabling constant folding to preserve runtime comparisons" << std::endl;
         
+        
+        // First pass: Create function declarations for all functions to support forward references
+        std::cerr << "DEBUG LLVM: First pass - creating function declarations" << std::endl;
+        for (const auto& mirFunc : mirModule.functions) {
+            // Skip if already exists in functionMap
+            if (functionMap.find(mirFunc->name) != functionMap.end()) {
+                continue;
+            }
+            
+            // Create function signature
+            std::vector<llvm::Type*> paramTypes;
+            for (const auto& arg : mirFunc->arguments) {
+                llvm::Type* paramType = convertType(arg->type.get());
+                if (paramType->isVoidTy()) {
+                    paramType = llvm::Type::getInt64Ty(*context);
+                }
+                paramTypes.push_back(paramType);
+            }
+            
+            llvm::Type* retType = convertType(mirFunc->returnType.get());
+            if (retType->isVoidTy()) {
+                retType = llvm::Type::getInt64Ty(*context);
+            } else if (!retType->isPointerTy() && !retType->isIntegerTy(1)) {
+                retType = llvm::Type::getInt64Ty(*context);
+            }
+            
+            llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+            llvm::Function* llvmFunc = llvm::Function::Create(
+                funcType,
+                llvm::Function::ExternalLinkage,
+                mirFunc->name,
+                module.get()
+            );
+            functionMap[mirFunc->name] = llvmFunc;
+            std::cerr << "DEBUG LLVM: Declared function: " << mirFunc->name << std::endl;
+        }
+        
+        std::cerr << "DEBUG LLVM: Second pass - generating function bodies" << std::endl;
         // Generate all functions
         for (const auto& mirFunc : mirModule.functions) {
             generateFunction(mirFunc.get());
@@ -624,17 +662,26 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
         // If not void, pointer, or boolean, use i64
         retType = llvm::Type::getInt64Ty(*context);
     }
-    llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
     
-    // Create function
-    llvm::Function* llvmFunc = llvm::Function::Create(
-        funcType, 
-        llvm::Function::ExternalLinkage,
-        function->name,
-        module.get()
-    );
-    
-    functionMap[function->name] = llvmFunc;
+    // Check if function already declared in first pass
+    llvm::Function* llvmFunc;
+    auto it = functionMap.find(function->name);
+    if (it != functionMap.end()) {
+        // Use existing declaration
+        llvmFunc = it->second;
+        std::cerr << "DEBUG LLVM: Using existing declaration for function: " << function->name << std::endl;
+    } else {
+        // Create function (fallback for runtime functions)
+        llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+        llvmFunc = llvm::Function::Create(
+            funcType, 
+            llvm::Function::ExternalLinkage,
+            function->name,
+            module.get()
+        );
+        functionMap[function->name] = llvmFunc;
+        std::cerr << "DEBUG LLVM: Created new function: " << function->name << std::endl;
+    }
     currentFunction = llvmFunc;
     currentReturnValue = nullptr;  // Reset return value for this function
     
@@ -1108,6 +1155,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         // Function not found in map - may be an external/intrinsic function
                         // Try to find it in the LLVM module
                         callee = module->getFunction(funcName);
+                        std::cerr << "DEBUG LLVM: Tried module->getFunction, result: " << callee << std::endl;
 
                         if (!callee && funcName == "malloc") {
                             // Create malloc declaration: ptr @malloc(i64)
@@ -1292,7 +1340,17 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                 // Store result in destination
                 if (callTerm->destination) {
-                    valueMap[callTerm->destination.get()] = result;
+                    // Check if destination already has an alloca
+                    auto it = valueMap.find(callTerm->destination.get());
+                    if (it != valueMap.end() && llvm::isa<llvm::AllocaInst>(it->second)) {
+                        // Store result in existing alloca
+                        builder->CreateStore(result, it->second);
+                    } else {
+                        // Create a new alloca for the call result
+                        llvm::AllocaInst* resultAlloca = builder->CreateAlloca(result->getType(), nullptr, "call_result");
+                        builder->CreateStore(result, resultAlloca);
+                        valueMap[callTerm->destination.get()] = resultAlloca;
+                    }
                 }
             }
             
