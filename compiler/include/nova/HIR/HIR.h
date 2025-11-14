@@ -321,6 +321,7 @@ public:
     HIRInstruction* createSub(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createMul(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createDiv(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createRem(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     
     // Comparison
     HIRInstruction* createEq(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");

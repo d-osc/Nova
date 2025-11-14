@@ -134,6 +134,9 @@ public:
             case Op::Div:
                 lastValue_ = builder_->createDiv(lhs, rhs);
                 break;
+            case Op::Mod:
+                lastValue_ = builder_->createRem(lhs, rhs);
+                break;
             case Op::Equal:
             case Op::StrictEqual:  // === works same as == for primitive types
                 lastValue_ = builder_->createEq(lhs, rhs);

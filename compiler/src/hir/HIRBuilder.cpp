@@ -70,7 +70,20 @@ HIRInstruction* HIRBuilder::createDiv(HIRValue* lhs, HIRValue* rhs, const std::s
         HIRInstruction::Opcode::Div, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
     inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
-    
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createRem(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Rem, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
