@@ -166,7 +166,7 @@ let nested = obj.child.value;            // ✅ Works - Nested object access!
 - [x] Test with nested objects ✅
 
 **Remaining Action Items**:
-- [ ] Document in CHANGELOG.md
+- [x] Document in CHANGELOG.md ✅ COMPLETED! (v0.7.1)
 
 **Success Criteria**:
 - ✅ Can read object properties: `obj.name`
@@ -265,8 +265,8 @@ let idx = s.indexOf("ll");     // ❌ Not implemented - String methods
 - Comprehensive test returns 12 (5+6+1) ✅
 
 **Remaining Action Items**:
-- [ ] Add more edge case tests
-- [x] Document in CHANGELOG.md ✅ COMPLETED!
+- [ ] Add more edge case tests (optional)
+- [x] Document in CHANGELOG.md ✅ COMPLETED! (v0.7.0, v0.7.3, v0.7.5)
 
 **Files Modified**:
 - ✅ `tests/string_methods_runtime.c` (created)
