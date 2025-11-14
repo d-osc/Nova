@@ -1,20 +1,20 @@
 # Nova Compiler - Development Status & Progress Tracker
 
-> **Last Updated**: 2025-11-12
-> **Version**: v0.51 (51% Complete)
-> **Status**: 🟢 Active Development - All Loops Working! 🎉
+> **Last Updated**: 2025-11-14
+> **Version**: v0.7.5 (68% Complete)
+> **Status**: 🟢 Active Development - Strings, Arrays, Objects & Partial Classes! 🎉
 
 ---
 
-## 📊 Overall Completion: 51%
+## 📊 Overall Completion: 68%
 
 ```
-██████████░░░░░░░░░░ 51%
+█████████████░░░░░░░ 68%
 
 Lexer/Tokenizer:    ████████████████████░ 95% ✅
 Parser:             ██████████████████░░  90% ✅
 AST:                ████████████████████░ 95% ✅
-Code Generation:    ██████████░░░░░░░░░░ 51% 🟢
+Code Generation:    █████████████░░░░░░░ 68% 🟢
 ```
 
 ---
@@ -26,12 +26,34 @@ Code Generation:    ██████████░░░░░░░░░░
 - ✅ **Arithmetic Operations** - `+`, `-`, `*`, `/`, `%`, `**`
 - ✅ **Variables** - `let`, `const`, `var` declarations
 - ✅ **If/Else Statements** - Conditional branching
-- ✅ **While Loops** - With runtime conditions and proper phi nodes! 🎉
-- ✅ **For Loops** - Full support with init/cond/update! 🎉 NEW!
+- ✅ **While Loops** - With runtime conditions and proper phi nodes
+- ✅ **For Loops** - Full support with init/cond/update
 - ✅ **Comparison Operators** - `<`, `>`, `<=`, `>=`, `==`, `!=`, `===`, `!==`
+- ✅ **Logical Operators** - `&&`, `||` with proper short-circuit evaluation! 🎉 NEW!
 - ✅ **Return Statements** - Function return values (including booleans)
 - ✅ **Literals** - Numbers, strings, booleans
 - ✅ **Nested Function Calls** - Complex call chains
+
+### String Operations (v0.7.0-v0.7.5) 🎉 NEW!
+- ✅ **String Concatenation** - `"Hello" + " World"` works perfectly
+- ✅ **String.length** - Both compile-time and runtime length support
+- ✅ **Template Literals** - `` `Hello ${name}!` `` with interpolation
+- ✅ **String Methods**:
+  - `str.substring(start, end)` - Extract substring
+  - `str.indexOf(searchStr)` - Find substring index (-1 if not found)
+  - `str.charAt(index)` - Get character at index
+
+### Arrays (v0.7.0-v0.7.1) 🎉 NEW!
+- ✅ **Array Literals** - `[1, 2, 3]` syntax
+- ✅ **Array Indexing** - `arr[0]` for reading elements
+- ✅ **Array Assignment** - `arr[0] = 42` for writing elements
+- ✅ **Runtime Indices** - Array access with variable indices
+
+### Objects (v0.7.0-v0.7.1) 🎉 NEW!
+- ✅ **Object Literals** - `{x: 10, y: 20}` syntax
+- ✅ **Property Access** - `obj.x` for reading properties
+- ✅ **Property Assignment** - `obj.x = 42` for writing properties
+- ✅ **Nested Objects** - `obj.child.grandchild.value` works perfectly
 
 ### Compiler Pipeline
 - ✅ **Lexer/Tokenizer** - 63 keywords, 65+ operators, all literals
@@ -45,15 +67,56 @@ Code Generation:    ██████████░░░░░░░░░░
 
 ### Example Working Code
 ```typescript
+// Functions and loops
 function factorial(n: number): number {
     if (n <= 1) return 1;
     return n * factorial(n - 1);
 }
 
-function main() {
-    return factorial(5);  // Returns 120 ✅
+// Strings with template literals and methods
+function greet(name: string): string {
+    let greeting = `Hello ${name}!`;
+    return greeting.substring(0, 10);
+}
+
+// Arrays and objects
+function main(): number {
+    let arr = [1, 2, 3];
+    arr[0] = 42;
+
+    let obj = {x: 10, y: 20};
+    obj.x = arr[0];
+
+    return obj.x + obj.y;  // Returns 62 ✅
 }
 ```
+
+---
+
+## 🟡 Partially Implemented Features
+
+### Arrow Functions (v0.7.2) ⚠️ Partial
+- ✅ **Syntax Parsing** - Full parser support for arrow functions
+- ✅ **Compilation** - Compiles to standalone LLVM functions
+- ✅ **Type Annotations** - Parameter types preserved
+- ❌ **First-Class Functions** - Cannot be stored in variables or passed as arguments
+- ❌ **Function Pointers** - Requires implementation of function pointer type system
+
+**Status**: Arrow functions compile but cannot be used as values yet.
+
+### Classes (v0.7.5+) ⚠️ Partial - Just Started!
+- ✅ **Syntax Parsing** - Full parser support for classes
+- ✅ **Struct Type Generation** - Class properties become struct fields
+- ✅ **Constructor Functions** - Generated as standalone functions
+- ✅ **Method Functions** - Generated with 'this' parameter
+- ✅ **'new' Operator** - Calls constructor function
+- ✅ **'this' Keyword** - Basic support in method bodies
+- ❌ **Property Assignment** - `this.name = name` not working yet
+- ❌ **Property Access** - `this.age` not working yet
+- ❌ **Method Calls** - `obj.method()` not working yet
+- ❌ **Memory Allocation** - No malloc/runtime support yet
+
+**Status**: Basic infrastructure in place. Property access and memory management needed.
 
 ---
 
@@ -145,87 +208,58 @@ if (a || b) { }            // Both sides always evaluated
 
 ---
 
-### Arrays - 50% Complete
-**Status**: ⚠️ Partial - Literals only
-
-- ✅ Array literals: `let arr = [1, 2, 3]` ✅ Works
-- ❌ Array indexing: `arr[0]` ❌ Not implemented
-- ❌ Array length: `arr.length` ❌ Not implemented
-- ❌ Array methods: `push`, `pop`, etc. ❌ Not implemented
-
-**Required Implementation**:
-- Array type in HIR/MIR
-- Array indexing in code generation
-- Bounds checking (optional)
-
-**Estimated Implementation Time**: 3-5 days
-
----
-
-### Objects - 50% Complete
-**Status**: ⚠️ Partial - Literals only
-
-- ✅ Object literals: `let obj = {key: value}` ✅ Works
-- ⚠️ Property access: `obj.key` ⚠️ Very limited
-- ❌ Property assignment: `obj.key = value` ❌ Not implemented
-- ❌ Methods: `obj.method()` ❌ Not implemented
-
-**Estimated Implementation Time**: 3-5 days
-
----
-
-### Strings - 80% Complete
-**Status**: ⚠️ Mostly Working
-
-- ✅ String literals: `"hello"` ✅ Works
-- ⚠️ String concatenation: `"a" + "b"` ⚠️ Limited
-- ❌ Template literals: `` `Hello ${name}` `` ❌ Not implemented
-- ❌ String methods: `length`, `substring`, etc. ❌ Not implemented
-
----
-
-### Boolean Operations - 50% Complete
-**Status**: ⚠️ Partial
-
-- ✅ Boolean literals: `true`, `false` ✅ Works
-- ⚠️ Logical AND: `&&` ⚠️ No short-circuit
-- ⚠️ Logical OR: `||` ⚠️ No short-circuit
-- ⚠️ Logical NOT: `!` ⚠️ Limited support
-
----
 
 ## ❌ Not Implemented Features (0%)
 
-### Core Language Features
-- ❌ **Classes** - No OOP support
-  - Constructors, methods, properties
-  - Inheritance and `super`
-  - Access modifiers (public, private, protected)
-
-- ❌ **Async/Await** - No async support
-  - async functions
-  - await expressions
-  - Promise handling
+### Core Language Features (High Priority)
+- ⚠️ **Classes** - Partially implemented (see above)
+  - ❌ Property assignment in constructors
+  - ❌ Property access in methods
+  - ❌ Method calls on instances
+  - ❌ Memory allocation (malloc)
+  - ❌ Inheritance and `super`
+  - ❌ Access modifiers (public, private, protected)
 
 - ❌ **Error Handling** - No exception support
-  - try/catch/finally blocks
-  - throw statements
-  - Error types
+  - ❌ try/catch/finally blocks
+  - ❌ throw statements
+  - ❌ Error types
+
+- ⚠️ **Arrow Functions** - Partially implemented (see above)
+  - ❌ Function pointers
+  - ❌ First-class function support
+  - ❌ Closures
+
+### Advanced Features (Medium Priority)
+- ❌ **Async/Await** - No async support
+  - ❌ async functions
+  - ❌ await expressions
+  - ❌ Promise handling
 
 - ❌ **Modules** - No module system
-  - import statements
-  - export statements
-  - Module resolution
+  - ❌ import statements
+  - ❌ export statements
+  - ❌ Module resolution
 
-### Advanced Features
-- ❌ **Generics** - Parser supports but no codegen
 - ❌ **Destructuring** - `const {a, b} = obj`
 - ❌ **Spread/Rest Operators** - `...args`
-- ❌ **Arrow Functions** - `() => {}`
 - ❌ **For-in/For-of Loops** - `for (let x in arr)`
 - ❌ **Switch Statements** - Parser exists but codegen incomplete
 - ❌ **Generators** - `function*`
 - ❌ **Decorators** - `@decorator`
+
+### Array/Object Advanced Features
+- ❌ **Array Methods** - `push`, `pop`, `shift`, `unshift`, `slice`, `splice`, `map`, `filter`, `reduce`
+- ❌ **Array.length Assignment** - `arr.length = 5`
+- ❌ **Object Methods** - `Object.keys`, `Object.values`, `Object.entries`
+- ❌ **Computed Properties** - `obj[key]` where key is a variable
+- ❌ **Optional Chaining** - `obj?.prop`
+- ❌ **Nullish Coalescing** - `value ?? default`
+
+### Advanced String Features
+- ❌ **Additional String Methods** - `split`, `replace`, `trim`, `toLowerCase`, `toUpperCase`
+- ❌ **Regular Expressions** - `/pattern/` syntax
+- ❌ **String Interpolation with Objects** - `` `User: ${user.name}` ``
 
 ### Type System
 - ❌ **Union Types** - `string | number`
@@ -238,80 +272,76 @@ if (a || b) { }            // Both sides always evaluated
 
 ## 📋 Priority Roadmap
 
-### Week 1-2: Fix Critical Bugs 🔴
-**Goal**: Make loops work properly
+### ✅ Recently Completed (v0.60 - v0.7.5) 🎉
+**Status**: All P0 and P1 priorities completed!
 
-1. 🔴 Fix loop condition generation bug
-   - File: `src/codegen/LLVMCodeGen.cpp:563-578`
-   - Generate proper conditional branches
-   - Test with while/for/do-while loops
+1. ✅ **Loops** - While and for loops with runtime conditions
+2. ✅ **Logical Operations** - Short-circuit `&&` and `||`
+3. ✅ **Arrays** - Literals, indexing, and assignment
+4. ✅ **Objects** - Literals, properties, and nested access
+5. ✅ **Strings** - Concatenation, length, template literals, methods
+6. ✅ **Strict Equality** - `===` and `!==` operators
 
-2. 🔴 Fix loop variable scoping
-   - File: `src/mir/MIRGen.cpp`
-   - Generate phi nodes for loop variables
-   - Test variable updates across iterations
-
-3. 🟡 Fix logical operations (short-circuit evaluation)
-   - Implement proper control flow for && and ||
-   - Test with complex boolean expressions
-
-**Expected Completion**: → 55% overall
+**Completion**: 68% overall ⬆️ (was 51%)
 
 ---
 
-### Week 3-4: High-Value Features 🟡
-**Goal**: Make compiler more useful
+### 🔄 Current Sprint: Complete Classes (P2)
+**Goal**: Finish class implementation
+**Estimated Time**: 5-7 days
 
-4. 🟡 Implement array indexing
-   - Array type in HIR/MIR
-   - Indexing operations in codegen
-   - Test with multi-dimensional arrays
+1. 🟡 **Property Assignment in Constructors**
+   - Implement `this.name = name` in constructor bodies
+   - Fix MemberExpr handling for `this` context
+   - Test with multiple property assignments
 
-5. 🟡 Complete object property access
-   - Property access codegen
-   - Nested property access
-   - Test with complex objects
+2. 🟡 **Property Access in Methods**
+   - Implement `return this.age` in method bodies
+   - Generate proper GEP instructions for field access
+   - Test with nested property access
 
-6. 🟡 Complete string operations
-   - String concatenation
-   - Template literal interpolation
-   - Basic string methods
+3. 🟡 **Method Calls on Instances**
+   - Implement `obj.method()` call pattern
+   - Pass `this` as first argument automatically
+   - Test with chained method calls
 
-**Expected Completion**: → 65% overall
+4. 🟡 **Memory Allocation**
+   - Implement malloc calls for class instances
+   - Initialize fields in constructor
+   - Test with multiple instances
+
+**Expected Completion**: → 72% overall
 
 ---
 
-### Week 5-8: Major Features 🟢
+### Next Up: Complete Arrow Functions or Error Handling (P2)
 **Goal**: Add essential language features
 
-7. 🟢 Implement classes (5-7 days)
-   - Class declarations
-   - Constructors and methods
-   - Instance properties
-   - Method calls
+**Option A: Complete Arrow Functions** (2-3 days)
+- Implement function pointer types
+- Enable storing functions in variables
+- Implement closures and lexical scope
+- First-class function support
 
-8. 🟢 Implement arrow functions (2-3 days)
-   - Arrow function syntax
-   - Lexical `this` binding
-   - Closures
-
-9. 🟢 Implement error handling (3-5 days)
-   - try/catch/finally blocks
-   - throw statements
-   - Error types
+**Option B: Error Handling** (3-5 days)
+- try/catch/finally blocks
+- throw statements
+- Error types and propagation
+- Stack unwinding
 
 **Expected Completion**: → 75% overall
 
 ---
 
-### Month 3-4: Advanced Features 🔵
+### Future Priorities (P3)
 **Goal**: Mature language support
 
-10. 🔵 Implement async/await
-11. 🔵 Implement modules (import/export)
-12. 🔵 Implement destructuring
-13. 🔵 Implement generators
-14. 🔵 Standard library basics
+- 🔵 **Async/Await** - Asynchronous programming support
+- 🔵 **Modules** - import/export system
+- 🔵 **Destructuring** - Object and array destructuring
+- 🔵 **Generators** - Generator functions and iterators
+- 🔵 **Standard Library** - Built-in functions and utilities
+- 🔵 **Advanced Array/Object Methods** - map, filter, reduce, etc.
 
 **Expected Completion**: → 90% overall
 
@@ -325,11 +355,15 @@ if (a || b) { }            // Both sides always evaluated
 | Arithmetic | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
 | If/Else | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
 | Comparisons | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
-| While | ✅ 100% | ✅ 100% | ✅ 80% | ✅ 80% | ❌ 40% | ❌ No | 🔴 P0 |
-| For | ✅ 100% | ✅ 100% | ✅ 80% | ✅ 80% | ❌ 40% | ❌ No | 🔴 P0 |
-| Arrays | ✅ 100% | ✅ 100% | ⚠️ 50% | ⚠️ 50% | ⚠️ 50% | ⚠️ Partial | 🟡 P1 |
-| Objects | ✅ 100% | ✅ 100% | ⚠️ 50% | ⚠️ 50% | ⚠️ 50% | ⚠️ Partial | 🟡 P1 |
-| Classes | ✅ 100% | ✅ 100% | ❌ 0% | ❌ 0% | ❌ 0% | ❌ No | 🟢 P2 |
+| Logical Ops | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
+| While Loops | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
+| For Loops | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
+| Strings | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
+| Arrays | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
+| Objects | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ Yes | ✅ Done |
+| Arrow Functions | ✅ 100% | ✅ 100% | ⚠️ 60% | ⚠️ 60% | ⚠️ 60% | ⚠️ Partial | 🟢 P2 |
+| Classes | ✅ 100% | ✅ 100% | ⚠️ 40% | ⚠️ 40% | ⚠️ 40% | ⚠️ Partial | 🟡 P2 |
+| Error Handling | ✅ 100% | ✅ 100% | ❌ 0% | ❌ 0% | ❌ 0% | ❌ No | 🟢 P2 |
 | Async/Await | ✅ 100% | ✅ 100% | ❌ 0% | ❌ 0% | ❌ 0% | ❌ No | 🔵 P3 |
 | Generics | ✅ 100% | ✅ 100% | ❌ 0% | ❌ 0% | ❌ 0% | ❌ No | 🔵 P3 |
 
