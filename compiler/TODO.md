@@ -190,11 +190,17 @@ let s3 = s1 + s2;              // ✅ Works - String concatenation!
 // s3 is now "Hello World"
 ```
 
-**What's Partially Working**:
+**What's Working**:
 ```typescript
 let len = "Hello".length;      // ✅ Works - Compile-time constant (5)
+"Test".length                  // ✅ Works - Returns 4 at compile time
+```
+
+**What's Partially Working**:
+```typescript
 let s = "Hello";
-let len2 = s.length;           // ⚠️  Returns 0 (needs runtime support)
+let len2 = s.length;           // ⚠️  Optimized to constant 5 by LLVM
+                               // (but needs proper type system for general case)
 ```
 
 **What's Missing**:
@@ -211,13 +217,20 @@ let idx = s.indexOf("ll");     // ❌ Not implemented - String methods
   - [x] Memory allocation for result
   - [x] Copy strings into result
   - [x] Test string concatenation ✅
-- [x] Partial string.length property ⚠️
+- [x] string.length property ✅ (mostly done)
   - [x] Compile-time length for string literals
   - [x] HIRGen detects string.length access
-  - [ ] Runtime function for variable.length (needs implementation)
+  - [x] Create strlen() intrinsic function declaration
+  - [x] LLVM CodeGen creates external strlen() declaration
+  - [x] Skip external functions in MIR generation
+  - [x] LLVM optimizer handles strlen() on constants
+  - ⚠️  Runtime strlen for variables needs proper string type system
 
 **Remaining Action Items**:
-- [ ] Fix string.length for variables (needs runtime strlen call or dataflow analysis)
+- [ ] Fix proper string type system (currently strings treated as i64)
+  - [ ] Proper pointer types for string parameters
+  - [ ] Type propagation through variables
+  - [ ] This will enable runtime strlen calls to work correctly
 - [ ] Implement template literal interpolation
   - [ ] Parse template parts and expressions
   - [ ] Generate concatenation code
