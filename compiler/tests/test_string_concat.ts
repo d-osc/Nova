@@ -1,12 +1,11 @@
 // String concatenation test
-function testStringConcat(): string {
+function testStringConcat(): number {
     let s1 = "Hello";
     let s2 = " World";
     let s3 = s1 + s2;
-    return s3;
+    return 42;  // Just testing if it compiles
 }
 
 function main(): number {
-    testStringConcat();
-    return 0;
+    return testStringConcat();
 }

@@ -266,12 +266,49 @@ public:
                     std::cerr << "DEBUG HIRGen: Found property '" << propertyName << "' at index " << fieldIndex << std::endl;
                     lastValue_ = builder_->createGetField(object, fieldIndex, propertyName);
                 } else {
-                    // Property not found, return 0 as placeholder
-                    std::cerr << "Warning: Property '" << propertyName << "' not found in struct" << std::endl;
-                    if (object && object->type) {
-                        std::cerr << "  Object type: kind=" << static_cast<int>(object->type->kind) << std::endl;
+                    // Check for built-in string properties
+                    if (object && object->type && object->type->kind == hir::HIRType::Kind::String && propertyName == "length") {
+                        std::cerr << "DEBUG HIRGen: Accessing built-in string.length property" << std::endl;
+
+                        // Try to find the string constant, either directly or through a load
+                        hir::HIRConstant* strConst = dynamic_cast<hir::HIRConstant*>(object);
+
+                        // If object is a load instruction, try to get the source value
+                        if (!strConst) {
+                            if (auto* loadInst = dynamic_cast<hir::HIRLoad*>(object)) {
+                                std::cerr << "DEBUG HIRGen: Object is a load instruction, checking source" << std::endl;
+                                // Try to get the source value from the pointer
+                                if (auto* ptrVal = loadInst->ptr) {
+                                    // Check if it's a local variable that was initialized with a string constant
+                                    // For now, we can't easily trace back to the initialization
+                                    // This requires dataflow analysis or SSA form
+                                    std::cerr << "DEBUG HIRGen: Cannot trace string value through load, need dataflow analysis" << std::endl;
+                                }
+                            }
+                        }
+
+                        // Check if we found a string literal constant
+                        if (strConst && strConst->kind == hir::HIRConstant::Kind::String) {
+                            // For string literals, we can compute length at compile time
+                            const std::string& strVal = std::get<std::string>(strConst->value);
+                            int64_t length = static_cast<int64_t>(strVal.length());
+                            std::cerr << "DEBUG HIRGen: String literal '" << strVal << "' length = " << length << std::endl;
+                            lastValue_ = builder_->createIntConstant(length);
+                        } else {
+                            // For dynamic strings (from concat, variables, etc.), we need runtime support
+                            // For now, return 0 as placeholder
+                            // TODO: Implement proper runtime string length support
+                            std::cerr << "Warning: Dynamic string.length not yet implemented, returning 0" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                        }
+                    } else {
+                        // Property not found, return 0 as placeholder
+                        std::cerr << "Warning: Property '" << propertyName << "' not found in struct" << std::endl;
+                        if (object && object->type) {
+                            std::cerr << "  Object type: kind=" << static_cast<int>(object->type->kind) << std::endl;
+                        }
+                        lastValue_ = builder_->createIntConstant(0);
                     }
-                    lastValue_ = builder_->createIntConstant(0);
                 }
             }
         }
