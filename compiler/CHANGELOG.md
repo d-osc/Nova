@@ -10,9 +10,242 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Known Issues
-- 🟡 Logical operations (&&, ||) don't short-circuit properly
-- 🟡 Array indexing not implemented
-- 🟡 Object property access limited
+- 🟡 Arrow functions compile but cannot be used as first-class values (requires function pointers)
+- 🟡 Template literals need toString() conversion for non-string values
+
+---
+
+## [0.7.5] - 2025-11-14
+
+### Added
+- ✅ **String methods support**
+  - `str.substring(start, end)` - Extract substring with bounds checking
+  - `str.indexOf(searchStr)` - Find index of substring (-1 if not found)
+  - `str.charAt(index)` - Get single character at index
+  - All methods integrate with existing string.length property
+- ✅ **Runtime string method implementations**
+  - Added `string_methods_runtime.c` with C implementations
+  - Proper memory management and edge case handling
+  - External function declarations in LLVM IR
+
+### Changed
+- Enhanced `HIRGen.cpp` to detect string method calls in CallExpr
+- Enhanced `LLVMCodeGen.cpp` to auto-create external declarations for string methods
+- String methods pattern: `str.methodName(...)` converts to runtime function calls
+
+### Tests
+- ✅ test_string_substring.ts - Substring extraction
+- ✅ test_string_methods.ts - Individual method tests
+- ✅ test_string_methods_all.ts - Comprehensive test (returns 12)
+
+### Technical Details
+**Method Signatures**:
+```c
+const char* nova_string_substring(const char* str, int64_t start, int64_t end);
+int64_t nova_string_indexOf(const char* str, const char* searchStr);
+const char* nova_string_charAt(const char* str, int64_t index);
+```
+
+**Generated LLVM IR**:
+```llvm
+declare ptr @nova_string_substring(ptr, i64, i64)
+declare i64 @nova_string_indexOf(ptr, ptr)
+declare ptr @nova_string_charAt(ptr, i64)
+```
+
+---
+
+## [0.7.3] - 2025-11-14
+
+### Added
+- ✅ **Template literals support**
+  - Full template literal interpolation: `` `Hello ${name}!` ``
+  - Multiple expressions: `` `${a} and ${b}` ``
+  - String-only templates: `` `Just a string` ``
+  - Nested in function returns
+- ✅ **Template literal compilation**
+  - Converts template literals to string concatenation
+  - Uses existing string concatenation infrastructure
+  - Handles multiple quasis and expressions
+
+### Changed
+- Implemented HIR generation for TemplateLiteralExpr in `HIRGen.cpp`
+- Template literals compile to series of Add operations with string constants
+
+### Tests
+- ✅ test_template_literal.ts - Basic template literal test
+- ✅ test_template_comprehensive.ts - Multiple template patterns
+
+### Technical Details
+**Example Transformation**:
+```typescript
+`Hello ${name}!`
+```
+Becomes:
+```cpp
+"Hello " + name + "!"
+```
+
+---
+
+## [0.7.2] - 2025-11-14
+
+### Added
+- ✅ **Arrow function parsing and compilation**
+  - Multi-parameter arrow functions: `(a, b) => a + b`
+  - Single parameter: `x => x * 2`
+  - Expression bodies with implicit return
+  - Block bodies with explicit return
+  - Parameter type annotations preserved
+
+### Changed
+- Added `paramTypes` field to ArrowFunctionExpr AST
+- Updated parser to save parameter type annotations in all arrow function cases
+- Implemented HIR generation for arrow functions (compiles to `__arrow_N` functions)
+
+### Known Limitations
+- Arrow functions compile to LLVM functions but cannot be stored in variables or passed as arguments
+- Requires first-class function support (function pointers) not yet implemented
+
+### Tests
+- ✅ test_arrow_simple.ts - Arrow function compilation test
+- ✅ test_arrow_immediate.ts - IIFE pattern test
+
+---
+
+## [0.7.1] - 2025-11-13
+
+### Added
+- ✅ **Array element assignment**
+  - Can now write to array elements: `arr[0] = 42`
+  - Proper GEP instruction generation for array element pointers
+  - Works with runtime indices
+- ✅ **Object property assignment**
+  - Can now write to object properties: `obj.x = 42`
+  - SetField operation in HIR/MIR
+  - Proper struct field pointer calculation
+- ✅ **Nested object access**
+  - Deep property access: `obj.child.grandchild.value`
+  - Nested struct type tracking with `nestedStructTypeMap`
+  - Type information preserved through variable copies
+
+### Changed
+- Enhanced `HIRGen.cpp` to handle AssignmentExpr for member expressions
+- Added SetField operation to HIR/MIR
+- Fixed GEP generation to use loaded struct values instead of alloca pointers
+- Added `nestedStructTypeMap` to LLVMCodeGen for tracking nested struct types
+
+### Fixed
+- ✅ Fixed GEP bug where struct pointer was used instead of loaded value
+- ✅ Fixed nested object type propagation in variable assignments
+
+### Tests
+- ✅ test_object_assign.ts - Object property assignment
+- ✅ test_array_assign.ts - Array element assignment
+- ✅ test_nested_obj.ts - Nested object access
+
+---
+
+## [0.7.0] - 2025-11-13
+
+### Added
+- ✅ **Array literals and indexing**
+  - Array literal syntax: `[1, 2, 3]`
+  - Array indexing: `arr[0]`
+  - HIRArrayType for array types
+  - MIRAggregateRValue for array construction
+  - MIRGetElementRValue for array access
+  - LLVM GEP instructions for element access
+- ✅ **Object literals and property access**
+  - Object literal syntax: `{x: 10, y: 20}`
+  - Property access: `obj.x`
+  - HIRStructType for object types
+  - Struct construction in MIR
+  - Field access with GetField operation
+  - LLVM struct types and GEP for fields
+- ✅ **String concatenation**
+  - String concatenation operator: `"a" + "b"`
+  - Runtime function: `nova_string_concat_cstr`
+  - Proper memory allocation and string copying
+- ✅ **String.length property**
+  - Compile-time length for string literals: `"Hello".length`
+  - Runtime length for string variables: `str.length`
+  - Uses `strlen()` intrinsic function
+  - LLVM optimizer handles constant folding
+
+### Changed
+- Enhanced `HIRGen.cpp` with array, object, and string support
+- Enhanced `MIRGen.cpp` with aggregate and element operations
+- Enhanced `LLVMCodeGen.cpp` with struct and array code generation
+- Fixed critical object slicing bug in type preservation
+- Added external function declarations for strlen
+
+### Fixed
+- ✅ Fixed object type slicing in MIR variable assignment
+- ✅ Fixed string parameter type handling (ptr instead of i64)
+- ✅ Added paramTypes field to FunctionDecl AST for type annotations
+
+### Tests
+- ✅ test_array_simple.ts - Array literal and indexing
+- ✅ test_object_simple.ts - Object literal and property access
+- ✅ test_string_concat.ts - String concatenation
+- ✅ test_string_length.ts - String length property
+- ✅ test_string_length_param.ts - String length with parameters
+- ✅ test_string_ops.ts - Comprehensive string operations
+
+### Technical Details
+**Array Example**:
+```typescript
+let arr = [1, 2, 3];
+let x = arr[0];  // Returns 1
+```
+
+**Object Example**:
+```typescript
+let obj = {x: 10, y: 20};
+let x = obj.x;  // Returns 10
+```
+
+**String Example**:
+```typescript
+let s1 = "Hello";
+let s2 = " World";
+let s3 = s1 + s2;  // "Hello World"
+let len = s3.length;  // 11
+```
+
+---
+
+## [0.60.0] - 2025-11-13
+
+### Added
+- ✅ **Strict equality operators**
+  - `===` operator (strict equal)
+  - `!==` operator (strict not equal)
+  - Proper comparison with type checking
+- ✅ **Short-circuit evaluation for logical operators**
+  - `&&` operator with proper short-circuiting
+  - `||` operator with proper short-circuiting
+  - Creates separate basic blocks for left and right operands
+  - Only evaluates right side if necessary
+
+### Changed
+- Enhanced `HIRGen.cpp` to handle StrictEqual and StrictNotEqual cases
+- Implemented proper short-circuit evaluation using basic blocks and phi nodes
+
+### Tests
+- ✅ All 15/15 tests passing (100%)
+- ✅ test_logical_ops.ts - Comprehensive logical operation test
+- ✅ test_and_direct.ts - Short-circuit AND test
+- ✅ test_or_direct.ts - Short-circuit OR test
+
+### Technical Details
+**Short-circuit Example**:
+```typescript
+let result = x && y;  // Only evaluates y if x is truthy
+```
+
+Generated LLVM IR creates conditional branches to handle short-circuiting properly.
 
 ---
 
@@ -340,6 +573,6 @@ br i1 %lt, label %bb2, label %bb3             ← Runtime condition
 
 ---
 
-**Last Updated**: 2025-11-12
-**Current Version**: v0.45.0
-**Next Release**: v0.50.0 (Loop bug fixes)
+**Last Updated**: 2025-11-14
+**Current Version**: v0.7.5
+**Next Release**: v0.8.0 (Classes or complete arrow functions)
