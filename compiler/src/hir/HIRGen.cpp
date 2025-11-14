@@ -560,7 +560,41 @@ public:
     
     void visit(ConditionalExpr& node) override {
         // Ternary operator: test ? consequent : alternate
+        // Generate condition
         node.test->accept(*this);
+        auto cond = lastValue_;
+
+        // Create temporary variable to store result (use I64 type)
+        auto i64Type = new HIRType(HIRType::Kind::I64);
+        auto* resultAlloca = builder_->createAlloca(i64Type, "ternary.result");
+
+        // Create blocks
+        auto* thenBlock = currentFunction_->createBasicBlock("ternary.then").get();
+        auto* elseBlock = currentFunction_->createBasicBlock("ternary.else").get();
+        auto* endBlock = currentFunction_->createBasicBlock("ternary.end").get();
+
+        // Branch on condition
+        builder_->createCondBr(cond, thenBlock, elseBlock);
+
+        // Generate consequent (then) block
+        builder_->setInsertPoint(thenBlock);
+        node.consequent->accept(*this);
+        auto thenValue = lastValue_;
+        builder_->createStore(thenValue, resultAlloca);
+        builder_->createBr(endBlock);
+
+        // Generate alternate (else) block
+        builder_->setInsertPoint(elseBlock);
+        node.alternate->accept(*this);
+        auto elseValue = lastValue_;
+        builder_->createStore(elseValue, resultAlloca);
+        builder_->createBr(endBlock);
+
+        // Continue at end block
+        builder_->setInsertPoint(endBlock);
+
+        // Load result from temporary variable
+        lastValue_ = builder_->createLoad(resultAlloca);
     }
     
     void visit(ArrayExpr& node) override {
