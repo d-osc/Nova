@@ -446,10 +446,18 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                 llvm::LoadInst* loadInst = builder->CreateLoad(loadType, it->second, "load");
                 return loadInst;
             } else {
-                // Fallback for non-alloca values (shouldn't happen with our new approach)
+                // Fallback for non-alloca values (e.g., direct call results like malloc)
                 std::cerr << "DEBUG LLVM: WARNING - Value is not an alloca, creating variable to prevent constant folding" << std::endl;
                 llvm::AllocaInst* tempAlloca = builder->CreateAlloca(it->second->getType(), nullptr, "temp_var");
                 builder->CreateStore(it->second, tempAlloca);
+
+                // Propagate type information if the original value has it
+                auto typeIt = arrayTypeMap.find(it->second);
+                if (typeIt != arrayTypeMap.end()) {
+                    arrayTypeMap[tempAlloca] = typeIt->second;
+                    std::cerr << "DEBUG LLVM: Propagated type from original value to temp alloca" << std::endl;
+                }
+
                 llvm::LoadInst* loadInst = builder->CreateLoad(it->second->getType(), tempAlloca, "temp_load");
                 return loadInst;
             }
@@ -569,7 +577,31 @@ switch (rvalue->kind) {
 
 llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     if (!function) return nullptr;
-    
+
+    // Check if this is a class-related function (constructor or method)
+    // If so, ensure the struct type is defined
+    size_t underscorePos = function->name.find('_');
+    if (underscorePos != std::string::npos) {
+        std::string className = function->name.substr(0, underscorePos);
+        std::string structName = "struct." + className;
+
+        // Check if struct type already exists
+        llvm::StructType* existingType = llvm::StructType::getTypeByName(*context, structName);
+        if (!existingType) {
+            // Create struct type for this class
+            // For now, create an opaque struct with 2 i64 fields (will be refined later)
+            // TODO: Get actual field types from HIR/MIR
+            std::vector<llvm::Type*> fieldTypes = {
+                llvm::Type::getInt64Ty(*context),  // Field 0
+                llvm::Type::getInt64Ty(*context)   // Field 1
+            };
+            llvm::StructType::create(*context, fieldTypes, structName);
+            std::cerr << "DEBUG LLVM: Created struct type " << structName << " with " << fieldTypes.size() << " fields" << std::endl;
+        } else {
+            std::cerr << "DEBUG LLVM: Struct type " << structName << " already exists" << std::endl;
+        }
+    }
+
     // Convert parameter types (use i64 for untyped/void parameters)
     std::vector<llvm::Type*> paramTypes;
     for (const auto& param : function->arguments) {
@@ -672,6 +704,23 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
         builder->CreateStore(&(*argIt), argAlloca);
         valueMap[function->arguments[i].get()] = argAlloca;
         argIt->setName("arg" + std::to_string(i));
+
+        // If this is the first parameter of a method function, associate it with the struct type
+        if (i == 0) {
+            std::string funcName = function->name;
+            // Check if this is a method function (ClassName_methodName but not ClassName_constructor)
+            size_t methodUnderscorePos = funcName.find('_');
+            if (methodUnderscorePos != std::string::npos && funcName.find("_constructor") == std::string::npos) {
+                // Extract class name
+                std::string className = funcName.substr(0, methodUnderscorePos);
+                std::string structName = "struct." + className;
+                llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
+                if (structType) {
+                    arrayTypeMap[argAlloca] = structType;
+                    std::cerr << "DEBUG LLVM: Associated struct type " << structName << " with 'this' parameter in method " << funcName << std::endl;
+                }
+            }
+        }
     }
     
     // Generate basic blocks
@@ -1060,6 +1109,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         // Try to find it in the LLVM module
                         callee = module->getFunction(funcName);
 
+                        if (!callee && funcName == "malloc") {
+                            // Create malloc declaration: ptr @malloc(i64)
+                            std::cerr << "DEBUG LLVM: Creating external malloc declaration" << std::endl;
+                            llvm::FunctionType* mallocType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                mallocType,
+                                llvm::Function::ExternalLinkage,
+                                "malloc",
+                                module.get()
+                            );
+                            std::cerr << "DEBUG LLVM: Created malloc declaration" << std::endl;
+                        }
+
                         if (!callee && funcName == "strlen") {
                             // Create strlen declaration: i64 @strlen(ptr)
                             std::cerr << "DEBUG LLVM: Creating external strlen declaration" << std::endl;
@@ -1194,7 +1260,36 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 
                 // Create call
                 llvm::Value* result = builder->CreateCall(callee, args);
-                
+
+                // Special handling for malloc in constructors
+                // If this is a malloc call in a constructor, track the struct type
+                if (auto* constOp = dynamic_cast<mir::MIRConstOperand*>(callTerm->func.get())) {
+                    if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
+                        std::string funcName = std::get<std::string>(constOp->value);
+                        if (funcName == "malloc") {
+                            // Check if we're in a constructor function
+                            std::string currentFuncName = currentFunction->getName().str();
+                            if (currentFuncName.find("_constructor") != std::string::npos) {
+                                // Extract class name from "ClassName_constructor"
+                                size_t pos = currentFuncName.find("_constructor");
+                                std::string className = currentFuncName.substr(0, pos);
+                                std::cerr << "DEBUG LLVM: malloc in constructor for class: " << className << std::endl;
+
+                                // Find the struct type for this class
+                                std::string structName = "struct." + className;
+                                llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
+                                if (structType) {
+                                    // Store the struct type for this malloc'd pointer
+                                    arrayTypeMap[result] = structType;
+                                    std::cerr << "DEBUG LLVM: Stored struct type " << structName << " for malloc result" << std::endl;
+                                } else {
+                                    std::cerr << "DEBUG LLVM: WARNING - Could not find struct type: " << structName << std::endl;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Store result in destination
                 if (callTerm->destination) {
                     valueMap[callTerm->destination.get()] = result;
@@ -1648,13 +1743,21 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                         fieldIndex = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), indexVal);
                     }
 
+                    // If structPtr is an integer (i64), convert it to a pointer
+                    llvm::Value* actualStructPtr = structPtr;
+                    if (structPtr->getType()->isIntegerTy()) {
+                        std::cerr << "DEBUG LLVM: structPtr is i64, converting to pointer for SetField" << std::endl;
+                        llvm::Type* ptrType = llvm::PointerType::getUnqual(structType);
+                        actualStructPtr = builder->CreateIntToPtr(structPtr, ptrType, "struct_ptr_cast");
+                    }
+
                     // Create GEP to get field pointer
-                    // IMPORTANT: Use structPtr (the loaded value), not basePtr (the alloca)!
+                    // IMPORTANT: Use actualStructPtr (converted if necessary)
                     std::vector<llvm::Value*> indices = {
                         llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),
                         fieldIndex
                     };
-                    llvm::Value* fieldPtr = builder->CreateGEP(structType, structPtr, indices, "setfield_ptr");
+                    llvm::Value* fieldPtr = builder->CreateGEP(structType, actualStructPtr, indices, "setfield_ptr");
 
                     // Store the value to the field
                     builder->CreateStore(valueToStore, fieldPtr);
@@ -1839,6 +1942,14 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         }
     }
 
+    // If loadedArrayPtr is an integer (i64), convert it to a pointer
+    llvm::Value* actualPtr = loadedArrayPtr;
+    if (loadedArrayPtr->getType()->isIntegerTy()) {
+        std::cerr << "DEBUG LLVM: loadedArrayPtr is i64, converting to pointer" << std::endl;
+        llvm::Type* ptrType = llvm::PointerType::getUnqual(arrayType);
+        actualPtr = builder->CreateIntToPtr(loadedArrayPtr, ptrType, "ptr_cast");
+    }
+
     std::vector<llvm::Value*> indices = {
         llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),  // Dereference pointer
         secondIndex                                                     // Element/field index
@@ -1846,7 +1957,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
 
     llvm::Value* elementPtr = builder->CreateGEP(
         arrayType,
-        loadedArrayPtr,  // Use the loaded pointer
+        actualPtr,  // Use the pointer (converted if necessary)
         indices,
         "elem_ptr"
     );

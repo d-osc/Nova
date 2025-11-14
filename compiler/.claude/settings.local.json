@@ -52,7 +52,14 @@
       "Bash(then ./$exefile)",
       "Bash(/dev/null)",
       "Bash(./tests/test_nested_obj.exe:*)",
-      "Bash(./tests/test_strlen_direct.exe:*)"
+      "Bash(./tests/test_strlen_direct.exe:*)",
+      "Bash(./tests/test_string_length_param.exe)",
+      "Bash(./tests/test_string_ops.exe:*)",
+      "Bash(./tests/test_template_comprehensive.exe:*)",
+      "Bash(./tests/test_string_substring.exe)",
+      "Bash(./tests/test_string_methods_all.exe:*)",
+      "Bash(./test_class_simple.exe:*)",
+      "Bash(./test_class_comprehensive.exe:*)"
     ],
     "deny": [],
     "ask": []

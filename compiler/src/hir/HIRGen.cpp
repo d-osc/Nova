@@ -269,6 +269,57 @@ public:
             }
         }
 
+        // Check if this is a class method call: obj.method(...)
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            // Get the object
+            memberExpr->object->accept(*this);
+            HIRValue* object = lastValue_;
+
+            if (auto* propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                std::string methodName = propExpr->name;
+
+                // Check if object has a struct type (indicating it's a class instance)
+                bool isClassMethod = false;
+                std::string className;
+
+                if (object && object->type) {
+                    // Check if the type is a struct type
+                    if (object->type->kind == hir::HIRType::Kind::Struct) {
+                        auto* structType = static_cast<hir::HIRStructType*>(object->type.get());
+                        className = structType->name;
+                        isClassMethod = true;
+                        std::cerr << "DEBUG HIRGen: Detected class method call: " << className << "::" << methodName << std::endl;
+                    }
+                }
+
+                if (isClassMethod) {
+                    // Generate arguments (object is the first argument)
+                    std::vector<HIRValue*> args;
+                    args.push_back(object);  // First argument is 'this'
+                    for (auto& arg : node.arguments) {
+                        arg->accept(*this);
+                        args.push_back(lastValue_);
+                    }
+
+                    // Construct mangled function name: ClassName_methodName
+                    std::string mangledName = className + "_" + methodName;
+                    std::cerr << "DEBUG HIRGen: Looking up method function: " << mangledName << std::endl;
+
+                    // Lookup the method function
+                    auto func = module_->getFunction(mangledName);
+                    if (func) {
+                        std::cerr << "DEBUG HIRGen: Found method function, creating call" << std::endl;
+                        lastValue_ = builder_->createCall(func.get(), args, "method_call");
+                        return;
+                    } else {
+                        std::cerr << "ERROR HIRGen: Method function not found: " << mangledName << std::endl;
+                        lastValue_ = nullptr;
+                        return;
+                    }
+                }
+            }
+        }
+
         // Generate callee
         node.callee->accept(*this);
 
@@ -308,9 +359,17 @@ public:
                 // Try to get the struct type from the object
                 uint32_t fieldIndex = 0;
                 bool found = false;
+                hir::HIRStructType* structType = nullptr;
 
                 std::cerr << "DEBUG HIRGen: Accessing property '" << propertyName << "' on object" << std::endl;
-                if (object && object->type) {
+
+                // Check if this is a 'this' property access
+                if (object == currentThis_ && currentClassStructType_) {
+                    // Use the current class struct type directly
+                    structType = currentClassStructType_;
+                    std::cerr << "  DEBUG: Using currentClassStructType_ for 'this' property access" << std::endl;
+                    std::cerr << "  DEBUG: Struct has " << structType->fields.size() << " fields" << std::endl;
+                } else if (object && object->type) {
                     std::cerr << "DEBUG HIRGen: Object type kind=" << static_cast<int>(object->type->kind) << std::endl;
                     std::cerr << "DEBUG HIRGen: Object type ptr=" << object->type.get() << std::endl;
 
@@ -324,16 +383,21 @@ public:
                         if (ptrType->pointeeType) {
                             std::cerr << "DEBUG HIRGen: Pointee type kind=" << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
                         }
-                        if (auto structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get())) {
+                        structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
+                        if (structType) {
                             std::cerr << "DEBUG HIRGen: Pointee is a struct with " << structType->fields.size() << " fields" << std::endl;
-                            // Find the field index by name
-                            for (size_t i = 0; i < structType->fields.size(); ++i) {
-                                if (structType->fields[i].name == propertyName) {
-                                    fieldIndex = static_cast<uint32_t>(i);
-                                    found = true;
-                                    break;
-                                }
-                            }
+                        }
+                    }
+                }
+
+                // Find the field in the struct type
+                if (structType) {
+                    for (size_t i = 0; i < structType->fields.size(); ++i) {
+                        if (structType->fields[i].name == propertyName) {
+                            fieldIndex = static_cast<uint32_t>(i);
+                            found = true;
+                            std::cerr << "  DEBUG: Found field '" << propertyName << "' at index " << fieldIndex << std::endl;
+                            break;
                         }
                     }
                 }
@@ -610,6 +674,27 @@ public:
 
         lastValue_ = builder_->createCall(constructorFunc.get(), args, "new_instance");
         std::cerr << "  DEBUG: Created call to constructor: " << constructorName << std::endl;
+
+        // Find and attach the struct type to the result
+        hir::HIRStructType* structType = nullptr;
+        for (auto* type : module_->types) {
+            if (type->kind == hir::HIRType::Kind::Struct) {
+                auto* candidateStruct = static_cast<hir::HIRStructType*>(type);
+                if (candidateStruct->name == className) {
+                    structType = candidateStruct;
+                    std::cerr << "  DEBUG: Found struct type for class: " << className << std::endl;
+                    break;
+                }
+            }
+        }
+
+        // Attach the struct type to the instance value
+        if (structType && lastValue_) {
+            lastValue_->type = std::make_shared<hir::HIRStructType>(*structType);
+            std::cerr << "  DEBUG: Attached struct type to new instance" << std::endl;
+        } else {
+            std::cerr << "  WARNING: Could not find struct type for class: " << className << std::endl;
+        }
     }
     
     void visit(ThisExpr& node) override {
@@ -742,23 +827,34 @@ public:
                 // Use SetElement to store value directly to the array element
                 builder_->createSetElement(object, index, value);
             } else if (auto propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
-                // Object property assignment: obj.x = value
+                // Object property assignment: obj.x = value or this.x = value
                 std::string propertyName = propExpr->name;
 
                 // Find field index
                 uint32_t fieldIndex = 0;
                 bool found = false;
+                hir::HIRStructType* structType = nullptr;
 
-                if (object && object->type) {
+                // Check if this is a 'this' property assignment
+                if (object == currentThis_ && currentClassStructType_) {
+                    // Use the current class struct type directly
+                    structType = currentClassStructType_;
+                    std::cerr << "  DEBUG: Using currentClassStructType_ for 'this' property assignment" << std::endl;
+                } else if (object && object->type) {
+                    // Try to get struct type from object type
                     if (auto ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get())) {
-                        if (auto structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get())) {
-                            for (size_t i = 0; i < structType->fields.size(); ++i) {
-                                if (structType->fields[i].name == propertyName) {
-                                    fieldIndex = static_cast<uint32_t>(i);
-                                    found = true;
-                                    break;
-                                }
-                            }
+                        structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
+                    }
+                }
+
+                // Find the field in the struct type
+                if (structType) {
+                    for (size_t i = 0; i < structType->fields.size(); ++i) {
+                        if (structType->fields[i].name == propertyName) {
+                            fieldIndex = static_cast<uint32_t>(i);
+                            found = true;
+                            std::cerr << "  DEBUG: Found field '" << propertyName << "' at index " << fieldIndex << std::endl;
+                            break;
                         }
                     }
                 }
@@ -766,8 +862,15 @@ public:
                 if (found) {
                     // Use SetField to store value directly to the field
                     builder_->createSetField(object, fieldIndex, value, propertyName);
+                    std::cerr << "  DEBUG: Created SetField for property '" << propertyName << "'" << std::endl;
                 } else {
                     std::cerr << "Warning: Property '" << propertyName << "' not found for assignment" << std::endl;
+                    if (currentClassStructType_) {
+                        std::cerr << "  DEBUG: Current class has " << currentClassStructType_->fields.size() << " fields:" << std::endl;
+                        for (const auto& field : currentClassStructType_->fields) {
+                            std::cerr << "    - " << field.name << std::endl;
+                        }
+                    }
                 }
             }
         }
@@ -1401,9 +1504,11 @@ public:
         // Create HIR function
         auto func = module_->createFunction(funcName, funcType);
 
-        // Save current function
+        // Save current function and class context
         HIRFunction* savedFunction = currentFunction_;
+        hir::HIRStructType* savedClassStructType = currentClassStructType_;
         currentFunction_ = func.get();
+        currentClassStructType_ = structType;  // Track current class struct type
 
         // Create entry block
         auto entryBlock = func->createBasicBlock("entry");
@@ -1417,10 +1522,41 @@ public:
             symbolTable_[constructor.params[i]] = func->parameters[i];
         }
 
-        // Allocate memory for class instance (this will be handled by runtime)
-        // For now, just create a placeholder integer to represent the allocated instance
-        // TODO: Implement malloc call for class instance
-        auto instancePtr = builder_->createIntConstant(0);  // Placeholder
+        // Allocate memory for class instance using malloc
+        std::cerr << "    DEBUG: Allocating memory for class instance: " << className << std::endl;
+
+        // Get or create malloc function declaration
+        HIRFunction* mallocFunc = nullptr;
+        auto& functions = module_->functions;
+        for (auto& f : functions) {
+            if (f->name == "malloc") {
+                mallocFunc = f.get();
+                break;
+            }
+        }
+
+        if (!mallocFunc) {
+            // Create malloc: void* malloc(size_t size)
+            // HIR signature: pointer malloc(i64 size)
+            std::vector<HIRTypePtr> mallocParamTypes;
+            mallocParamTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+            auto mallocReturnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            HIRFunctionType* mallocFuncType = new HIRFunctionType(mallocParamTypes, mallocReturnType);
+            HIRFunctionPtr mallocFuncPtr = module_->createFunction("malloc", mallocFuncType);
+            mallocFuncPtr->linkage = HIRFunction::Linkage::External;
+            mallocFunc = mallocFuncPtr.get();
+            std::cerr << "    DEBUG: Created external malloc function declaration" << std::endl;
+        }
+
+        // Calculate struct size (number of fields * 8 bytes for i64)
+        size_t structSize = structType->fields.size() * 8;
+        auto sizeValue = builder_->createIntConstant(structSize);
+        std::cerr << "    DEBUG: Struct size: " << structSize << " bytes (" << structType->fields.size() << " fields)" << std::endl;
+
+        // Call malloc to allocate memory
+        std::vector<HIRValue*> mallocArgs = { sizeValue };
+        auto instancePtr = builder_->createCall(mallocFunc, mallocArgs, "instance");
+        std::cerr << "    DEBUG: Created malloc call for instance allocation" << std::endl;
 
         // Save current 'this' context (for nested classes)
         hir::HIRValue* savedThis = currentThis_;
@@ -1437,8 +1573,9 @@ public:
             builder_->createReturn(instancePtr);
         }
 
-        // Restore 'this' context
+        // Restore 'this' context and class struct type
         currentThis_ = savedThis;
+        currentClassStructType_ = savedClassStructType;
         currentFunction_ = savedFunction;
 
         std::cerr << "    DEBUG: Created constructor function: " << funcName << std::endl;
@@ -1475,9 +1612,11 @@ public:
         // Create HIR function
         auto func = module_->createFunction(funcName, funcType);
 
-        // Save current function
+        // Save current function and class context
         HIRFunction* savedFunction = currentFunction_;
+        hir::HIRStructType* savedClassStructType = currentClassStructType_;
         currentFunction_ = func.get();
+        currentClassStructType_ = structType;  // Track current class struct type
 
         // Create entry block
         auto entryBlock = func->createBasicBlock("entry");
@@ -1509,8 +1648,9 @@ public:
             builder_->createReturn(nullptr);
         }
 
-        // Restore 'this' context
+        // Restore 'this' context and class struct type
         currentThis_ = savedThis;
+        currentClassStructType_ = savedClassStructType;
         currentFunction_ = savedFunction;
 
         std::cerr << "    DEBUG: Created method function: " << funcName << std::endl;
@@ -1552,6 +1692,7 @@ private:
     std::unique_ptr<HIRBuilder> builder_;
     HIRFunction* currentFunction_;
     HIRValue* currentThis_ = nullptr;  // Current 'this' context for methods
+    hir::HIRStructType* currentClassStructType_ = nullptr;  // Current class struct type
     HIRValue* lastValue_ = nullptr;
     std::unordered_map<std::string, HIRValue*> symbolTable_;
 };
