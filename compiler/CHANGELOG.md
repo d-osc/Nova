@@ -12,6 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known Issues
 - 🟡 Template literals need toString() conversion for non-string values
 - 🟡 Arrow functions: IIFE pattern not yet supported (immediate invocation without variable storage)
+- 🟡 Array methods: push(), pop() not yet implemented (arrays are fixed-size)
+
+---
+
+## [0.9.0] - 2025-11-14
+
+### Added - Array.length Property 🎉
+- ✅ **Array.length now works!**
+  - Access compile-time array length with `arr.length`
+  - Works for array literals and variables
+  - Returns correct size as i64
+
+**Example**:
+```typescript
+let arr = [10, 20, 30];
+let len = arr.length;  // Returns 3
+```
+
+### Implementation Details
+**HIR Generation (`src/hir/HIRGen.cpp`)**:
+- Enhanced MemberExpr visitor to detect array.length access
+- Checks both direct array types and pointer-to-array types
+- Extracts compile-time size from HIRArrayType
+- Returns size as integer constant
+
+### Tests
+- ✅ test_array_length.ts - Returns 3 for array with 3 elements
+
+### Limitations
+- Only works for compile-time known array sizes (literals and fixed-size arrays)
+- Dynamic array operations (push, pop, resize) not yet supported
+
+### Breaking Changes
+- None - fully backward compatible
 
 ---
 

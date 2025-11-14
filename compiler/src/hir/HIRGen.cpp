@@ -483,6 +483,29 @@ public:
                             std::vector<HIRValue*> args = { object };
                             lastValue_ = builder_->createCall(strlenFunc, args, "str_len");
                         }
+                    }
+                    // Check for built-in array properties
+                    else if (object && object->type && propertyName == "length") {
+                        hir::HIRArrayType* arrayType = nullptr;
+
+                        // Check if object is directly an array
+                        if (object->type->kind == hir::HIRType::Kind::Array) {
+                            arrayType = dynamic_cast<hir::HIRArrayType*>(object->type.get());
+                        }
+                        // Check if object is a pointer to an array
+                        else if (object->type->kind == hir::HIRType::Kind::Pointer) {
+                            hir::HIRPointerType* ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get());
+                            if (ptrType && ptrType->pointeeType && ptrType->pointeeType->kind == hir::HIRType::Kind::Array) {
+                                arrayType = dynamic_cast<hir::HIRArrayType*>(ptrType->pointeeType.get());
+                            }
+                        }
+
+                        if (arrayType) {
+                            std::cerr << "DEBUG HIRGen: Accessing built-in array.length property" << std::endl;
+                            int64_t length = static_cast<int64_t>(arrayType->size);
+                            std::cerr << "DEBUG HIRGen: Array has compile-time length = " << length << std::endl;
+                            lastValue_ = builder_->createIntConstant(length);
+                        }
                     } else {
                         // Property not found, return 0 as placeholder
                         std::cerr << "Warning: Property '" << propertyName << "' not found in struct" << std::endl;
