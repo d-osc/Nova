@@ -1003,12 +1003,41 @@ public:
     
     // Declarations
     void visit(FunctionDecl& node) override {
-        // Create function type
+        // Helper to convert AST Type::Kind to HIR HIRType::Kind
+        auto convertTypeKind = [](Type::Kind astKind) -> HIRType::Kind {
+            switch (astKind) {
+                case Type::Kind::Void: return HIRType::Kind::Void;
+                case Type::Kind::Number: return HIRType::Kind::I64;  // Default to i64 for numbers
+                case Type::Kind::String: return HIRType::Kind::String;
+                case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::Any: return HIRType::Kind::Any;
+                case Type::Kind::Unknown: return HIRType::Kind::Unknown;
+                case Type::Kind::Never: return HIRType::Kind::Never;
+                case Type::Kind::Null: return HIRType::Kind::Any;  // Map to Any for now
+                case Type::Kind::Undefined: return HIRType::Kind::Any;  // Map to Any for now
+                default: return HIRType::Kind::Any;
+            }
+        };
+
+        // Create function type with actual parameter types
         std::vector<HIRTypePtr> paramTypes;
         for (size_t i = 0; i < node.params.size(); ++i) {
-            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));
+            HIRType::Kind typeKind = HIRType::Kind::Any;  // Default to Any
+
+            // Use type annotation if available
+            if (i < node.paramTypes.size() && node.paramTypes[i]) {
+                typeKind = convertTypeKind(node.paramTypes[i]->kind);
+            }
+
+            paramTypes.push_back(std::make_shared<HIRType>(typeKind));
         }
-        auto retType = std::make_shared<HIRType>(HIRType::Kind::Any);
+
+        // Use return type annotation if available
+        HIRType::Kind retTypeKind = HIRType::Kind::Any;  // Default to Any
+        if (node.returnType) {
+            retTypeKind = convertTypeKind(node.returnType->kind);
+        }
+        auto retType = std::make_shared<HIRType>(retTypeKind);
         
         auto funcType = new HIRFunctionType(paramTypes, retType);
         

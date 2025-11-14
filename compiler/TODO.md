@@ -217,20 +217,25 @@ let idx = s.indexOf("ll");     // ❌ Not implemented - String methods
   - [x] Memory allocation for result
   - [x] Copy strings into result
   - [x] Test string concatenation ✅
-- [x] string.length property ✅ (mostly done)
+- [x] string.length property ✅ COMPLETED!
   - [x] Compile-time length for string literals
   - [x] HIRGen detects string.length access
   - [x] Create strlen() intrinsic function declaration
   - [x] LLVM CodeGen creates external strlen() declaration
   - [x] Skip external functions in MIR generation
   - [x] LLVM optimizer handles strlen() on constants
-  - ⚠️  Runtime strlen for variables needs proper string type system
+  - [x] Runtime strlen for variables with proper string type system ✅
+
+**String Type System Fix - COMPLETED! ✅**
+- [x] Fixed proper string type system
+  - [x] Added paramTypes field to FunctionDecl AST
+  - [x] Updated parser to save parameter type annotations
+  - [x] Fixed HIRGen to use parameter type annotations
+  - [x] String parameters now use pointer types (ptr) instead of i64
+  - [x] Runtime strlen calls work correctly with string parameters
+  - [x] Tested and verified with test_string_length_param.ts and test_string_ops.ts
 
 **Remaining Action Items**:
-- [ ] Fix proper string type system (currently strings treated as i64)
-  - [ ] Proper pointer types for string parameters
-  - [ ] Type propagation through variables
-  - [ ] This will enable runtime strlen calls to work correctly
 - [ ] Implement template literal interpolation
   - [ ] Parse template parts and expressions
   - [ ] Generate concatenation code

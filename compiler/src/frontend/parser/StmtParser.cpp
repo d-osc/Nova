@@ -213,29 +213,33 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
         consume(TokenType::Greater, "Expected '>' after type parameters");
     }
     
-    // Parameters (simplified - just names for now)
+    // Parameters
     std::vector<std::string> params;
+    std::vector<TypePtr> paramTypes;
     consume(TokenType::LeftParen, "Expected '(' after function name");
     while (!check(TokenType::RightParen) && !isAtEnd()) {
         Token paramName = consume(TokenType::Identifier, "Expected parameter name");
         params.push_back(paramName.value);
-        
+
         // Optional type annotation
+        TypePtr paramType = nullptr;
         if (match(TokenType::Colon)) {
-            parseTypeAnnotation(); // Parse and discard for now
+            paramType = parseTypeAnnotation();
         }
-        
+        paramTypes.push_back(std::move(paramType));
+
         // Optional default value
         if (match(TokenType::Equal)) {
             parseAssignmentExpression(); // Parse and discard for now
         }
-        
+
         if (!check(TokenType::RightParen)) {
             consume(TokenType::Comma, "Expected ',' between parameters");
         }
     }
     consume(TokenType::RightParen, "Expected ')' after parameters");
     func->params = std::move(params);
+    func->paramTypes = std::move(paramTypes);
     
     // Return type
     if (match(TokenType::Colon)) {

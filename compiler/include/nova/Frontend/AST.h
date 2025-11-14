@@ -763,11 +763,12 @@ class FunctionDecl : public Decl {
 public:
     std::string name;
     std::vector<std::string> params;
+    std::vector<TypePtr> paramTypes;  // Type annotations for parameters
     StmtPtr body;
     bool isAsync = false;
     bool isGenerator = false;
     TypePtr returnType;
-    
+
     FunctionDecl() = default;
     FunctionDecl(const std::string& n, std::vector<std::string> p,
                  StmtPtr b, bool async, bool generator, TypePtr ret)
