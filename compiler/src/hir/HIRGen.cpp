@@ -190,6 +190,12 @@ public:
 
         using Op = UnaryExpr::Op;
         switch (node.op) {
+            case Op::Plus:
+                // Unary plus - convert to number (for numbers, it's a no-op)
+                // In JavaScript, +x converts x to a number
+                // For our integer types, we just use the value as-is
+                lastValue_ = operand;
+                break;
             case Op::Minus:
                 // Negate
                 {
