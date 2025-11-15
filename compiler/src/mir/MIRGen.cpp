@@ -352,9 +352,10 @@ private:
             case hir::HIRInstruction::Opcode::Xor:
             case hir::HIRInstruction::Opcode::Shl:
             case hir::HIRInstruction::Opcode::Shr:
+            case hir::HIRInstruction::Opcode::UShr:
                 generateBinaryOp(hirInst, mirBlock);
                 break;
-            
+
             case hir::HIRInstruction::Opcode::Eq:
             case hir::HIRInstruction::Opcode::Ne:
             case hir::HIRInstruction::Opcode::Lt:
@@ -591,6 +592,9 @@ private:
                 break;
             case hir::HIRInstruction::Opcode::Shr:
                 rvalue = builder_->createShr(lhs, rhs);
+                break;
+            case hir::HIRInstruction::Opcode::UShr:
+                rvalue = builder_->createUShr(lhs, rhs);
                 break;
             default:
                 return;

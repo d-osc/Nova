@@ -110,6 +110,10 @@ MIRRValuePtr MIRBuilder::createShr(MIROperandPtr lhs, MIROperandPtr rhs) {
     return createBinaryOp(MIRBinaryOpRValue::BinOp::Shr, lhs, rhs);
 }
 
+MIRRValuePtr MIRBuilder::createUShr(MIROperandPtr lhs, MIROperandPtr rhs) {
+    return createBinaryOp(MIRBinaryOpRValue::BinOp::UShr, lhs, rhs);
+}
+
 MIRRValuePtr MIRBuilder::createEq(MIROperandPtr lhs, MIROperandPtr rhs) {
     return createBinaryOp(MIRBinaryOpRValue::BinOp::Eq, lhs, rhs);
 }

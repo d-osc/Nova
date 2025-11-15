@@ -165,7 +165,7 @@ class MIRBinaryOpRValue : public MIRRValue {
 public:
     enum class BinOp {
         Add, Sub, Mul, Div, Rem, Pow,
-        BitAnd, BitOr, BitXor, Shl, Shr,
+        BitAnd, BitOr, BitXor, Shl, Shr, UShr,
         Eq, Lt, Le, Ne, Ge, Gt,
         Offset
     };

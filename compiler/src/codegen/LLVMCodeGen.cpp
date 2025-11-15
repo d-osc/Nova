@@ -1500,6 +1500,8 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             return builder->CreateShl(lhs, rhs, "shl");
         case mir::MIRBinaryOpRValue::BinOp::Shr:
             return builder->CreateAShr(lhs, rhs, "shr");
+        case mir::MIRBinaryOpRValue::BinOp::UShr:
+            return builder->CreateLShr(lhs, rhs, "ushr");
         case mir::MIRBinaryOpRValue::BinOp::Eq:
             std::cerr << "DEBUG LLVM: Creating ICMP EQ instruction" << std::endl;
             // Check if operands are pointers (strings)

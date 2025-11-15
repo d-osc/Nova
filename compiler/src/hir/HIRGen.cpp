@@ -155,6 +155,9 @@ public:
             case Op::RightShift:
                 lastValue_ = builder_->createShr(lhs, rhs);
                 break;
+            case Op::UnsignedRightShift:
+                lastValue_ = builder_->createUShr(lhs, rhs);
+                break;
             case Op::Equal:
             case Op::StrictEqual:  // === works same as == for primitive types
                 lastValue_ = builder_->createEq(lhs, rhs);

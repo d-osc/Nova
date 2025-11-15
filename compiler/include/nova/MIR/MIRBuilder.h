@@ -45,7 +45,8 @@ public:
     MIRRValuePtr createBitXor(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createShl(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createShr(MIROperandPtr lhs, MIROperandPtr rhs);
-    
+    MIRRValuePtr createUShr(MIROperandPtr lhs, MIROperandPtr rhs);
+
     MIRRValuePtr createEq(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createNe(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createLt(MIROperandPtr lhs, MIROperandPtr rhs);

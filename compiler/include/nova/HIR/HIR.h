@@ -330,6 +330,7 @@ public:
     HIRInstruction* createXor(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createShl(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createShr(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createUShr(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createNot(HIRValue* operand, const std::string& name = "");
 
     // Comparison

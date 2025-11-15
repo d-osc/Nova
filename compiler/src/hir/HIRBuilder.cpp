@@ -169,6 +169,19 @@ HIRInstruction* HIRBuilder::createShr(HIRValue* lhs, HIRValue* rhs, const std::s
     return inst.get();
 }
 
+HIRInstruction* HIRBuilder::createUShr(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::UShr, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
 HIRInstruction* HIRBuilder::createNot(HIRValue* operand, const std::string& name) {
     auto resultType = operand->type;
     auto inst = std::make_shared<HIRInstruction>(
