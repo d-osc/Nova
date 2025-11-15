@@ -110,7 +110,7 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
     
     // Check for assignment operators
     TokenType type = peek().type;
-    if (type == TokenType::Equal || 
+    if (type == TokenType::Equal ||
         type == TokenType::PlusEqual ||
         type == TokenType::MinusEqual ||
         type == TokenType::StarEqual ||
@@ -121,7 +121,10 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
         type == TokenType::CaretEqual ||
         type == TokenType::LessLessEqual ||
         type == TokenType::GreaterGreaterEqual ||
-        type == TokenType::GreaterGreaterGreaterEqual) {
+        type == TokenType::GreaterGreaterGreaterEqual ||
+        type == TokenType::AmpersandAmpersandEqual ||
+        type == TokenType::PipePipeEqual ||
+        type == TokenType::QuestionQuestionEqual) {
         
         Token op = advance();
         auto right = parseAssignmentExpression();

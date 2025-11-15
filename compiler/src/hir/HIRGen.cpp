@@ -983,40 +983,100 @@ public:
     }
     
     void visit(AssignmentExpr& node) override {
-        // Generate right side
-        node.right->accept(*this);
-        auto rightValue = lastValue_;
+        hir::HIRValue* value = nullptr;
 
-        // For compound assignments (+=, -=, etc.), need to read current value first
-        hir::HIRValue* finalValue = rightValue;
-        if (node.op != AssignmentExpr::Op::Assign) {
+        // Handle logical assignment operators with short-circuit evaluation
+        if (node.op == AssignmentExpr::Op::LogicalAndAssign ||
+            node.op == AssignmentExpr::Op::LogicalOrAssign ||
+            node.op == AssignmentExpr::Op::NullishCoalescingAssign) {
+
             // Get current value of left side
             node.left->accept(*this);
             auto leftValue = lastValue_;
 
-            // Perform the binary operation
-            switch (node.op) {
-                case AssignmentExpr::Op::AddAssign:
-                    finalValue = builder_->createAdd(leftValue, rightValue);
-                    break;
-                case AssignmentExpr::Op::SubAssign:
-                    finalValue = builder_->createSub(leftValue, rightValue);
-                    break;
-                case AssignmentExpr::Op::MulAssign:
-                    finalValue = builder_->createMul(leftValue, rightValue);
-                    break;
-                case AssignmentExpr::Op::DivAssign:
-                    finalValue = builder_->createDiv(leftValue, rightValue);
-                    break;
-                case AssignmentExpr::Op::ModAssign:
-                    finalValue = builder_->createRem(leftValue, rightValue);
-                    break;
-                default:
-                    std::cerr << "Warning: Unsupported compound assignment operator" << std::endl;
-                    break;
+            // Create temporary variable to store result
+            auto i64Type = new HIRType(HIRType::Kind::I64);
+            auto* resultAlloca = builder_->createAlloca(i64Type, "logical_assign.result");
+
+            // Create blocks
+            auto* evalRightBlock = currentFunction_->createBasicBlock("logical_assign.eval_right").get();
+            auto* skipBlock = currentFunction_->createBasicBlock("logical_assign.skip").get();
+            auto* endBlock = currentFunction_->createBasicBlock("logical_assign.end").get();
+
+            // Create condition based on operator type
+            HIRValue* condition = nullptr;
+            auto zero = builder_->createIntConstant(0);
+            if (node.op == AssignmentExpr::Op::LogicalAndAssign) {
+                // &&= : evaluate right if left is truthy (left != 0)
+                condition = builder_->createNe(leftValue, zero);
+            } else if (node.op == AssignmentExpr::Op::LogicalOrAssign) {
+                // ||= : evaluate right if left is falsy (left == 0)
+                condition = builder_->createEq(leftValue, zero);
+            } else {
+                // ??= : In a proper implementation, this should only assign if left is null/undefined
+                // Since we don't have null/undefined tracking in our simple type system,
+                // we treat all values as non-nullish, so ??= always keeps the left value
+                // This means the condition is always false
+                condition = builder_->createIntConstant(0);  // Always false
             }
+
+            // Branch based on condition
+            builder_->createCondBr(condition, evalRightBlock, skipBlock);
+
+            // Evaluate right side and store
+            builder_->setInsertPoint(evalRightBlock);
+            node.right->accept(*this);
+            auto rightValue = lastValue_;
+            builder_->createStore(rightValue, resultAlloca);
+            builder_->createBr(endBlock);
+
+            // Skip evaluation of right side, keep left value
+            builder_->setInsertPoint(skipBlock);
+            builder_->createStore(leftValue, resultAlloca);
+            builder_->createBr(endBlock);
+
+            // Continue at end block
+            builder_->setInsertPoint(endBlock);
+
+            // Load result
+            value = builder_->createLoad(resultAlloca);
+        } else {
+            // Handle regular and arithmetic compound assignments
+            // Generate right side
+            node.right->accept(*this);
+            auto rightValue = lastValue_;
+
+            // For compound assignments (+=, -=, etc.), need to read current value first
+            hir::HIRValue* finalValue = rightValue;
+            if (node.op != AssignmentExpr::Op::Assign) {
+                // Get current value of left side
+                node.left->accept(*this);
+                auto leftValue = lastValue_;
+
+                // Perform the binary operation
+                switch (node.op) {
+                    case AssignmentExpr::Op::AddAssign:
+                        finalValue = builder_->createAdd(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::SubAssign:
+                        finalValue = builder_->createSub(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::MulAssign:
+                        finalValue = builder_->createMul(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::DivAssign:
+                        finalValue = builder_->createDiv(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::ModAssign:
+                        finalValue = builder_->createRem(leftValue, rightValue);
+                        break;
+                    default:
+                        std::cerr << "Warning: Unsupported compound assignment operator" << std::endl;
+                        break;
+                }
+            }
+            value = finalValue;
         }
-        auto value = finalValue;
 
         // Store to left side
         if (auto* id = dynamic_cast<Identifier*>(node.left.get())) {
@@ -1545,8 +1605,71 @@ public:
     }
     
     void visit(SwitchStmt& node) override {
-        (void)node;
-        // switch statement
+        // For now, implement switch as a series of if-else statements
+        // Evaluate discriminant once
+        node.discriminant->accept(*this);
+        auto discriminantValue = lastValue_;
+
+        // Create end block
+        auto endBlock = currentFunction_->createBasicBlock("switch.end");
+
+        // Find default case if it exists
+        size_t defaultCaseIndex = node.cases.size();
+        for (size_t i = 0; i < node.cases.size(); ++i) {
+            if (!node.cases[i]->test) {
+                defaultCaseIndex = i;
+                break;
+            }
+        }
+
+        // Generate if-else chain for each case
+        for (size_t i = 0; i < node.cases.size(); ++i) {
+            if (node.cases[i]->test) {  // Regular case (not default)
+                // Evaluate test value
+                node.cases[i]->test->accept(*this);
+                auto testValue = lastValue_;
+
+                // Compare
+                auto cmp = builder_->createEq(discriminantValue, testValue);
+
+                // Create then and else blocks
+                auto thenBlock = currentFunction_->createBasicBlock("case.then");
+                auto elseBlock = currentFunction_->createBasicBlock("case.else");
+
+                builder_->createCondBr(cmp, thenBlock.get(), elseBlock.get());
+
+                // Generate then block (case body)
+                builder_->setInsertPoint(thenBlock.get());
+                for (auto& stmt : node.cases[i]->consequent) {
+                    stmt->accept(*this);
+                }
+
+                // Jump to end if no break
+                if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+                    builder_->createBr(endBlock.get());
+                }
+
+                // Continue with else block
+                builder_->setInsertPoint(elseBlock.get());
+            }
+        }
+
+        // Generate default case if it exists
+        if (defaultCaseIndex < node.cases.size()) {
+            for (auto& stmt : node.cases[defaultCaseIndex]->consequent) {
+                stmt->accept(*this);
+            }
+
+            if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+                builder_->createBr(endBlock.get());
+            }
+        } else {
+            // No default case, just jump to end
+            builder_->createBr(endBlock.get());
+        }
+
+        // Continue with end block
+        builder_->setInsertPoint(endBlock.get());
     }
     
     void visit(LabeledStmt& node) override {
