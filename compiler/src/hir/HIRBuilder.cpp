@@ -90,6 +90,19 @@ HIRInstruction* HIRBuilder::createRem(HIRValue* lhs, HIRValue* rhs, const std::s
     return inst.get();
 }
 
+HIRInstruction* HIRBuilder::createPow(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
+    auto resultType = lhs->type;
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Pow, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
+    inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
 // Bitwise Operations
 HIRInstruction* HIRBuilder::createAnd(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
     auto resultType = lhs->type;

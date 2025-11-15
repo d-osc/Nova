@@ -86,6 +86,10 @@ MIRRValuePtr MIRBuilder::createRem(MIROperandPtr lhs, MIROperandPtr rhs) {
     return createBinaryOp(MIRBinaryOpRValue::BinOp::Rem, lhs, rhs);
 }
 
+MIRRValuePtr MIRBuilder::createPow(MIROperandPtr lhs, MIROperandPtr rhs) {
+    return createBinaryOp(MIRBinaryOpRValue::BinOp::Pow, lhs, rhs);
+}
+
 MIRRValuePtr MIRBuilder::createBitAnd(MIROperandPtr lhs, MIROperandPtr rhs) {
     return createBinaryOp(MIRBinaryOpRValue::BinOp::BitAnd, lhs, rhs);
 }

@@ -39,6 +39,7 @@ public:
     MIRRValuePtr createMul(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createDiv(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createRem(MIROperandPtr lhs, MIROperandPtr rhs);
+    MIRRValuePtr createPow(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createBitAnd(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createBitOr(MIROperandPtr lhs, MIROperandPtr rhs);
     MIRRValuePtr createBitXor(MIROperandPtr lhs, MIROperandPtr rhs);

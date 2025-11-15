@@ -343,9 +343,10 @@ private:
             case hir::HIRInstruction::Opcode::Mul:
             case hir::HIRInstruction::Opcode::Div:
             case hir::HIRInstruction::Opcode::Rem:
+            case hir::HIRInstruction::Opcode::Pow:
                 generateBinaryOp(hirInst, mirBlock);
                 break;
-            
+
             case hir::HIRInstruction::Opcode::And:
             case hir::HIRInstruction::Opcode::Or:
             case hir::HIRInstruction::Opcode::Xor:
@@ -572,6 +573,9 @@ private:
                 break;
             case hir::HIRInstruction::Opcode::Rem:
                 rvalue = builder_->createRem(lhs, rhs);
+                break;
+            case hir::HIRInstruction::Opcode::Pow:
+                rvalue = builder_->createPow(lhs, rhs);
                 break;
             case hir::HIRInstruction::Opcode::And:
                 rvalue = builder_->createBitAnd(lhs, rhs);

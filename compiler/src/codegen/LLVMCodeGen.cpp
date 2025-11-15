@@ -1447,6 +1447,49 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             return builder->CreateSDiv(lhs, rhs, "div");
         case mir::MIRBinaryOpRValue::BinOp::Rem:
             return builder->CreateSRem(lhs, rhs, "rem");
+        case mir::MIRBinaryOpRValue::BinOp::Pow: {
+            // For integer exponentiation, implement as repeated multiplication
+            // This is a simple inline implementation for integer pow
+            // result = base ** exponent
+            llvm::Value* base = lhs;
+            llvm::Value* exponent = rhs;
+
+            // Create blocks for the power loop
+            llvm::Function* func = builder->GetInsertBlock()->getParent();
+            llvm::BasicBlock* loopCondBlock = llvm::BasicBlock::Create(*context, "pow.cond", func);
+            llvm::BasicBlock* loopBodyBlock = llvm::BasicBlock::Create(*context, "pow.body", func);
+            llvm::BasicBlock* loopEndBlock = llvm::BasicBlock::Create(*context, "pow.end", func);
+
+            // Initialize result = 1, i = 0
+            llvm::Value* one = llvm::ConstantInt::get(lhs->getType(), 1);
+            llvm::Value* zero = llvm::ConstantInt::get(lhs->getType(), 0);
+            llvm::AllocaInst* resultPtr = builder->CreateAlloca(lhs->getType(), nullptr, "pow.result");
+            llvm::AllocaInst* iPtr = builder->CreateAlloca(lhs->getType(), nullptr, "pow.i");
+            builder->CreateStore(one, resultPtr);
+            builder->CreateStore(zero, iPtr);
+
+            // Jump to loop condition
+            builder->CreateBr(loopCondBlock);
+
+            // Loop condition: i < exponent
+            builder->SetInsertPoint(loopCondBlock);
+            llvm::Value* i = builder->CreateLoad(lhs->getType(), iPtr, "i");
+            llvm::Value* cond = builder->CreateICmpSLT(i, exponent, "pow.cond");
+            builder->CreateCondBr(cond, loopBodyBlock, loopEndBlock);
+
+            // Loop body: result *= base, i++
+            builder->SetInsertPoint(loopBodyBlock);
+            llvm::Value* result = builder->CreateLoad(lhs->getType(), resultPtr, "result");
+            llvm::Value* newResult = builder->CreateMul(result, base, "pow.mul");
+            builder->CreateStore(newResult, resultPtr);
+            llvm::Value* newI = builder->CreateAdd(i, one, "pow.inc");
+            builder->CreateStore(newI, iPtr);
+            builder->CreateBr(loopCondBlock);
+
+            // After loop: return result
+            builder->SetInsertPoint(loopEndBlock);
+            return builder->CreateLoad(lhs->getType(), resultPtr, "pow");
+        }
         case mir::MIRBinaryOpRValue::BinOp::BitAnd:
             return builder->CreateAnd(lhs, rhs, "and");
         case mir::MIRBinaryOpRValue::BinOp::BitOr:

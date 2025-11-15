@@ -169,7 +169,7 @@ class HIRInstruction : public HIRValue {
 public:
     enum class Opcode {
         // Arithmetic
-        Add, Sub, Mul, Div, Rem, Neg,
+        Add, Sub, Mul, Div, Rem, Pow, Neg,
         // Bitwise
         And, Or, Xor, Not, Shl, Shr, UShr,
         // Comparison
@@ -322,6 +322,7 @@ public:
     HIRInstruction* createMul(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createDiv(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createRem(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
+    HIRInstruction* createPow(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
 
     // Bitwise Operations
     HIRInstruction* createAnd(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");

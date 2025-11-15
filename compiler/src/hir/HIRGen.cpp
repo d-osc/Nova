@@ -137,6 +137,9 @@ public:
             case Op::Mod:
                 lastValue_ = builder_->createRem(lhs, rhs);
                 break;
+            case Op::Pow:
+                lastValue_ = builder_->createPow(lhs, rhs);
+                break;
             case Op::BitAnd:
                 lastValue_ = builder_->createAnd(lhs, rhs);
                 break;
@@ -1069,6 +1072,9 @@ public:
                         break;
                     case AssignmentExpr::Op::ModAssign:
                         finalValue = builder_->createRem(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::PowAssign:
+                        finalValue = builder_->createPow(leftValue, rightValue);
                         break;
                     default:
                         std::cerr << "Warning: Unsupported compound assignment operator" << std::endl;
