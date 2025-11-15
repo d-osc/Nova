@@ -253,6 +253,13 @@ public:
                     lastValue_ = builder_->createStringConstant(typeStr);
                 }
                 break;
+            case Op::Void:
+                // void operator - evaluates operand and returns undefined (0 for integers)
+                // The operand has already been evaluated above
+                // In JavaScript, void always returns undefined
+                // For our integer-only compiler, we return 0
+                lastValue_ = builder_->createIntConstant(0);
+                break;
             default:
                 // Other operators
                 break;
