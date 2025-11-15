@@ -1079,6 +1079,24 @@ public:
                     case AssignmentExpr::Op::PowAssign:
                         finalValue = builder_->createPow(leftValue, rightValue);
                         break;
+                    case AssignmentExpr::Op::BitAndAssign:
+                        finalValue = builder_->createAnd(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::BitOrAssign:
+                        finalValue = builder_->createOr(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::BitXorAssign:
+                        finalValue = builder_->createXor(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::LeftShiftAssign:
+                        finalValue = builder_->createShl(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::RightShiftAssign:
+                        finalValue = builder_->createShr(leftValue, rightValue);
+                        break;
+                    case AssignmentExpr::Op::UnsignedRightShiftAssign:
+                        finalValue = builder_->createUShr(leftValue, rightValue);
+                        break;
                     default:
                         std::cerr << "Warning: Unsupported compound assignment operator" << std::endl;
                         break;
