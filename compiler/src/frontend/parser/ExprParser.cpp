@@ -116,6 +116,7 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
         type == TokenType::StarEqual ||
         type == TokenType::SlashEqual ||
         type == TokenType::PercentEqual ||
+        type == TokenType::StarStarEqual ||
         type == TokenType::AmpersandEqual ||
         type == TokenType::PipeEqual ||
         type == TokenType::CaretEqual ||

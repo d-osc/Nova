@@ -120,12 +120,27 @@ public:
         node.right->accept(*this);
         auto rhs = lastValue_;
 
+        // Convert boolean operands to integers for arithmetic operations
+        auto convertBoolToInt = [this](HIRValue* value) -> HIRValue* {
+            if (value && value->type && value->type->kind == HIRType::Kind::Bool) {
+                // Convert boolean to integer: true -> 1, false -> 0
+                // Use ZExt (zero extension) to convert i1 to i64
+                auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                return builder_->createCast(value, intType.get());
+            }
+            return value;
+        };
+
         // Generate operation based on operator
         switch (node.op) {
             case Op::Add:
+                lhs = convertBoolToInt(lhs);
+                rhs = convertBoolToInt(rhs);
                 lastValue_ = builder_->createAdd(lhs, rhs);
                 break;
             case Op::Sub:
+                lhs = convertBoolToInt(lhs);
+                rhs = convertBoolToInt(rhs);
                 lastValue_ = builder_->createSub(lhs, rhs);
                 break;
             case Op::Mul:
@@ -204,10 +219,11 @@ public:
                 }
                 break;
             case Op::Not:
-                // Logical not - compare with false
+                // Logical not - compare with zero
+                // !x is true if x is 0 (falsy), false otherwise
                 {
-                    auto falsVal = builder_->createBoolConstant(false);
-                    lastValue_ = builder_->createEq(operand, falsVal);
+                    auto zero = builder_->createIntConstant(0);
+                    lastValue_ = builder_->createEq(operand, zero);
                 }
                 break;
             case Op::BitNot:
@@ -1414,31 +1430,22 @@ public:
         std::cerr << "DEBUG: Executing while body" << std::endl;
         node.body->accept(*this);
         std::cerr << "DEBUG: While body executed" << std::endl;
-        
-        // Check if the body or any of its successors contain any break or continue instructions
-        bool hasBreakOrContinue = bodyBlock->hasBreakOrContinue;
-        
-        // Check all successors of the body block
-        std::function<void(hir::HIRBasicBlock*, bool&)> checkSuccessors = [&](hir::HIRBasicBlock* block, bool& found) {
-            if (found) return;
-            if (block->hasBreakOrContinue) {
-                found = true;
-                return;
+
+        // Check if the body block itself ends with a terminator instruction
+        bool needsBranch = true;
+        if (!bodyBlock->instructions.empty()) {
+            auto lastOpcode = bodyBlock->instructions.back()->opcode;
+            if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
+                lastOpcode == hir::HIRInstruction::Opcode::Continue ||
+                lastOpcode == hir::HIRInstruction::Opcode::Return) {
+                needsBranch = false;
+                std::cerr << "DEBUG: Body block ends with terminator, not adding branch back to condition" << std::endl;
             }
-            for (const auto& succ : block->successors) {
-                checkSuccessors(succ.get(), found);
-            }
-        };
-        
-        checkSuccessors(bodyBlock, hasBreakOrContinue);
-        
-        // Only add branch back to condition if the body doesn't contain break/continue and doesn't end with a return
-        if (!hasBreakOrContinue && (bodyBlock->instructions.empty() || 
-            bodyBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return)) {
+        }
+
+        if (needsBranch) {
             std::cerr << "DEBUG: Creating branch back to condition" << std::endl;
             builder_->createBr(condBlock);
-        } else {
-            std::cerr << "DEBUG: Not creating branch back to condition because body or its successors contain break/continue or body ends with return" << std::endl;
         }
         
         // End block
@@ -1459,26 +1466,18 @@ public:
         builder_->setInsertPoint(bodyBlock);
         node.body->accept(*this);
         
-        // Check if the body or any of its successors contain any break or continue instructions
-        bool hasBreakOrContinue = bodyBlock->hasBreakOrContinue;
-        
-        // Check all successors of the body block
-        std::function<void(hir::HIRBasicBlock*, bool&)> checkSuccessors = [&](hir::HIRBasicBlock* block, bool& found) {
-            if (found) return;
-            if (block->hasBreakOrContinue) {
-                found = true;
-                return;
+        // Check if the body block itself ends with a terminator instruction
+        bool needsBranch = true;
+        if (!bodyBlock->instructions.empty()) {
+            auto lastOpcode = bodyBlock->instructions.back()->opcode;
+            if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
+                lastOpcode == hir::HIRInstruction::Opcode::Continue ||
+                lastOpcode == hir::HIRInstruction::Opcode::Return) {
+                needsBranch = false;
             }
-            for (const auto& succ : block->successors) {
-                checkSuccessors(succ.get(), found);
-            }
-        };
-        
-        checkSuccessors(bodyBlock, hasBreakOrContinue);
-        
-        // Only add branch to condition if the body doesn't contain break/continue and doesn't end with a return
-        if (!hasBreakOrContinue && (bodyBlock->instructions.empty() || 
-            bodyBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return)) {
+        }
+
+        if (needsBranch) {
             // Branch to condition after body
             builder_->createBr(condBlock);
         }
@@ -1546,28 +1545,24 @@ public:
         std::cerr << "DEBUG: Executing for body" << std::endl;
         node.body->accept(*this);
         std::cerr << "DEBUG: For body executed" << std::endl;
-        
-        // Check if the body or any of its successors contain any break or continue instructions
-        bool hasBreakOrContinue = bodyBlock->hasBreakOrContinue;
-        
-        // Check all successors of the body block
-        std::function<void(hir::HIRBasicBlock*, bool&)> checkSuccessors = [&](hir::HIRBasicBlock* block, bool& found) {
-            if (found) return;
-            if (block->hasBreakOrContinue) {
-                found = true;
-                return;
+
+        // Check if the body block itself ends with a terminator instruction
+        // (break, continue, or return). If it does, don't add a branch.
+        // Otherwise, always add the branch to update block to maintain proper CFG.
+        bool needsBranch = true;
+        if (!bodyBlock->instructions.empty()) {
+            auto lastOpcode = bodyBlock->instructions.back()->opcode;
+            if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
+                lastOpcode == hir::HIRInstruction::Opcode::Continue ||
+                lastOpcode == hir::HIRInstruction::Opcode::Return) {
+                needsBranch = false;
+                std::cerr << "DEBUG: Body block ends with terminator, not adding branch to update" << std::endl;
             }
-            for (const auto& succ : block->successors) {
-                checkSuccessors(succ.get(), found);
-            }
-        };
-        
-        checkSuccessors(bodyBlock, hasBreakOrContinue);
-        
-        // Only add branch to update block if the body doesn't contain break/continue and doesn't end with a return
-        if (!hasBreakOrContinue && (bodyBlock->instructions.empty() || 
-            bodyBlock->instructions.back()->opcode != hir::HIRInstruction::Opcode::Return)) {
-            // Branch to update block
+        }
+
+        if (needsBranch) {
+            // Always branch to update block to maintain proper CFG and enable loop detection
+            std::cerr << "DEBUG: Creating branch from body to update block" << std::endl;
             builder_->createBr(updateBlock);
         }
         
