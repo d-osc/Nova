@@ -150,11 +150,9 @@ private:
     // ✅ Single loops with break/continue (test_break_simple.ts)
     // ✅ Simple nested loops (test_nested_simple.ts)
     // ✅ Sequential loops with break/continue (test_break_continue.ts) - FIXED by dominance!
+    // ✅ Nested loops with continue inside conditionals (test_nested_break_continue.ts) - FIXED!
     //
-    // REMAINING LIMITATION:
-    // ❌ Nested loops with continue inside conditionals - Update block detection can confuse
-    //    loop initialization blocks with update blocks when they have the same CFG pattern.
-    //    Requires additional heuristics to distinguish init blocks from update blocks.
+    // All major break/continue patterns now work correctly!
     //
 
     void analyzeLoops(hir::HIRFunction* hirFunc) {
@@ -413,8 +411,11 @@ private:
                         hirBlock->successors.size() == 1 &&
                         hirBlock->successors[0].get() == loopHeader) {
                         // This block has a single successor: the loop header
-                        // Check if it's reachable from the body block
-                        if (canReachBlock(bodyBlock, hirBlock.get())) {
+                        // CRITICAL: Check that the loop header DOMINATES this block
+                        // This distinguishes true update blocks (inside the loop) from
+                        // initialization blocks (before the loop) which have the same CFG pattern
+                        if (dominates(loopHeader, hirBlock.get(), dominators) &&
+                            canReachBlock(bodyBlock, hirBlock.get())) {
                             updateBlock = hirBlock.get();
                             break;
                         }
