@@ -239,9 +239,10 @@ class MIRGetElementRValue : public MIRRValue {
 public:
     MIROperandPtr array;   // The array operand
     MIROperandPtr index;   // The index operand
+    bool isFieldAccess;    // true for struct field access (arr.length), false for array element access (arr[0])
 
-    MIRGetElementRValue(MIROperandPtr arr, MIROperandPtr idx)
-        : array(arr), index(idx) {
+    MIRGetElementRValue(MIROperandPtr arr, MIROperandPtr idx, bool isField = false)
+        : array(arr), index(idx), isFieldAccess(isField) {
         kind = Kind::Ref;  // Use Ref kind temporarily (will add GetElement kind later)
     }
 

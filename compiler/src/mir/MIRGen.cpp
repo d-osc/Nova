@@ -815,9 +815,11 @@ private:
                     return builder_->createBoolConstant(
                         std::get<bool>(constant->value), mirType);
 
-                case hir::HIRConstant::Kind::String:
-                    return builder_->createStringConstant(
-                        std::get<std::string>(constant->value), mirType);
+                case hir::HIRConstant::Kind::String: {
+                    std::string strValue = std::get<std::string>(constant->value);
+                    std::cerr << "DEBUG MIRGen: Translating string constant: " << strValue << std::endl;
+                    return builder_->createStringConstant(strValue, mirType);
+                }
 
                 case hir::HIRConstant::Kind::Null:
                     return builder_->createNullConstant(mirType);
@@ -976,29 +978,34 @@ private:
     void generateCall(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
         if (hirInst->operands.empty()) return;
-        
-        
-        
+
+        std::cerr << "DEBUG MIRGen: Processing HIR Call instruction with "
+                  << hirInst->operands.size() << " operands" << std::endl;
+
         // First operand is the function name (string constant)
         auto funcOperand = translateOperand(hirInst->operands[0].get());
+
+        std::cerr << "DEBUG MIRGen: Translated function operand" << std::endl;
         
         std::vector<MIROperandPtr> args;
         for (size_t i = 1; i < hirInst->operands.size(); ++i) {
             args.push_back(translateOperand(hirInst->operands[i].get()));
         }
         
-        
-        
+        std::cerr << "DEBUG MIRGen: Collected " << args.size() << " arguments" << std::endl;
+
         auto dest = getOrCreatePlace(hirInst);
-        
+
         // Create a new block for the continuation after the call
         auto contBlock = builder_->createBasicBlock("call_cont");
-        
+
+        std::cerr << "DEBUG MIRGen: Creating MIR Call terminator" << std::endl;
+
         // Create the call terminator with destination and continuation block
         builder_->createCall(funcOperand, args, dest, contBlock.get(), nullptr);
-        
-        
-        
+
+        std::cerr << "DEBUG MIRGen: MIR Call created successfully" << std::endl;
+
         // Switch to the continuation block
         builder_->setInsertPoint(contBlock.get());
     }
@@ -1213,8 +1220,8 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         auto fieldIndex = translateOperand(hirInst->operands[1].get());
         auto dest = getOrCreatePlace(hirInst);
 
-        // Create GetElement rvalue for field access (similar to array indexing)
-        auto getFieldRValue = std::make_shared<MIRGetElementRValue>(structPtr, fieldIndex);
+        // Create GetElement rvalue for field access with isFieldAccess=true
+        auto getFieldRValue = std::make_shared<MIRGetElementRValue>(structPtr, fieldIndex, true);
 
         builder_->createAssign(dest, getFieldRValue);
     }
