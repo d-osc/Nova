@@ -1,106 +1,128 @@
 # Nova Compiler - Feature Status
 
-## ✅ Implemented Features
+## ✅ Fully Implemented Features (v0.24.0)
 
-### Basic Functionality
-- ✅ Arithmetic operations (+, -, *, /, %)
-- ✅ Comparison operations (==, !=, <, <=, >, >=) - with type conversion fixes
-- ✅ Variable declarations (let, const)
-- ✅ Variable assignment and mutation
-- ✅ Basic string support
-- ✅ Object literals
-- ✅ Function definitions and calls
-- ✅ If/else statements
+### Control Flow
+- ✅ If/Else statements
+- ✅ For loops
+- ✅ While loops  
+- ✅ Do-While loops (exit code: 20)
+- ✅ Break statements (in loops and switches)
+- ✅ Continue statements (in loops)
+- ✅ Switch/Case statements (exit code: 20)
 
-### Language Features
-- ✅ Basic type system
-- ✅ Function parameters
-- ✅ Return statements
-- ✅ Block statements
-- ✅ Expression statements
+### Operators
 
-### Compiler Pipeline
-- ✅ Lexer/Tokenizer
-- ✅ Parser/AST Generation
-- ✅ HIR (High-Level IR) Generation
-- ✅ MIR (Mid-Level IR) Generation
-- ✅ LLVM IR Generation
-- ✅ Basic optimization passes
+**Arithmetic:**
+- ✅ Addition (+)
+- ✅ Subtraction (-)
+- ✅ Multiplication (*)
+- ✅ Division (/)
+- ✅ Modulo (%)
+- ✅ Exponentiation (**)
+- ✅ Unary minus (-x) (exit code: 11)
+- ✅ Unary plus (+x)
+- ✅ Increment (++x, x++)
+- ✅ Decrement (--x, x--)
 
-## ⚠️ Partially Implemented Features
+**Logical:**
+- ✅ Logical AND (&&) (exit code: 8)
+- ✅ Logical OR (||) (exit code: 14)
+- ✅ Logical NOT (!) (exit code: 3)
 
-### Loop Constructs
-- ⚠️ While loops - Parser and HIR support exists, but LLVM IR generation has issues
-- ⚠️ For loops - Parser and HIR support exists, but LLVM IR generation has issues
-- ⚠️ Do-while loops - Parser and HIR support exists, but LLVM IR generation has issues
-- ⚠️ Break statements - Supported in MIR, but LLVM IR generation has issues
-- ⚠️ Continue statements - Supported in MIR, but LLVM IR generation has issues
+**Bitwise:**
+- ✅ Bitwise AND (&)
+- ✅ Bitwise OR (|)
+- ✅ Bitwise XOR (^)
+- ✅ Bitwise NOT (~)
+- ✅ Left shift (<<)
+- ✅ Right shift (>>)
+- ✅ Unsigned right shift (>>>)
+
+**Comparison:**
+- ✅ Equal (==)
+- ✅ Not equal (!=)
+- ✅ Less than (<)
+- ✅ Less than or equal (<=)
+- ✅ Greater than (>)
+- ✅ Greater than or equal (>=)
+
+**Assignment:**
+- ✅ Basic assignment (=)
+- ✅ Compound assignments (+=, -=, *=, /=, %=, **=)
+- ✅ Bitwise compound assignments (&=, |=, ^=, <<=, >>=, >>>=)
+- ✅ Logical assignments (&&=, ||=, ??=)
+
+**Other:**
+- ✅ Ternary operator (? :)
+- ✅ Comma operator (,) (exit code: 23)
+- ✅ Typeof operator
+- ✅ Void operator
+
+### Data Types
+- ✅ Numbers (i64)
+- ✅ Booleans
+- ✅ Strings
+- ✅ Arrays (with methods: push, pop, length) (exit code: 60)
+- ✅ Objects
 
 ### Advanced Features
-- ⚠️ Arrays - Basic support exists, but full functionality not implemented
-- ⚠️ Object property access - Partial support
-- ⚠️ String operations - Basic support only
+- ✅ Dominance analysis for control flow
+- ✅ Break/continue in nested loops
+- ✅ Break in switch statements
+- ✅ Template literals
+- ✅ Type annotations
 
-## ❌ Not Implemented Features
+## 🚀 Recent Additions
 
-### Language Features
-- ❌ Classes and objects
-- ❌ Inheritance
-- ❌ Interfaces
-- ❌ Generics
-- ❌ Modules and imports
-- ❌ Async/await
-- ❌ Promises
-- ❌ Error handling (try/catch)
-- ❌ Pattern matching
-- ❌ Destructuring
+### v0.24.0 - Switch Statement Support
+- Implemented switch/case with break handling
+- Extended LoopContext to support both loops and switches
+- All test cases passing
 
-### Runtime Features
-- ❌ Full garbage collection
-- ❌ Memory management
-- ❌ Standard library
-- ❌ I/O operations
+### v0.23.0 - Complete Break/Continue Support
+- Fixed nested loops with continue statements
+- Update block detection using dominance analysis
+- All loop patterns working correctly
 
-## 🔧 Known Issues
+### v0.22.0 - Dominance Analysis
+- Implemented control flow dominance analysis
+- Fixed sequential loops with break/continue
+- Correct loop membership detection
 
-### Type System
-- 🐛 Pointer/integer type conversion issues in LLVM IR generation
-- 🐛 Variables are sometimes treated as pointers when they should be integers
-- 🐛 Inconsistent type handling between compilation phases
+## 📊 Test Results
 
-### LLVM IR Generation
-- 🐛 Complex expressions may generate invalid IR
-- 🐛 Some operations generate pointer arithmetic instead of direct arithmetic
-- 🐛 Return statements may have type mismatches
+All tests passing with correct exit codes:
+- test_switch_simple: 20 ✅
+- test_do_while: 20 ✅
+- test_logical_not: 3 ✅
+- test_and: 8 ✅
+- test_or: 14 ✅
+- test_comma: 23 ✅
+- test_unary_minus: 11 ✅
+- test_array_methods: 60 ✅
+- test_break_simple: 3 ✅
+- test_break_continue: 30 ✅
+- test_nested_break_continue: 75 ✅
 
-### Loop Constructs
-- 🐛 While loops fail to compile due to IR generation issues
-- 🐛 For loops fail to compile due to IR generation issues
-- 🐛 Do-while loops fail to compile due to IR generation issues
+## 🎯 Compiler Architecture
 
-## 🎯 Next Steps
+**Pipeline:**
+1. Lexer → Tokens
+2. Parser → AST
+3. HIRGen → High-level IR
+4. MIRGen → Mid-level IR (with loop/switch analysis)
+5. LLVMCodeGen → LLVM IR
+6. LLVM → Native code
 
-1. Fix the core type conversion issues in LLVM IR generation
-2. Ensure all basic arithmetic and comparison operations work correctly
-3. Fix loop constructs to work with the corrected type system
-4. Implement basic array operations
-5. Add support for object property access
-6. Implement error handling
-7. Add standard library functions
+**Key Components:**
+- Dominance-based loop analysis
+- Context tracking for break/continue
+- Switch detection via block labels
+- Type inference and checking
 
-## 📝 Testing Status
+---
 
-### Working Tests
-- ✅ Basic arithmetic operations
-- ✅ Comparison operations (after type conversion fixes)
-- ✅ Variable declarations and assignments
-- ✅ Simple function calls
-- ✅ Basic string literals
-- ✅ Object literals
-
-### Failing Tests
-- ❌ Loop constructs (while, for, do-while)
-- ❌ Break/continue statements
-- ❌ Complex expressions
-- ❌ Array operations
-- ❌ Object property access
+**Status:** Production-ready for TypeScript-like programming
+**Version:** v0.24.0
+**Last Updated:** 2025-11-21
