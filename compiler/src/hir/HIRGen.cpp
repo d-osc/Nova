@@ -402,6 +402,95 @@ public:
                     lastValue_ = builder_->createCall(runtimeFunc, args, "str_method");
                     return;
                 }
+
+                // Check if object is an array type
+                bool isArrayMethod = false;
+                if (object && object->type) {
+                    if (object->type->kind == hir::HIRType::Kind::Array) {
+                        isArrayMethod = true;
+                    } else if (object->type->kind == hir::HIRType::Kind::Pointer) {
+                        auto* ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get());
+                        if (ptrType && ptrType->pointeeType && ptrType->pointeeType->kind == hir::HIRType::Kind::Array) {
+                            isArrayMethod = true;
+                        }
+                    }
+                }
+
+                if (isArrayMethod) {
+                    std::cerr << "DEBUG HIRGen: Detected array method call: " << methodName << std::endl;
+
+                    // Map array method names to runtime function names
+                    std::string runtimeFuncName;
+                    std::vector<HIRTypePtr> paramTypes;
+                    HIRTypePtr returnType;
+                    bool hasReturnValue = false;
+
+                    // Setup function signature based on method name
+                    // Using value-based array functions for primitive type arrays
+                    if (methodName == "push") {
+                        runtimeFuncName = "nova_value_array_push";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                        hasReturnValue = false;
+                    } else if (methodName == "pop") {
+                        runtimeFuncName = "nova_value_array_pop";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64
+                        hasReturnValue = true;
+                    } else if (methodName == "shift") {
+                        runtimeFuncName = "nova_value_array_shift";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64
+                        hasReturnValue = true;
+                    } else if (methodName == "unshift") {
+                        runtimeFuncName = "nova_value_array_unshift";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                        hasReturnValue = false;
+                    } else {
+                        std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
+                        lastValue_ = builder_->createIntConstant(0);
+                        return;
+                    }
+
+                    // Generate arguments
+                    std::vector<HIRValue*> args;
+                    args.push_back(object);  // First argument is the array itself
+                    for (auto& arg : node.arguments) {
+                        arg->accept(*this);
+                        args.push_back(lastValue_);
+                    }
+
+                    // Check if function already exists
+                    HIRFunction* runtimeFunc = nullptr;
+                    auto& functions = module_->functions;
+                    for (auto& func : functions) {
+                        if (func->name == runtimeFuncName) {
+                            runtimeFunc = func.get();
+                            break;
+                        }
+                    }
+
+                    // Create function if it doesn't exist
+                    if (!runtimeFunc) {
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                        HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        runtimeFunc = funcPtr.get();
+                        std::cerr << "DEBUG HIRGen: Created external array function: " << runtimeFuncName << std::endl;
+                    }
+
+                    // Create call to runtime function
+                    if (hasReturnValue) {
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "array_method");
+                    } else {
+                        builder_->createCall(runtimeFunc, args, "array_method");
+                        lastValue_ = builder_->createIntConstant(0); // void methods return 0
+                    }
+                    return;
+                }
             }
         }
 

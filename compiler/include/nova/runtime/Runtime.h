@@ -84,7 +84,7 @@ void collect_garbage();
 void add_root(void* ptr);
 void remove_root(void* ptr);
 
-// Array functions
+// Array functions (pointer-based, for dynamic objects)
 Array* create_array(int64 initial_capacity = 8);
 void resize_array(Array* array, int64 new_capacity);
 void* array_get(Array* array, int64 index);
@@ -92,6 +92,28 @@ void array_set(Array* array, int64 index, void* value);
 int64 array_length(Array* array);
 void array_push(Array* array, void* value);
 void* array_pop(Array* array);
+void* array_shift(Array* array);
+void array_unshift(Array* array, void* value);
+
+// Value array functions (value-based, for primitive types)
+// These work directly with int64 values instead of pointers
+struct ValueArray {
+    ObjectHeader header;
+    int64 length;
+    int64 capacity;
+    int64* elements;  // Direct value storage, not pointers
+};
+
+ValueArray* create_value_array(int64 initial_capacity);
+ValueArray* convert_to_value_array(void* metadata_ptr);
+void resize_value_array(ValueArray* array, int64 new_capacity);
+int64 value_array_get(ValueArray* array, int64 index);
+void value_array_set(ValueArray* array, int64 index, int64 value);
+int64 value_array_length(ValueArray* array);
+void value_array_push(ValueArray* array, int64 value);
+int64 value_array_pop(ValueArray* array);
+int64 value_array_shift(ValueArray* array);
+void value_array_unshift(ValueArray* array, int64 value);
 
 // String functions
 String* create_string(const char* data);
