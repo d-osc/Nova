@@ -2220,7 +2220,8 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
 
     // Check if the allocaInst (variable's alloca) stores an array metadata struct
     // Metadata struct has type: { [24 x i8], i64, i64, ptr }
-    // If so, extract the `elements` pointer (field 3) from loadedArrayPtr
+    // Fields: 0=header, 1=length, 2=capacity, 3=elements
+    bool isMetadataFieldAccess = false;
     if (allocaInst) {
         llvm::Type* allocatedType = allocaInst->getAllocatedType();
         // Check if allocated type is a pointer to struct
@@ -2228,9 +2229,6 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             std::cerr << "DEBUG LLVM: Allocated type is pointer, checking for metadata struct pattern" << std::endl;
             // The variable holds a pointer to metadata struct
             // loadedArrayPtr is the loaded pointer value (points to metadata struct)
-            // We need to check the type of what loadedArrayPtr points to
-            // Try to find metadata struct by checking if we can GEP with 4 fields
-            // Create a test GEP to field 3 and see if it works
 
             // Try to create struct type { [24 x i8], i64, i64, ptr } to match
             llvm::Type* i8Type = llvm::Type::getInt8Ty(*context);
@@ -2243,19 +2241,47 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             metadataFields.push_back(ptrType);
             llvm::StructType* expectedMetadataType = llvm::StructType::get(*context, metadataFields);
 
-            std::cerr << "DEBUG LLVM: Attempting to extract elements pointer from metadata struct" << std::endl;
+            // Check if we're accessing a metadata struct field (0, 1, 2) or array elements (index >= 3)
+            if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+                unsigned fieldIndex = constIndex->getZExtValue();
 
-            // Extract the `elements` field (field 3) from loadedArrayPtr
-            llvm::Value* elementsFieldPtr = builder->CreateStructGEP(
-                expectedMetadataType,
-                loadedArrayPtr,
-                3,
-                "meta_elements_field");
+                if (fieldIndex < 3) {
+                    // Accessing metadata fields directly (header=0, length=1, capacity=2)
+                    std::cerr << "DEBUG LLVM: Accessing metadata struct field " << fieldIndex << " directly" << std::endl;
+                    isMetadataFieldAccess = true;
 
-            // Load the elements pointer
-            actualPtr = builder->CreateLoad(ptrType, elementsFieldPtr, "elements_ptr_load");
+                    // Access the struct field directly without extracting elements pointer
+                    llvm::Value* fieldPtr = builder->CreateStructGEP(
+                        expectedMetadataType,
+                        loadedArrayPtr,
+                        fieldIndex,
+                        "meta_field_ptr");
 
-            std::cerr << "DEBUG LLVM: Extracted elements pointer from metadata" << std::endl;
+                    // Get the field type
+                    llvm::Type* fieldType = expectedMetadataType->getElementType(fieldIndex);
+
+                    // Load the field value
+                    llvm::Value* fieldValue = builder->CreateLoad(fieldType, fieldPtr, "field_value");
+
+                    std::cerr << "DEBUG LLVM: Loaded metadata field " << fieldIndex << std::endl;
+                    return fieldValue;
+                } else {
+                    // Accessing array elements - extract elements pointer
+                    std::cerr << "DEBUG LLVM: Attempting to extract elements pointer from metadata struct" << std::endl;
+
+                    // Extract the `elements` field (field 3) from loadedArrayPtr
+                    llvm::Value* elementsFieldPtr = builder->CreateStructGEP(
+                        expectedMetadataType,
+                        loadedArrayPtr,
+                        3,
+                        "meta_elements_field");
+
+                    // Load the elements pointer
+                    actualPtr = builder->CreateLoad(ptrType, elementsFieldPtr, "elements_ptr_load");
+
+                    std::cerr << "DEBUG LLVM: Extracted elements pointer from metadata" << std::endl;
+                }
+            }
         }
     }
 

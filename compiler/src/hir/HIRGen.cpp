@@ -727,9 +727,12 @@ public:
 
                         if (arrayType) {
                             std::cerr << "DEBUG HIRGen: Accessing built-in array.length property" << std::endl;
-                            int64_t length = static_cast<int64_t>(arrayType->size);
-                            std::cerr << "DEBUG HIRGen: Array has compile-time length = " << length << std::endl;
-                            lastValue_ = builder_->createIntConstant(length);
+
+                            // Generate code to read length from metadata struct at runtime
+                            // Metadata struct: { [24 x i8], i64 length, i64 capacity, ptr elements }
+                            // Field index 1 is the length
+                            std::cerr << "DEBUG HIRGen: Generating GetField to read length from metadata" << std::endl;
+                            lastValue_ = builder_->createGetField(object, 1);
                         }
                     } else {
                         // Property not found, return 0 as placeholder
