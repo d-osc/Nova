@@ -339,12 +339,12 @@ int LLVMCodeGen::executeMain() {
         return 1;
     }
     
-    // Link object file to executable
+    // Link object file to executable (including novacore runtime library)
     std::string linkCmd;
 #ifdef _WIN32
-    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" -lmsvcrt -lkernel32";
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"build/Release/novacore.lib\" -lmsvcrt -lkernel32";
 #else
-    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" -lc";
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"build/Release/libnovacore.a\" -lc -lstdc++";
 #endif
     std::cerr << "DEBUG LLVM: Running: " << linkCmd << std::endl;
     int linkResult = system(linkCmd.c_str());

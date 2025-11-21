@@ -101,14 +101,14 @@ Nova compiler currently supports **core language features** but lacks many advan
 - ❌ Spread operator [...arr] - not implemented
 - ❌ Destructuring [a, b] = arr - not implemented
 
-### Strings (30%)
+### Strings (40%)
 - ✅ String literals "hello"
 - ✅ Template literals \`hello ${name}\`
 - ✅ String concatenation with +
 - ✅ String.length property
-- ⚠️ String.substring() - declared but runtime missing
-- ⚠️ String.indexOf() - declared but runtime missing
-- ⚠️ String.charAt() - declared but runtime missing
+- ✅ String.substring() - working (exit code: 42)
+- ✅ String.indexOf() - working (exit code: 42)
+- ✅ String.charAt() - working (exit code: 42)
 - ❌ String.slice() - not implemented
 - ❌ String.split() - not implemented
 - ❌ String.replace() - not implemented
@@ -178,16 +178,18 @@ Nova compiler currently supports **core language features** but lacks many advan
 
 ## 🔧 Known Issues
 
-### String Methods Runtime Missing
-**Status:** ⚠️ Partially Implemented
-**Issue:** String methods are recognized by compiler but lack runtime implementation:
-- `nova_string_substring`
-- `nova_string_indexOf`
-- `nova_string_charAt`
+### String Methods Runtime ~~Missing~~ FIXED ✅
+**Status:** ✅ Fixed in v0.26.0
+**Issue:** String methods were recognized by compiler but lacked runtime linking.
 
-**Error:** Linker fails with "unresolved external symbol"
+**Solution:** Modified LLVMCodeGen to link against novacore.lib which contains all runtime functions.
 
-**Impact:** Cannot use string methods beyond basic concatenation and length.
+**Working methods:**
+- ✅ `nova_string_substring`
+- ✅ `nova_string_indexOf`
+- ✅ `nova_string_charAt`
+
+**Test:** test_string_methods.ts returns 42 ✅
 
 ---
 
@@ -201,7 +203,7 @@ Nova compiler currently supports **core language features** but lacks many advan
 | Functions | Basic | Advanced | 30% |
 | Classes | Basic | Advanced | 60% |
 | Arrays | 5 methods | 20+ methods | 20% |
-| Strings | 1 method | 15+ methods | 10% |
+| Strings | 4 methods | 12+ methods | 40% |
 | Objects | Basic | Advanced | 40% |
 | Error Handling | None | All | 0% |
 | Async | None | All | 0% |
@@ -232,10 +234,11 @@ Nova compiler currently supports **core language features** but lacks many advan
 ## 🚀 Roadmap Priority
 
 ### High Priority (Essential for usability):
-1. **String methods runtime** - substring, indexOf, charAt, slice
+1. ~~**String methods runtime**~~ ✅ DONE - substring, indexOf, charAt working
 2. **Array methods** - map, filter, reduce, forEach
 3. **Error handling** - try/catch/finally
 4. **Null/undefined** - proper handling
+5. **More string methods** - slice, split, replace, toLowerCase, toUpperCase
 
 ### Medium Priority (Improve compatibility):
 5. **Class inheritance** - extends, super
