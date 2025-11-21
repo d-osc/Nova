@@ -1680,8 +1680,111 @@ public:
     }
     
     void visit(ForOfStmt& node) override {
-        (void)node;
-        // for-of loop
+        std::cerr << "DEBUG: Generating for-of loop" << std::endl;
+
+        // For-of loop: for (let item of array) { body }
+        // Desugar to:
+        //   let __iter_idx = 0;
+        //   while (__iter_idx < array.length) {
+        //       let item = array[__iter_idx];
+        //       body;
+        //       __iter_idx = __iter_idx + 1;
+        //   }
+
+        // Create basic blocks
+        auto* initBlock = currentFunction_->createBasicBlock("forof.init").get();
+        auto* condBlock = currentFunction_->createBasicBlock("forof.cond").get();
+        auto* bodyBlock = currentFunction_->createBasicBlock("forof.body").get();
+        auto* updateBlock = currentFunction_->createBasicBlock("forof.update").get();
+        auto* endBlock = currentFunction_->createBasicBlock("forof.end").get();
+
+        // Branch to init block
+        builder_->createBr(initBlock);
+
+        // Init block: evaluate the iterable expression and create iterator index
+        builder_->setInsertPoint(initBlock);
+        std::cerr << "DEBUG: ForOf - evaluating iterable" << std::endl;
+        node.right->accept(*this);  // Evaluate array expression
+        auto* arrayValue = lastValue_;
+
+        // Create iterator index variable: let __iter_idx = 0
+        auto* indexType = new hir::HIRType(hir::HIRType::Kind::I64);
+        auto* indexVar = builder_->createAlloca(indexType, "__iter_idx");
+        auto* zeroConst = builder_->createIntConstant(0);
+        builder_->createStore(zeroConst, indexVar);
+
+        // Branch to condition
+        builder_->createBr(condBlock);
+
+        // Condition block: __iter_idx < array.length
+        builder_->setInsertPoint(condBlock);
+        std::cerr << "DEBUG: ForOf - checking condition" << std::endl;
+
+        // Load current index
+        auto* currentIndex = builder_->createLoad(indexVar);
+
+        // Get array.length
+        auto* arrayLength = builder_->createGetField(arrayValue, 1);  // field 1 is length
+
+        // Compare: __iter_idx < array.length
+        auto* condition = builder_->createLt(currentIndex, arrayLength);
+        builder_->createCondBr(condition, bodyBlock, endBlock);
+
+        // Body block: let item = array[__iter_idx]; body;
+        builder_->setInsertPoint(bodyBlock);
+        std::cerr << "DEBUG: ForOf - executing body" << std::endl;
+
+        // Load current index for array access
+        auto* indexForAccess = builder_->createLoad(indexVar);
+
+        // Get current element: array[__iter_idx]
+        auto* currentElement = builder_->createGetElement(arrayValue, indexForAccess, "iter_elem");
+
+        // Declare loop variable and assign current element
+        // node.left is the variable name (e.g., "value" in "for (let value of arr)")
+        auto* varType = new hir::HIRType(hir::HIRType::Kind::I64);
+        auto* loopVar = builder_->createAlloca(varType, node.left);
+
+        // Store the current element in the loop variable
+        builder_->createStore(currentElement, loopVar);
+
+        // Track the variable
+        symbolTable_[node.left] = loopVar;
+
+        // Execute loop body
+        node.body->accept(*this);
+
+        // Check if body ends with terminator
+        bool needsBranch = true;
+        if (!bodyBlock->instructions.empty()) {
+            auto lastOpcode = bodyBlock->instructions.back()->opcode;
+            if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
+                lastOpcode == hir::HIRInstruction::Opcode::Continue ||
+                lastOpcode == hir::HIRInstruction::Opcode::Return) {
+                needsBranch = false;
+            }
+        }
+
+        if (needsBranch) {
+            builder_->createBr(updateBlock);
+        }
+
+        // Update block: __iter_idx = __iter_idx + 1
+        builder_->setInsertPoint(updateBlock);
+        std::cerr << "DEBUG: ForOf - incrementing index" << std::endl;
+
+        auto* currentIndexForIncr = builder_->createLoad(indexVar);
+        auto* oneConst = builder_->createIntConstant(1);
+        auto* nextIndex = builder_->createAdd(currentIndexForIncr, oneConst);
+        builder_->createStore(nextIndex, indexVar);
+
+        // Branch back to condition
+        builder_->createBr(condBlock);
+
+        // End block
+        builder_->setInsertPoint(endBlock);
+
+        std::cerr << "DEBUG: ForOf loop generation completed" << std::endl;
     }
     
     void visit(ReturnStmt& node) override {
