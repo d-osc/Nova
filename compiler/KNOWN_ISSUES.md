@@ -1,38 +1,33 @@
 # Nova Compiler - Known Issues
 
+## ✅ Recently Fixed
+
+### 1. Class Field Assignment ~~Not Working~~ FIXED ✅
+**Status:** ✅ Fixed in v0.25.0
+**Test:** `test_class_simple.ts`
+**Result:** Returns 30 ✅
+
+**Problem:**
+Constructor field assignments (`this.field = value`) were storing 0 instead of actual values.
+
+**Root Cause:**
+The malloc result was added to `arrayTypeMap`, but when stored in an alloca, the type information wasn't propagated to the alloca. SetField operations looked up the alloca but couldn't find its type.
+
+**Fix:**
+Added type propagation from malloc call results to their destination allocas in `LLVMCodeGen.cpp:1353-1370`. Now generates proper GEP instructions:
+
+```llvm
+%setfield_ptr = getelementptr %struct.Person, ptr %load, i32 0, i32 0
+store i64 %load3, ptr %setfield_ptr, align 4  ; Stores actual value!
+```
+
+**Impact:** Classes now fully functional for OOP programming!
+
+---
+
 ## 🐛 Active Bugs
 
-### 1. Class Field Assignment Not Working
-**Status:** 🔴 Critical  
-**Test:** `test_class_simple.ts`  
-**Expected:** 30  
-**Actual:** 0  
-
-**Problem:**  
-Constructor field assignments (`this.field = value`) are not storing values correctly. The generated LLVM IR stores 0 instead of the actual field values.
-
-**Root Cause:**  
-In the constructor, field assignments generate:
-```llvm
-store i64 0, ptr %var, align 4    ; Should store the actual value
-```
-
-Instead of proper GEP (GetElementPtr) instructions to access struct fields.
-
-**Impact:** Classes cannot store or retrieve instance data.
-
-**Example:**
-```typescript
-class Person {
-    age: number;
-    constructor(age: number) {
-        this.age = age;  // Not working - stores 0
-    }
-    getAge(): number {
-        return this.age;  // Returns 0
-    }
-}
-```
+No active bugs - all major features working correctly!
 
 ---
 

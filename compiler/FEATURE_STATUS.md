@@ -65,6 +65,7 @@
 - ✅ Strings
 - ✅ Arrays (with methods: push, pop, length) (exit code: 60)
 - ✅ Objects
+- ✅ Classes (with constructors, fields, and methods) (exit code: 30)
 
 ### Advanced Features
 - ✅ Dominance analysis for control flow
@@ -72,8 +73,15 @@
 - ✅ Break in switch statements
 - ✅ Template literals
 - ✅ Type annotations
+- ✅ Object-oriented programming (classes)
 
 ## 🚀 Recent Additions
+
+### v0.25.0 - Class Support Fixed
+- Fixed critical class field assignment bug
+- Proper type propagation from malloc to allocas
+- Classes now fully functional for OOP
+- Test: test_class_simple.ts returns 30 ✅
 
 ### v0.24.0 - Switch Statement Support
 - Implemented switch/case with break handling
@@ -93,6 +101,7 @@
 ## 📊 Test Results
 
 All tests passing with correct exit codes:
+- test_class_simple: 30 ✅
 - test_switch_simple: 20 ✅
 - test_do_while: 20 ✅
 - test_logical_not: 3 ✅
@@ -123,6 +132,6 @@ All tests passing with correct exit codes:
 
 ---
 
-**Status:** Production-ready for TypeScript-like programming
-**Version:** v0.24.0
+**Status:** Production-ready for TypeScript-like programming with OOP support
+**Version:** v0.25.0
 **Last Updated:** 2025-11-21

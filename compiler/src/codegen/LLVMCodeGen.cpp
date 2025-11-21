@@ -1325,7 +1325,6 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 // Extract class name from "ClassName_constructor"
                                 size_t pos = currentFuncName.find("_constructor");
                                 std::string className = currentFuncName.substr(0, pos);
-                                std::cerr << "DEBUG LLVM: malloc in constructor for class: " << className << std::endl;
 
                                 // Find the struct type for this class
                                 std::string structName = "struct." + className;
@@ -1333,9 +1332,6 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 if (structType) {
                                     // Store the struct type for this malloc'd pointer
                                     arrayTypeMap[result] = structType;
-                                    std::cerr << "DEBUG LLVM: Stored struct type " << structName << " for malloc result" << std::endl;
-                                } else {
-                                    std::cerr << "DEBUG LLVM: WARNING - Could not find struct type: " << structName << std::endl;
                                 }
                             }
                         }
@@ -1349,11 +1345,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     if (it != valueMap.end() && llvm::isa<llvm::AllocaInst>(it->second)) {
                         // Store result in existing alloca
                         builder->CreateStore(result, it->second);
+
+                        // Propagate type information from result to alloca
+                        auto typeIt = arrayTypeMap.find(result);
+                        if (typeIt != arrayTypeMap.end()) {
+                            arrayTypeMap[it->second] = typeIt->second;
+                        }
                     } else {
                         // Create a new alloca for the call result
                         llvm::AllocaInst* resultAlloca = builder->CreateAlloca(result->getType(), nullptr, "call_result");
                         builder->CreateStore(result, resultAlloca);
                         valueMap[callTerm->destination.get()] = resultAlloca;
+
+                        // Propagate type information from result to alloca
+                        auto typeIt = arrayTypeMap.find(result);
+                        if (typeIt != arrayTypeMap.end()) {
+                            arrayTypeMap[resultAlloca] = typeIt->second;
+                        }
                     }
                 }
             }
@@ -1822,7 +1830,6 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
     // For structs: allocate struct on stack and initialize fields
     if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Struct) {
         size_t numFields = aggOp->elements.size();
-        std::cerr << "DEBUG LLVM: Generating struct with " << numFields << " fields" << std::endl;
 
         // Check if this is actually a SetField operation (encoded as struct with 3 elements)
         // elements[0] = struct pointer, elements[1] = field index, elements[2] = value to store
@@ -1833,7 +1840,6 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             llvm::Value* valueToStore = convertOperand(aggOp->elements[2].get());
 
             if (structPtr && indexValue && valueToStore) {
-
                 // This is a SetField operation - generate GEP + Store
                 // Get the struct type from arrayTypeMap
                 llvm::Value* basePtr = structPtr;
@@ -1858,7 +1864,6 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                     // If structPtr is an integer (i64), convert it to a pointer
                     llvm::Value* actualStructPtr = structPtr;
                     if (structPtr->getType()->isIntegerTy()) {
-                        std::cerr << "DEBUG LLVM: structPtr is i64, converting to pointer for SetField" << std::endl;
                         llvm::Type* ptrType = llvm::PointerType::getUnqual(structType);
                         actualStructPtr = builder->CreateIntToPtr(structPtr, ptrType, "struct_ptr_cast");
                     }
