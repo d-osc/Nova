@@ -135,24 +135,26 @@ private:
     
     // ==================== Loop Analysis ====================
     //
-    // CURRENT LIMITATIONS:
-    // - Works correctly for: single loops with break/continue, simple nested loops without conditionals
-    // - Does NOT work for: sequential loops with break/continue, nested loops with break/continue inside conditionals
+    // IMPLEMENTATION: This implementation uses DOMINANCE ANALYSIS for correct loop membership detection.
     //
-    // REASON: This implementation uses reachability analysis instead of dominance analysis.
-    // The condition `canReachBlock(loopHeader, block)` incorrectly considers blocks in subsequent
-    // sequential loops as part of earlier loops, because the earlier loop's exit leads to the next loop.
-    //
-    // REQUIRED FIX: Implement proper dominance analysis and loop nesting tree construction.
-    // A block belongs to the innermost loop whose header DOMINATES it (appears on all paths from entry).
+    // Algorithm:
+    // 1. Compute dominators for all blocks using iterative data-flow analysis
+    // 2. Identify loop headers using back-edge detection with UPDATE block filtering
+    // 3. Sort loops by nesting depth using dominance (not reachability)
+    // 4. Map blocks to loops using dominance criterion:
+    //    - A block belongs to a loop if the loop header DOMINATES it
+    //    - AND the loop header can REACH it
+    //    - AND it's not the exit block
     //
     // WORKING CASES:
-    // ✅ test_break_simple.ts - Single loop with break
-    // ✅ test_nested_simple.ts - Simple nested loops without break/continue in conditionals
+    // ✅ Single loops with break/continue (test_break_simple.ts)
+    // ✅ Simple nested loops (test_nested_simple.ts)
+    // ✅ Sequential loops with break/continue (test_break_continue.ts) - FIXED by dominance!
     //
-    // NON-WORKING CASES:
-    // ❌ test_break_continue.ts - Sequential loops (break in second loop jumps to first loop's exit)
-    // ❌ test_nested_break_continue.ts - Nested loops with break/continue in if-conditionals
+    // REMAINING LIMITATION:
+    // ❌ Nested loops with continue inside conditionals - Update block detection can confuse
+    //    loop initialization blocks with update blocks when they have the same CFG pattern.
+    //    Requires additional heuristics to distinguish init blocks from update blocks.
     //
 
     void analyzeLoops(hir::HIRFunction* hirFunc) {
@@ -160,6 +162,9 @@ private:
         currentLoopContext_ = nullptr;
         loopContextMap_.clear();
         blockToLoopMap_.clear();
+
+        // Compute dominators for all blocks
+        auto dominators = computeDominators(hirFunc);
 
         // Find loop headers by looking for blocks with conditional branches
         // where one of the successors is a predecessor of the current block
@@ -178,28 +183,26 @@ private:
             }
         }
 
-        // Sort loops by nesting: process innermost loops last so they can overwrite outer loop mappings
-        // A loop A is outer to loop B if A's header can reach B's header
-
-        // Build nesting relationships
+        // Sort loops by nesting using dominance
+        // A loop A is outer to loop B if A's header dominates B's header
         std::vector<std::pair<int, hir::HIRBasicBlock*>> sortedLoops; // (depth, header)
         for (auto* header : loopHeaders) {
-            // Count how many other loop headers this loop can reach (nesting depth)
+            // Count how many other loop headers dominate this header (nesting depth)
             int depth = 0;
             for (auto* otherHeader : loopHeaders) {
-                if (header != otherHeader && canReachBlock(header, otherHeader)) {
+                if (header != otherHeader && dominates(otherHeader, header, dominators)) {
                     depth++;
                 }
             }
             sortedLoops.push_back({depth, header});
         }
 
-        // Sort by depth (ascending): outer loops first, inner loops last
+        // Sort by depth (ascending): outer loops first (depth 0), inner loops last
         std::sort(sortedLoops.begin(), sortedLoops.end());
 
         // Process loops in order: outer first, then inner (so inner can overwrite)
         for (const auto& pair : sortedLoops) {
-            setupLoopContext(pair.second, hirFunc);
+            setupLoopContext(pair.second, hirFunc, dominators);
         }
     }
     
@@ -239,16 +242,16 @@ private:
     
     bool canReachBlock(hir::HIRBasicBlock* from, hir::HIRBasicBlock* to) {
         if (from == to) return true;
-        
+
         std::set<hir::HIRBasicBlock*> visited;
         std::queue<hir::HIRBasicBlock*> worklist;
         worklist.push(from);
         visited.insert(from);
-        
+
         while (!worklist.empty()) {
             auto* current = worklist.front();
             worklist.pop();
-            
+
             for (const auto& successor : current->successors) {
                 if (successor.get() == to) {
                     return true;
@@ -259,10 +262,99 @@ private:
                 }
             }
         }
-        
+
         return false;
     }
-    
+
+    // ==================== Dominance Analysis ====================
+
+    // Compute dominators for all blocks in the function
+    // Returns a map: block -> set of blocks that dominate it
+    std::unordered_map<hir::HIRBasicBlock*, std::set<hir::HIRBasicBlock*>>
+    computeDominators(hir::HIRFunction* hirFunc) {
+        std::unordered_map<hir::HIRBasicBlock*, std::set<hir::HIRBasicBlock*>> dominators;
+
+        if (hirFunc->basicBlocks.empty()) {
+            return dominators;
+        }
+
+        // Entry block is the first block
+        auto* entry = hirFunc->basicBlocks[0].get();
+
+        // Initialize: entry dominates only itself
+        dominators[entry].insert(entry);
+
+        // All other blocks are initially dominated by all blocks
+        std::set<hir::HIRBasicBlock*> allBlocks;
+        for (const auto& block : hirFunc->basicBlocks) {
+            allBlocks.insert(block.get());
+            if (block.get() != entry) {
+                dominators[block.get()] = allBlocks;
+            }
+        }
+
+        // Iterate until fixed point
+        bool changed = true;
+        while (changed) {
+            changed = false;
+
+            // For each block except entry
+            for (const auto& blockPtr : hirFunc->basicBlocks) {
+                auto* block = blockPtr.get();
+                if (block == entry) continue;
+
+                // If block has no predecessors, skip it
+                if (block->predecessors.empty()) {
+                    continue;
+                }
+
+                // New dominators = {block} ∪ (∩ dominators of all predecessors)
+                std::set<hir::HIRBasicBlock*> newDom;
+
+                // Start with dominators of first predecessor
+                bool firstPred = true;
+                for (const auto& predPtr : block->predecessors) {
+                    auto* pred = predPtr.get();
+
+                    if (firstPred) {
+                        newDom = dominators[pred];
+                        firstPred = false;
+                    } else {
+                        // Intersect with dominators of this predecessor
+                        std::set<hir::HIRBasicBlock*> intersection;
+                        std::set_intersection(
+                            newDom.begin(), newDom.end(),
+                            dominators[pred].begin(), dominators[pred].end(),
+                            std::inserter(intersection, intersection.begin())
+                        );
+                        newDom = intersection;
+                    }
+                }
+
+                // Add the block itself
+                newDom.insert(block);
+
+                // Check if dominators changed
+                if (newDom != dominators[block]) {
+                    dominators[block] = newDom;
+                    changed = true;
+                }
+            }
+        }
+
+        return dominators;
+    }
+
+    // Check if block A dominates block B
+    bool dominates(hir::HIRBasicBlock* a, hir::HIRBasicBlock* b,
+                   const std::unordered_map<hir::HIRBasicBlock*, std::set<hir::HIRBasicBlock*>>& dominators) {
+        auto it = dominators.find(b);
+        if (it == dominators.end()) {
+            return false;
+        }
+        return it->second.find(a) != it->second.end();
+    }
+
     // Find which loop (if any) the given HIR block belongs to
     // Returns the loop header's context, or nullptr if not in a loop
     std::shared_ptr<LoopContext> findContainingLoop(hir::HIRBasicBlock* block) {
@@ -274,7 +366,8 @@ private:
         return nullptr;
     }
 
-    void setupLoopContext(hir::HIRBasicBlock* loopHeader, hir::HIRFunction* hirFunc) {
+    void setupLoopContext(hir::HIRBasicBlock* loopHeader, hir::HIRFunction* hirFunc,
+                         const std::unordered_map<hir::HIRBasicBlock*, std::set<hir::HIRBasicBlock*>>& dominators) {
         // Create a new loop context
         auto loopContext = std::make_shared<LoopContext>();
 
@@ -342,7 +435,7 @@ private:
                 loopContext->continueTarget = blockMap_[loopHeader];
             }
         }
-        
+
         // Set the parent context
         loopContext->parent = currentLoopContext_;
 
@@ -350,7 +443,10 @@ private:
         loopContextMap_[loopHeader] = loopContext;
 
         // Find all blocks that belong to this loop and map them to this context
-        // A block belongs to a loop if the loop header can reach it AND it's not the exit block
+        // Using DOMINANCE ANALYSIS: A block belongs to a loop if:
+        // 1. The loop header DOMINATES it (header is on all paths from entry to block)
+        // 2. The loop header can REACH it (block is reachable in control flow)
+        // 3. It's not the exit block (blocks after the loop)
 
         // Get the exit block (the successor that doesn't loop back)
         hir::HIRBasicBlock* exitBlock = nullptr;
@@ -366,11 +462,16 @@ private:
 
         for (const auto& hirBlock : hirFunc->basicBlocks) {
             hir::HIRBasicBlock* block = hirBlock.get();
+
             // A block is in the loop if:
-            // 1. The loop header can reach it
-            // 2. It's not the exit block (blocks after the loop)
-            // 3. It's not another loop's header (nested loops should be separate)
-            if (block != exitBlock && canReachBlock(loopHeader, block)) {
+            // 1. The loop header dominates it (NEW: using dominance analysis)
+            // 2. The loop header can reach it
+            // 3. It's not the exit block
+            // 4. It's not another loop's header (nested loops should be separate)
+            if (block != exitBlock &&
+                dominates(loopHeader, block, dominators) &&
+                canReachBlock(loopHeader, block)) {
+
                 // Check if this block is a loop header itself
                 bool isOtherLoopHeader = (block != loopHeader) &&
                                         (loopContextMap_.find(block) != loopContextMap_.end());
