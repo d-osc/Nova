@@ -9,13 +9,15 @@ namespace nova::mir {
 
 // ==================== MIR Generator Implementation ====================
 
-// Loop context structure for tracking break/continue targets
+// Loop/Switch context structure for tracking break/continue targets
+// Can represent both loops (with continueTarget) and switches (continueTarget = nullptr)
 struct LoopContext {
     MIRBasicBlock* breakTarget;    // Target for break statements
-    MIRBasicBlock* continueTarget; // Target for continue statements
-    std::shared_ptr<LoopContext> parent; // Parent loop context (for nested loops)
-    
-    LoopContext() : breakTarget(nullptr), continueTarget(nullptr), parent(nullptr) {}
+    MIRBasicBlock* continueTarget; // Target for continue statements (null for switches)
+    std::shared_ptr<LoopContext> parent; // Parent context (for nested loops/switches)
+    bool isSwitch;                 // True if this is a switch context, false if loop
+
+    LoopContext() : breakTarget(nullptr), continueTarget(nullptr), parent(nullptr), isSwitch(false) {}
 };
 
 class MIRGenerator {
@@ -495,6 +497,48 @@ private:
         return canReachBlock(block, loopHeader);
     }
 
+    // ==================== Switch Analysis ====================
+    //
+    // Analyze switch statements to set up break contexts.
+    // Switch statements in HIR are represented as if-else chains with a "switch.end" block.
+    // We need to identify these patterns and set up break targets.
+
+    void analyzeSwitches(hir::HIRFunction* hirFunc) {
+        // Find all switch.end blocks
+        std::vector<hir::HIRBasicBlock*> switchEndBlocks;
+        for (const auto& hirBlock : hirFunc->basicBlocks) {
+            if (hirBlock->label.find("switch.end") != std::string::npos) {
+                switchEndBlocks.push_back(hirBlock.get());
+            }
+        }
+
+        // For each switch.end block, set up switch context
+        for (auto* switchEndBlock : switchEndBlocks) {
+            auto switchContext = std::make_shared<LoopContext>();
+            switchContext->breakTarget = blockMap_[switchEndBlock];
+            switchContext->continueTarget = nullptr;  // Switches don't have continue
+            switchContext->isSwitch = true;
+            switchContext->parent = currentLoopContext_;  // Switches can be nested in loops
+
+            // Find all blocks that belong to this switch by looking for:
+            // Blocks with "case.then" or "case.else" in their labels
+            for (const auto& hirBlock : hirFunc->basicBlocks) {
+                // Skip the switch.end block itself
+                if (hirBlock.get() == switchEndBlock) {
+                    continue;
+                }
+
+                // Include blocks that are part of the switch construct
+                if (hirBlock->label.find("case.") != std::string::npos) {
+                    // Only add if not already in a more nested context
+                    if (blockToLoopMap_.find(hirBlock.get()) == blockToLoopMap_.end()) {
+                        blockToLoopMap_[hirBlock.get()] = switchContext;
+                    }
+                }
+            }
+        }
+    }
+
 // ==================== Function Translation ====================
     
     void generateFunction(hir::HIRFunction* hirFunc) {
@@ -558,7 +602,10 @@ private:
         
         // Analyze control flow to identify loops and set up loop contexts
         analyzeLoops(hirFunc);
-        
+
+        // Analyze switch statements to set up switch break contexts
+        analyzeSwitches(hirFunc);
+
         // Second pass: translate instructions
         for (const auto& hirBlock : hirFunc->basicBlocks) {
             auto mirBlock = blockMap_[hirBlock.get()];
@@ -1026,7 +1073,7 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
     void generateBreak(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)hirInst;
 
-        // Find the containing loop for the current HIR block
+        // Find the containing loop/switch for the current HIR block
         auto loopContext = findContainingLoop(currentHIRBlock_);
 
         if (loopContext && loopContext->breakTarget) {
