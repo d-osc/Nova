@@ -111,6 +111,18 @@ public:
             return;
         }
 
+        // Handle nullish coalescing operator (??)
+        // Returns left operand if it's not null/undefined, otherwise returns right operand
+        // Since Nova doesn't have null/undefined types yet, we always return the left operand
+        // TODO: Implement proper null/undefined checking when those types are added
+        if (node.op == Op::NullishCoalescing) {
+            // For now, just evaluate and return the left operand
+            // This is correct behavior when left is never null/undefined
+            node.left->accept(*this);
+            // Right operand is not evaluated (short-circuit)
+            return;
+        }
+
         // For non-logical operators, evaluate both operands normally
         // Generate left operand
         node.left->accept(*this);
