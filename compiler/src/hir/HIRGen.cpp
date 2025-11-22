@@ -386,6 +386,53 @@ public:
                         lastValue_ = builder_->createLoad(resultAlloca);
                         return;
                     }
+
+                    // Check if this is Math.max() or Math.min()
+                    if (objIdent->name == "Math" && (propIdent->name == "max" || propIdent->name == "min")) {
+                        bool isMax = (propIdent->name == "max");
+                        std::string opName = isMax ? "max" : "min";
+
+                        // Generate inline max/min: max(a, b) = (a > b) ? a : b, min(a, b) = (a < b) ? a : b
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Math." << opName << "() expects exactly 2 arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate both arguments
+                        node.arguments[0]->accept(*this);
+                        auto* arg1 = lastValue_;
+                        node.arguments[1]->accept(*this);
+                        auto* arg2 = lastValue_;
+
+                        // Create temporary variable to store result
+                        auto i64Type = new HIRType(HIRType::Kind::I64);
+                        auto* resultAlloca = builder_->createAlloca(i64Type, opName + ".result");
+
+                        // Create blocks for conditional
+                        auto* trueBlock = currentFunction_->createBasicBlock(opName + ".true").get();
+                        auto* falseBlock = currentFunction_->createBasicBlock(opName + ".false").get();
+                        auto* endBlock = currentFunction_->createBasicBlock(opName + ".end").get();
+
+                        // Compare: arg1 > arg2 for max, arg1 < arg2 for min
+                        auto* condition = isMax ? builder_->createGt(arg1, arg2) : builder_->createLt(arg1, arg2);
+                        builder_->createCondBr(condition, trueBlock, falseBlock);
+
+                        // True block: store arg1
+                        builder_->setInsertPoint(trueBlock);
+                        builder_->createStore(arg1, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // False block: store arg2
+                        builder_->setInsertPoint(falseBlock);
+                        builder_->createStore(arg2, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // End block: load and return result
+                        builder_->setInsertPoint(endBlock);
+                        lastValue_ = builder_->createLoad(resultAlloca);
+                        return;
+                    }
                 }
             }
         }
