@@ -340,6 +340,56 @@ public:
     }
     
     void visit(CallExpr& node) override {
+        // Check if this is a Math.abs() call
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    if (objIdent->name == "Math" && propIdent->name == "abs") {
+                        // Generate inline absolute value: abs(x) = (x < 0) ? -x : x
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Math.abs() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the argument
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // Create temporary variable to store result
+                        auto i64Type = new HIRType(HIRType::Kind::I64);
+                        auto* resultAlloca = builder_->createAlloca(i64Type, "abs.result");
+
+                        // Create blocks for conditional: if (value < 0) then -value else value
+                        auto* negBlock = currentFunction_->createBasicBlock("abs.neg").get();
+                        auto* posBlock = currentFunction_->createBasicBlock("abs.pos").get();
+                        auto* endBlock = currentFunction_->createBasicBlock("abs.end").get();
+
+                        // Check if value < 0
+                        auto* zero = builder_->createIntConstant(0);
+                        auto* isNegative = builder_->createLt(value, zero);
+                        builder_->createCondBr(isNegative, negBlock, posBlock);
+
+                        // Negative block: store -value
+                        builder_->setInsertPoint(negBlock);
+                        auto* negValue = builder_->createSub(zero, value);
+                        builder_->createStore(negValue, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // Positive block: store value as-is
+                        builder_->setInsertPoint(posBlock);
+                        builder_->createStore(value, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // End block: load and return result
+                        builder_->setInsertPoint(endBlock);
+                        lastValue_ = builder_->createLoad(resultAlloca);
+                        return;
+                    }
+                }
+            }
+        }
+
         // Check if this is a string method call: str.substring(...)
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             // Get the object and method name
