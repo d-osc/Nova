@@ -433,6 +433,26 @@ public:
                         lastValue_ = builder_->createLoad(resultAlloca);
                         return;
                     }
+
+                    // Check if this is Math.pow()
+                    if (objIdent->name == "Math" && propIdent->name == "pow") {
+                        // Generate inline power: pow(base, exponent) using createPow
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Math.pow() expects exactly 2 arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate both arguments
+                        node.arguments[0]->accept(*this);
+                        auto* base = lastValue_;
+                        node.arguments[1]->accept(*this);
+                        auto* exponent = lastValue_;
+
+                        // Use the same createPow as the ** operator
+                        lastValue_ = builder_->createPow(base, exponent);
+                        return;
+                    }
                 }
             }
         }
