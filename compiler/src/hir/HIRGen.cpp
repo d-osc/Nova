@@ -818,6 +818,23 @@ public:
     }
     
     void visit(MemberExpr& node) override {
+        // Check for Math constants (PI, E, etc.)
+        if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+            if (auto* propIdent = dynamic_cast<Identifier*>(node.property.get())) {
+                if (objIdent->name == "Math") {
+                    if (propIdent->name == "PI") {
+                        // Math.PI ≈ 3.14159... -> return 3 for integer
+                        lastValue_ = builder_->createIntConstant(3);
+                        return;
+                    } else if (propIdent->name == "E") {
+                        // Math.E ≈ 2.71828... -> return 2 for integer (or 3 if you prefer rounding)
+                        lastValue_ = builder_->createIntConstant(3);
+                        return;
+                    }
+                }
+            }
+        }
+
         // Evaluate the object/array
         node.object->accept(*this);
         auto object = lastValue_;
