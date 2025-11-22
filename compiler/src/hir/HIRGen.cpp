@@ -449,6 +449,18 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
                         hasReturnValue = false;
+                    } else if (methodName == "includes") {
+                        runtimeFuncName = "nova_value_array_includes";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 (0 or 1)
+                        hasReturnValue = true;
+                    } else if (methodName == "indexOf") {
+                        runtimeFuncName = "nova_value_array_indexOf";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 index
+                        hasReturnValue = true;
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
@@ -483,11 +495,16 @@ public:
                     }
 
                     // Create call to runtime function
+                    std::cerr << "DEBUG HIRGen: About to create call to " << runtimeFuncName
+                              << ", hasReturnValue=" << hasReturnValue
+                              << ", args.size=" << args.size() << std::endl;
                     if (hasReturnValue) {
                         lastValue_ = builder_->createCall(runtimeFunc, args, "array_method");
+                        std::cerr << "DEBUG HIRGen: Created call with return value" << std::endl;
                     } else {
                         builder_->createCall(runtimeFunc, args, "array_method");
                         lastValue_ = builder_->createIntConstant(0); // void methods return 0
+                        std::cerr << "DEBUG HIRGen: Created void call" << std::endl;
                     }
                     return;
                 }

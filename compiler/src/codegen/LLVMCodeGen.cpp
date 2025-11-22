@@ -1328,6 +1328,40 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "nova_value_array_includes") {
+                            // i64 @nova_value_array_includes(ptr, i64)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_includes",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_value_array_indexOf") {
+                            // i64 @nova_value_array_indexOf(ptr, i64)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_indexOf declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_indexOf",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }

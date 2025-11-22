@@ -258,6 +258,30 @@ void value_array_unshift(ValueArray* array, int64 value) {
     array->length++;
 }
 
+// Check if array includes a value
+bool value_array_includes(ValueArray* array, int64 value) {
+    if (!array) return false;
+
+    for (int64 i = 0; i < array->length; i++) {
+        if (array->elements[i] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Find index of a value in array
+int64 value_array_indexOf(ValueArray* array, int64 value) {
+    if (!array) return -1;
+
+    for (int64 i = 0; i < array->length; i++) {
+        if (array->elements[i] == value) {
+            return i;
+        }
+    }
+    return -1;  // Not found
+}
+
 } // namespace runtime
 } // namespace nova
 
@@ -349,6 +373,17 @@ void nova_value_array_unshift(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     nova::runtime::value_array_unshift(array, value);
     write_back_to_metadata(array_ptr, array);
+}
+
+int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    bool result = nova::runtime::value_array_includes(array, value);
+    return result ? 1 : 0;  // Convert bool to int64 (1 for true, 0 for false)
+}
+
+int64_t nova_value_array_indexOf(void* array_ptr, int64_t value) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    return nova::runtime::value_array_indexOf(array, value);
 }
 
 } // extern "C"
