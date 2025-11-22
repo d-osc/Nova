@@ -340,6 +340,33 @@ public:
     }
     
     void visit(CallExpr& node) override {
+        // Check for global functions (parseInt, parseFloat, etc.)
+        if (auto* ident = dynamic_cast<Identifier*>(node.callee.get())) {
+            if (ident->name == "parseInt") {
+                // parseInt() - for integer type system, just returns the argument value
+                if (node.arguments.size() < 1) {
+                    std::cerr << "ERROR: parseInt() expects at least 1 argument" << std::endl;
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+                // Evaluate the first argument and return it
+                node.arguments[0]->accept(*this);
+                // lastValue_ already contains the result
+                return;
+            } else if (ident->name == "parseFloat") {
+                // parseFloat() - for integer type system, just returns the argument value
+                if (node.arguments.size() < 1) {
+                    std::cerr << "ERROR: parseFloat() expects at least 1 argument" << std::endl;
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+                // Evaluate the first argument and return it
+                node.arguments[0]->accept(*this);
+                // lastValue_ already contains the result
+                return;
+            }
+        }
+
         // Check if this is a Math.abs() call
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
