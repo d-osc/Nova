@@ -461,6 +461,11 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 index
                         hasReturnValue = true;
+                    } else if (methodName == "reverse") {
+                        runtimeFuncName = "nova_value_array_reverse";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
+                        hasReturnValue = true;
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);

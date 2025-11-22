@@ -1362,6 +1362,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "nova_value_array_reverse") {
+                            // ptr @nova_value_array_reverse(ptr)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_reverse declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_reverse",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }

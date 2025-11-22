@@ -282,6 +282,24 @@ int64 value_array_indexOf(ValueArray* array, int64 value) {
     return -1;  // Not found
 }
 
+// Reverse array in place
+void value_array_reverse(ValueArray* array) {
+    if (!array || array->length <= 1) return;
+
+    int64 left = 0;
+    int64 right = array->length - 1;
+
+    while (left < right) {
+        // Swap elements
+        int64 temp = array->elements[left];
+        array->elements[left] = array->elements[right];
+        array->elements[right] = temp;
+
+        left++;
+        right--;
+    }
+}
+
 } // namespace runtime
 } // namespace nova
 
@@ -384,6 +402,13 @@ int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
 int64_t nova_value_array_indexOf(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     return nova::runtime::value_array_indexOf(array, value);
+}
+
+void* nova_value_array_reverse(void* array_ptr) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    nova::runtime::value_array_reverse(array);
+    write_back_to_metadata(array_ptr, array);
+    return array_ptr;  // Return array for chaining (like JavaScript)
 }
 
 } // extern "C"
