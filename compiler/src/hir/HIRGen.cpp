@@ -553,6 +553,53 @@ public:
             }
         }
 
+        // Check if this is Number static method call
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    if (objIdent->name == "Number") {
+                        if (propIdent->name == "isNaN") {
+                            // Number.isNaN() - for integer type, always returns false (0)
+                            if (node.arguments.size() != 1) {
+                                std::cerr << "ERROR: Number.isNaN() expects exactly 1 argument" << std::endl;
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+                            // Evaluate argument (though we don't use it for integers)
+                            node.arguments[0]->accept(*this);
+                            // All integers are not NaN
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        } else if (propIdent->name == "isInteger") {
+                            // Number.isInteger() - for integer type, always returns true (1)
+                            if (node.arguments.size() != 1) {
+                                std::cerr << "ERROR: Number.isInteger() expects exactly 1 argument" << std::endl;
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+                            // Evaluate argument (though we don't use it for integers)
+                            node.arguments[0]->accept(*this);
+                            // All our values are integers
+                            lastValue_ = builder_->createIntConstant(1);
+                            return;
+                        } else if (propIdent->name == "isFinite") {
+                            // Number.isFinite() - for integer type, always returns true (1)
+                            if (node.arguments.size() != 1) {
+                                std::cerr << "ERROR: Number.isFinite() expects exactly 1 argument" << std::endl;
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+                            // Evaluate argument (though we don't use it for integers)
+                            node.arguments[0]->accept(*this);
+                            // All integers are finite
+                            lastValue_ = builder_->createIntConstant(1);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         // Check if this is a string method call: str.substring(...)
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             // Get the object and method name
