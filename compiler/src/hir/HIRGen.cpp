@@ -453,6 +453,65 @@ public:
                         lastValue_ = builder_->createPow(base, exponent);
                         return;
                     }
+
+                    // Check if this is Math.sign()
+                    if (objIdent->name == "Math" && propIdent->name == "sign") {
+                        // Generate inline sign: sign(x) = x < 0 ? -1 : (x > 0 ? 1 : 0)
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Math.sign() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the argument
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // Create temporary variable to store result
+                        auto i64Type = new HIRType(HIRType::Kind::I64);
+                        auto* resultAlloca = builder_->createAlloca(i64Type, "sign.result");
+
+                        // Create blocks for three-way comparison
+                        auto* negBlock = currentFunction_->createBasicBlock("sign.negative").get();
+                        auto* posCheckBlock = currentFunction_->createBasicBlock("sign.pos_check").get();
+                        auto* posBlock = currentFunction_->createBasicBlock("sign.positive").get();
+                        auto* zeroBlock = currentFunction_->createBasicBlock("sign.zero").get();
+                        auto* endBlock = currentFunction_->createBasicBlock("sign.end").get();
+
+                        // Check if value < 0
+                        auto* zero = builder_->createIntConstant(0);
+                        auto* isNegative = builder_->createLt(value, zero);
+                        builder_->createCondBr(isNegative, negBlock, posCheckBlock);
+
+                        // Negative block: store -1
+                        builder_->setInsertPoint(negBlock);
+                        auto* negOne = builder_->createIntConstant(-1);
+                        builder_->createStore(negOne, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // Positive check block: check if value > 0
+                        builder_->setInsertPoint(posCheckBlock);
+                        auto* isPositive = builder_->createGt(value, zero);
+                        builder_->createCondBr(isPositive, posBlock, zeroBlock);
+
+                        // Positive block: store 1
+                        builder_->setInsertPoint(posBlock);
+                        auto* one = builder_->createIntConstant(1);
+                        builder_->createStore(one, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // Zero block: store 0
+                        builder_->setInsertPoint(zeroBlock);
+                        builder_->createStore(zero, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // End block: load and return result
+                        builder_->setInsertPoint(endBlock);
+                        lastValue_ = builder_->createLoad(resultAlloca);
+                        return;
+                    }
+
+                    // TODO: Math.sqrt() - needs proper runtime function linking or complex inline implementation
                 }
             }
         }
