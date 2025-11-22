@@ -765,6 +765,7 @@ public:
     std::string name;
     std::vector<std::string> params;
     std::vector<TypePtr> paramTypes;  // Type annotations for parameters
+    std::vector<ExprPtr> defaultValues;  // Default values for parameters (nullptr if no default)
     StmtPtr body;
     bool isAsync = false;
     bool isGenerator = false;

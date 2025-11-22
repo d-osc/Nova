@@ -579,6 +579,30 @@ public:
 
         // Lookup function
         if (auto* id = dynamic_cast<Identifier*>(node.callee.get())) {
+            // Check if we need to apply default parameters
+            auto defaultValuesIt = functionDefaultValues_.find(id->name);
+            if (defaultValuesIt != functionDefaultValues_.end()) {
+                const auto* defaultValues = defaultValuesIt->second;
+                size_t providedArgs = args.size();
+                size_t totalParams = defaultValues->size();
+
+                // If fewer arguments provided than parameters, use defaults for missing ones
+                if (providedArgs < totalParams) {
+                    for (size_t i = providedArgs; i < totalParams; ++i) {
+                        const auto& defaultValue = (*defaultValues)[i];
+                        if (defaultValue) {
+                            // Evaluate the default value expression
+                            defaultValue->accept(*this);
+                            args.push_back(lastValue_);
+                        } else {
+                            // No default for this parameter - this is an error case
+                            // But we'll let it proceed and let LLVM catch the mismatch
+                            break;
+                        }
+                    }
+                }
+            }
+
             // First check if this identifier is a function reference
             auto funcRefIt = functionReferences_.find(id->name);
             if (funcRefIt != functionReferences_.end()) {
@@ -2088,9 +2112,14 @@ public:
         auto func = module_->createFunction(node.name, funcType);
         func->isAsync = node.isAsync;
         func->isGenerator = node.isGenerator;
-        
+
         currentFunction_ = func.get();
-        
+
+        // Store default parameter values for this function
+        if (!node.defaultValues.empty()) {
+            functionDefaultValues_[node.name] = &node.defaultValues;
+        }
+
         // Create entry block
         auto entryBlock = func->createBasicBlock("entry");
         
@@ -2392,6 +2421,7 @@ private:
     std::unordered_map<std::string, HIRValue*> symbolTable_;
     std::unordered_map<std::string, std::string> functionReferences_;  // Maps variable names to function names
     std::string lastFunctionName_;  // Tracks the last created arrow function name
+    std::unordered_map<std::string, const std::vector<ExprPtr>*> functionDefaultValues_;  // Maps function names to default values
 };
 
 // Public API to generate HIR from AST
