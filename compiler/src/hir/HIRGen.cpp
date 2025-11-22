@@ -516,6 +516,43 @@ public:
             }
         }
 
+        // Check if this is Array.isArray() call
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    if (objIdent->name == "Array" && propIdent->name == "isArray") {
+                        // Array.isArray() - compile-time type check
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Array.isArray() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the argument to get its type
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // Check if the value is an array type
+                        bool isArray = false;
+                        if (value && value->type) {
+                            if (value->type->kind == hir::HIRType::Kind::Array) {
+                                isArray = true;
+                            } else if (value->type->kind == hir::HIRType::Kind::Pointer) {
+                                auto* ptrType = dynamic_cast<hir::HIRPointerType*>(value->type.get());
+                                if (ptrType && ptrType->pointeeType && ptrType->pointeeType->kind == hir::HIRType::Kind::Array) {
+                                    isArray = true;
+                                }
+                            }
+                        }
+
+                        // Return 1 if array, 0 if not
+                        lastValue_ = builder_->createIntConstant(isArray ? 1 : 0);
+                        return;
+                    }
+                }
+            }
+        }
+
         // Check if this is a string method call: str.substring(...)
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             // Get the object and method name
