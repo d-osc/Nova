@@ -407,6 +407,17 @@ public:
                 // Convert boolean to integer (0 or 1)
                 lastValue_ = isNonZero;
                 return;
+            } else if (ident->name == "Number") {
+                // Number() constructor - converts value to number
+                // For integer type system, it's a pass-through operation
+                if (node.arguments.size() < 1) {
+                    // No argument means 0
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+                // Just return the argument value (already a number in integer type system)
+                node.arguments[0]->accept(*this);
+                return;
             }
         }
 

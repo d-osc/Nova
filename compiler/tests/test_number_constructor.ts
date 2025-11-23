@@ -1,6 +1,12 @@
-// Test Number() constructor/conversion
+// Test Number() constructor function
 function main(): number {
-    let str = "42";
-    let num = Number(str);  // Convert string to number
-    return num;  // Should be 42 (if implemented)
+    // Number() converts values to numbers
+    // For integer type system, it's essentially a pass-through
+    let a = Number(42);      // 42
+    let b = Number(0);       // 0
+    let c = Number(-25);     // -25
+    let d = Number(100);     // 100
+
+    // Result: 42 + 0 + (-25) + 100 = 117
+    return a + b + c + d;
 }

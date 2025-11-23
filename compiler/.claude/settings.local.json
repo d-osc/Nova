@@ -96,7 +96,21 @@
       "Bash(do echo \"Compiling $test.ts...\")",
       "Bash(timeout 3 build/Release/nova.exe:*)",
       "Bash(for test in test_and test_or test_comma test_unary_minus)",
-      "Bash(do echo \"=== $test ===\")"
+      "Bash(do echo \"=== $test ===\")",
+      "Bash(for test in test_array_methods test_break_continue test_do_while test_logical_not test_and test_or test_comma test_unary_minus test_switch_simple)",
+      "Bash(python:*)",
+      "Bash(for test in test_class_simple test_switch_simple test_do_while test_logical_not test_and test_or test_comma test_unary_minus test_array_methods test_break_continue)",
+      "Bash(do echo -n \"$test: \")",
+      "Bash(timeout 3 ./build/Release/nova.exe run:*)",
+      "Bash(/dev/null)",
+      "Bash(if [ -f temp_jit.ll ])",
+      "Bash(then cat temp_jit.ll)",
+      "Bash(else echo \"File not found\")",
+      "Bash(for test in test_break_simple test_break_continue test_nested_break_continue test_array_push_pop)",
+      "Bash(for test in test_array_length_debug test_array_length_after_push test_array_length_dynamic test_array_length_comprehensive)",
+      "Bash(for test in test_array_length_after_push test_array_length_dynamic test_array_length_comprehensive)",
+      "Bash(for test in test_includes_simple test_indexOf test_array_search)",
+      "Bash(git restore:*)"
     ],
     "deny": [],
     "ask": []

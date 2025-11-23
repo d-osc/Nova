@@ -150,6 +150,9 @@ float64 math_tan(float64 x);
 float64 math_log(float64 x);
 float64 math_exp(float64 x);
 
+// Integer math functions
+int64 nova_math_sqrt_i64(int64 x);
+
 // Random functions
 void random_seed(uint32 seed);
 uint32 random_next();

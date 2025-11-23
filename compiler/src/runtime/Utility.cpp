@@ -63,6 +63,23 @@ float64 math_sqrt(float64 x) {
     return std::sqrt(x);
 }
 
+// Integer square root using Newton's method
+int64 nova_math_sqrt_i64(int64 x) {
+    if (x < 0) return 0;  // Return 0 for negative numbers
+    if (x == 0 || x == 1) return x;
+
+    // Newton's method for integer square root
+    int64 result = x;
+    int64 prev = 0;
+
+    while (result != prev) {
+        prev = result;
+        result = (result + x / result) / 2;
+    }
+
+    return result;
+}
+
 float64 math_pow(float64 base, float64 exp) {
     return std::pow(base, exp);
 }
