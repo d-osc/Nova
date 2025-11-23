@@ -1026,6 +1026,69 @@ public:
                         lastValue_ = builder_->createIntConstant(42);
                         return;
                     }
+
+                    // Check if this is Math.sign()
+                    if (objIdent->name == "Math" && propIdent->name == "sign") {
+                        // Math.sign() returns the sign of a number
+                        // Returns 1 for positive, -1 for negative, 0 for zero
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Math.sign() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the argument
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // Create constants
+                        auto* zero = builder_->createIntConstant(0);
+                        auto* one = builder_->createIntConstant(1);
+                        auto* minusOne = builder_->createIntConstant(-1);
+
+                        // Check if value < 0
+                        auto* isNegative = builder_->createLt(value, zero);
+                        // Check if value > 0
+                        auto* isPositive = builder_->createGt(value, zero);
+
+                        // Create basic blocks
+                        auto* negativeBlock = currentFunction_->createBasicBlock("sign.negative").get();
+                        auto* positiveCheckBlock = currentFunction_->createBasicBlock("sign.poscheck").get();
+                        auto* positiveBlock = currentFunction_->createBasicBlock("sign.positive").get();
+                        auto* zeroBlock = currentFunction_->createBasicBlock("sign.zero").get();
+                        auto* endBlock = currentFunction_->createBasicBlock("sign.end").get();
+
+                        // Allocate result variable
+                        auto i64Type = new HIRType(HIRType::Kind::I64);
+                        auto* resultAlloca = builder_->createAlloca(i64Type, "sign.result");
+
+                        // Branch based on negative check
+                        builder_->createCondBr(isNegative, negativeBlock, positiveCheckBlock);
+
+                        // Negative block: return -1
+                        builder_->setInsertPoint(negativeBlock);
+                        builder_->createStore(minusOne, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // Positive check block
+                        builder_->setInsertPoint(positiveCheckBlock);
+                        builder_->createCondBr(isPositive, positiveBlock, zeroBlock);
+
+                        // Positive block: return 1
+                        builder_->setInsertPoint(positiveBlock);
+                        builder_->createStore(one, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // Zero block: return 0
+                        builder_->setInsertPoint(zeroBlock);
+                        builder_->createStore(zero, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // End block: load and return result
+                        builder_->setInsertPoint(endBlock);
+                        lastValue_ = builder_->createLoad(resultAlloca);
+                        return;
+                    }
                 }
             }
         }
