@@ -1,6 +1,12 @@
-// Test Math.round (for integers, should just return the value)
+// Test Math.round() function
 function main(): number {
-    let value = 42;
-    let result = Math.round(value);
-    return result;  // Should be 42
+    // Math.round() rounds to nearest integer
+    // For integer type system, it's a pass-through operation
+    let a = Math.round(42);      // 42
+    let b = Math.round(-25);     // -25
+    let c = Math.round(100);     // 100
+    let d = Math.round(0);       // 0
+
+    // Result: 42 + (-25) + 100 + 0 = 117
+    return a + b + c + d;
 }
