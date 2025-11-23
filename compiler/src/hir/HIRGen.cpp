@@ -1104,6 +1104,30 @@ public:
                         node.arguments[0]->accept(*this);
                         return;
                     }
+
+                    // Check if this is Math.imul()
+                    if (objIdent->name == "Math" && propIdent->name == "imul") {
+                        // Math.imul() performs 32-bit integer multiplication
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Math.imul() expects exactly 2 arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate both arguments
+                        node.arguments[0]->accept(*this);
+                        auto* arg1 = lastValue_;
+                        node.arguments[1]->accept(*this);
+                        auto* arg2 = lastValue_;
+
+                        // Multiply the values
+                        auto* product = builder_->createMul(arg1, arg2);
+
+                        // Mask to 32 bits
+                        auto* mask = builder_->createIntConstant(0xFFFFFFFF);
+                        lastValue_ = builder_->createAnd(product, mask);
+                        return;
+                    }
                 }
             }
         }
