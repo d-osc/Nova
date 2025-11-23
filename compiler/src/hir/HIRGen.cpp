@@ -388,6 +388,25 @@ public:
                 // All integers are finite
                 lastValue_ = builder_->createIntConstant(1);
                 return;
+            } else if (ident->name == "Boolean") {
+                // Boolean() constructor - converts value to boolean (0 or 1)
+                if (node.arguments.size() < 1) {
+                    // No argument means false
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+                // Evaluate the argument
+                node.arguments[0]->accept(*this);
+                auto* value = lastValue_;
+
+                // Convert to boolean: 0 -> 0, non-zero -> 1
+                // Compare value != 0
+                auto* zero = builder_->createIntConstant(0);
+                auto* isNonZero = builder_->createNe(value, zero);
+
+                // Convert boolean to integer (0 or 1)
+                lastValue_ = isNonZero;
+                return;
             }
         }
 
