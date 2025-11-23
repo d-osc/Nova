@@ -894,6 +894,106 @@ public:
                         lastValue_ = builder_->createLoad(resultAlloca);
                         return;
                     }
+
+                    // Check if this is Math.cbrt()
+                    if (objIdent->name == "Math" && propIdent->name == "cbrt") {
+                        // Math.cbrt() - integer cube root using Newton's method
+                        // Formula: x_{n+1} = (2*x_n + value/x_n^2) / 3
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Math.cbrt() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the argument
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        auto i64Type = new HIRType(HIRType::Kind::I64);
+                        auto* resultAlloca = builder_->createAlloca(i64Type, "cbrt.result");
+                        auto* xAlloca = builder_->createAlloca(i64Type, "cbrt.x");
+                        auto* prevAlloca = builder_->createAlloca(i64Type, "cbrt.prev");
+
+                        // Check special cases
+                        auto* zero = builder_->createIntConstant(0);
+                        auto* one = builder_->createIntConstant(1);
+                        auto* isZero = builder_->createEq(value, zero);
+                        auto* isOne = builder_->createEq(value, one);
+
+                        auto* zeroBlock = currentFunction_->createBasicBlock("cbrt.zero").get();
+                        auto* oneCheckBlock = currentFunction_->createBasicBlock("cbrt.onecheck").get();
+                        auto* oneBlock = currentFunction_->createBasicBlock("cbrt.one").get();
+                        auto* initBlock = currentFunction_->createBasicBlock("cbrt.init").get();
+                        auto* loopBlock = currentFunction_->createBasicBlock("cbrt.loop").get();
+                        auto* endBlock = currentFunction_->createBasicBlock("cbrt.end").get();
+
+                        builder_->createCondBr(isZero, zeroBlock, oneCheckBlock);
+
+                        // Zero block: return 0
+                        builder_->setInsertPoint(zeroBlock);
+                        builder_->createStore(zero, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // One check block
+                        builder_->setInsertPoint(oneCheckBlock);
+                        builder_->createCondBr(isOne, oneBlock, initBlock);
+
+                        // One block: return 1
+                        builder_->setInsertPoint(oneBlock);
+                        builder_->createStore(one, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // Init block: initialize x = value / 3
+                        builder_->setInsertPoint(initBlock);
+                        auto* three = builder_->createIntConstant(3);
+                        auto* initialX = builder_->createDiv(value, three);
+                        // Make sure initial guess is at least 1
+                        auto* isInitZero = builder_->createEq(initialX, zero);
+                        auto* initNotZeroBlock = currentFunction_->createBasicBlock("cbrt.init.notzero").get();
+                        auto* initSetOneBlock = currentFunction_->createBasicBlock("cbrt.init.setone").get();
+                        builder_->createCondBr(isInitZero, initSetOneBlock, initNotZeroBlock);
+
+                        builder_->setInsertPoint(initSetOneBlock);
+                        builder_->createStore(one, xAlloca);
+                        builder_->createStore(zero, prevAlloca);
+                        builder_->createBr(loopBlock);
+
+                        builder_->setInsertPoint(initNotZeroBlock);
+                        builder_->createStore(initialX, xAlloca);
+                        builder_->createStore(zero, prevAlloca);
+                        builder_->createBr(loopBlock);
+
+                        // Loop block: iterate Newton's method for cube root
+                        builder_->setInsertPoint(loopBlock);
+                        auto* x = builder_->createLoad(xAlloca);
+                        auto* prev = builder_->createLoad(prevAlloca);
+
+                        // Check if x == prev (converged)
+                        auto* converged = builder_->createEq(x, prev);
+                        auto* updateBlock = currentFunction_->createBasicBlock("cbrt.update").get();
+                        builder_->createCondBr(converged, endBlock, updateBlock);
+
+                        // Update block: compute next iteration
+                        // x_{n+1} = (2*x_n + value/x_n^2) / 3
+                        builder_->setInsertPoint(updateBlock);
+                        builder_->createStore(x, prevAlloca);  // prev = x
+
+                        auto* two = builder_->createIntConstant(2);
+                        auto* twoX = builder_->createMul(two, x);
+                        auto* xSquared = builder_->createMul(x, x);
+                        auto* valueByXSquared = builder_->createDiv(value, xSquared);
+                        auto* numerator = builder_->createAdd(twoX, valueByXSquared);
+                        auto* nextX = builder_->createDiv(numerator, three);
+
+                        builder_->createStore(nextX, xAlloca);
+                        builder_->createStore(nextX, resultAlloca);
+                        builder_->createBr(loopBlock);
+
+                        // End block: load and return result
+                        builder_->setInsertPoint(endBlock);
+                        lastValue_ = builder_->createLoad(resultAlloca);
+                        return;
+                    }
                 }
             }
         }
