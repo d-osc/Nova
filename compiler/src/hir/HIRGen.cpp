@@ -1076,6 +1076,20 @@ public:
                             // All integers are finite
                             lastValue_ = builder_->createIntConstant(1);
                             return;
+                        } else if (propIdent->name == "isSafeInteger") {
+                            // Number.isSafeInteger() - for integer type, always returns true (1)
+                            // In JavaScript, safe integers are -(2^53 - 1) to 2^53 - 1
+                            // For our i64 integer type system, all values are "safe"
+                            if (node.arguments.size() != 1) {
+                                std::cerr << "ERROR: Number.isSafeInteger() expects exactly 1 argument" << std::endl;
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+                            // Evaluate argument (though we don't use it for integers)
+                            node.arguments[0]->accept(*this);
+                            // All our i64 integers are safe integers
+                            lastValue_ = builder_->createIntConstant(1);
+                            return;
                         }
                     }
                 }
