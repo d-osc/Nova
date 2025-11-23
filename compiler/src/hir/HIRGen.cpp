@@ -1089,6 +1089,21 @@ public:
                         lastValue_ = builder_->createLoad(resultAlloca);
                         return;
                     }
+
+                    // Check if this is Math.trunc()
+                    if (objIdent->name == "Math" && propIdent->name == "trunc") {
+                        // Math.trunc() removes decimal part
+                        // For integer type system, it's a pass-through operation
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Math.trunc() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Just return the argument value (already an integer)
+                        node.arguments[0]->accept(*this);
+                        return;
+                    }
                 }
             }
         }
