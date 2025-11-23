@@ -1,10 +1,12 @@
-// Test Number.isNaN()
+// Test Number.isNaN() function
 function main(): number {
-    let a = Number.isNaN(42);       // false (0)
-    let b = Number.isNaN(0);        // false (0)
-    let c = Number.isNaN(-5);       // false (0)
+    // Number.isNaN() checks if a value is NaN (Not a Number)
+    // For i64 integer type system, there is no NaN, so always returns 0 (false)
+    let a = Number.isNaN(42);       // 0 (false)
+    let b = Number.isNaN(-100);     // 0 (false)
+    let c = Number.isNaN(0);        // 0 (false)
+    let d = Number.isNaN(999);      // 0 (false)
 
-    // For integers, nothing is NaN
-    // Result: 0 + 0 + 0 = 0
-    return a + b + c;
+    // Result: 0 + 0 + 0 + 0 = 0
+    return a + b + c + d;
 }
