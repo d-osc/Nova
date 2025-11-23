@@ -364,6 +364,30 @@ public:
                 node.arguments[0]->accept(*this);
                 // lastValue_ already contains the result
                 return;
+            } else if (ident->name == "isNaN") {
+                // isNaN() global function - for integer type system, always returns false (0)
+                if (node.arguments.size() < 1) {
+                    std::cerr << "ERROR: isNaN() expects at least 1 argument" << std::endl;
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+                // Evaluate argument (for side effects)
+                node.arguments[0]->accept(*this);
+                // All integers are not NaN
+                lastValue_ = builder_->createIntConstant(0);
+                return;
+            } else if (ident->name == "isFinite") {
+                // isFinite() global function - for integer type system, always returns true (1)
+                if (node.arguments.size() < 1) {
+                    std::cerr << "ERROR: isFinite() expects at least 1 argument" << std::endl;
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+                // Evaluate argument (for side effects)
+                node.arguments[0]->accept(*this);
+                // All integers are finite
+                lastValue_ = builder_->createIntConstant(1);
+                return;
             }
         }
 
