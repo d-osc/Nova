@@ -418,6 +418,18 @@ public:
                 // Just return the argument value (already a number in integer type system)
                 node.arguments[0]->accept(*this);
                 return;
+            } else if (ident->name == "String") {
+                // String() constructor - converts value to string
+                // For integer type system, it's a pass-through operation
+                // (proper string conversion will be added with string type support)
+                if (node.arguments.size() < 1) {
+                    // No argument means empty string, return 0 for integer system
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+                // Just return the argument value for now
+                node.arguments[0]->accept(*this);
+                return;
             }
         }
 
