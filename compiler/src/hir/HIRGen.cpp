@@ -727,7 +727,90 @@ public:
                         return;
                     }
 
-                    // TODO: Math.sqrt() - needs proper runtime function linking or complex inline implementation
+                    // Check if this is Math.sqrt()
+                    if (objIdent->name == "Math" && propIdent->name == "sqrt") {
+                        // Math.sqrt() - integer square root using Newton's method
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Math.sqrt() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the argument
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // For integer square root, we'll use Newton's method
+                        // Algorithm: x_{n+1} = (x_n + value/x_n) / 2
+                        auto i64Type = new HIRType(HIRType::Kind::I64);
+
+                        // Allocate result variable
+                        auto* resultAlloca = builder_->createAlloca(i64Type, "sqrt.result");
+                        auto* xAlloca = builder_->createAlloca(i64Type, "sqrt.x");
+                        auto* prevAlloca = builder_->createAlloca(i64Type, "sqrt.prev");
+
+                        // Check if value is 0 or 1 (special cases)
+                        auto* zero = builder_->createIntConstant(0);
+                        auto* one = builder_->createIntConstant(1);
+                        auto* isZero = builder_->createEq(value, zero);
+                        auto* isOne = builder_->createEq(value, one);
+
+                        auto* zeroBlock = currentFunction_->createBasicBlock("sqrt.zero").get();
+                        auto* oneCheckBlock = currentFunction_->createBasicBlock("sqrt.onecheck").get();
+                        auto* oneBlock = currentFunction_->createBasicBlock("sqrt.one").get();
+                        auto* initBlock = currentFunction_->createBasicBlock("sqrt.init").get();
+                        auto* loopBlock = currentFunction_->createBasicBlock("sqrt.loop").get();
+                        auto* endBlock = currentFunction_->createBasicBlock("sqrt.end").get();
+
+                        builder_->createCondBr(isZero, zeroBlock, oneCheckBlock);
+
+                        // Zero block: return 0
+                        builder_->setInsertPoint(zeroBlock);
+                        builder_->createStore(zero, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // One check block
+                        builder_->setInsertPoint(oneCheckBlock);
+                        builder_->createCondBr(isOne, oneBlock, initBlock);
+
+                        // One block: return 1
+                        builder_->setInsertPoint(oneBlock);
+                        builder_->createStore(one, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        // Init block: initialize x = value / 2
+                        builder_->setInsertPoint(initBlock);
+                        auto* two = builder_->createIntConstant(2);
+                        auto* initialX = builder_->createDiv(value, two);
+                        builder_->createStore(initialX, xAlloca);
+                        builder_->createStore(zero, prevAlloca);  // prev = 0
+                        builder_->createBr(loopBlock);
+
+                        // Loop block: iterate Newton's method
+                        builder_->setInsertPoint(loopBlock);
+                        auto* x = builder_->createLoad(xAlloca);
+                        auto* prev = builder_->createLoad(prevAlloca);
+
+                        // Check if x == prev (converged)
+                        auto* converged = builder_->createEq(x, prev);
+                        auto* updateBlock = currentFunction_->createBasicBlock("sqrt.update").get();
+                        builder_->createCondBr(converged, endBlock, updateBlock);
+
+                        // Update block: compute next iteration
+                        builder_->setInsertPoint(updateBlock);
+                        builder_->createStore(x, prevAlloca);  // prev = x
+                        auto* valueByX = builder_->createDiv(value, x);
+                        auto* sum = builder_->createAdd(x, valueByX);
+                        auto* nextX = builder_->createDiv(sum, two);
+                        builder_->createStore(nextX, xAlloca);
+                        builder_->createStore(nextX, resultAlloca);
+                        builder_->createBr(loopBlock);
+
+                        // End block: load and return result
+                        builder_->setInsertPoint(endBlock);
+                        lastValue_ = builder_->createLoad(resultAlloca);
+                        return;
+                    }
                 }
             }
         }
