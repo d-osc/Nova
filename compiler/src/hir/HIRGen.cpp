@@ -604,6 +604,27 @@ public:
                         return;
                     }
 
+                    // Check if this is Math.imul()
+                    if (objIdent->name == "Math" && propIdent->name == "imul") {
+                        // Math.imul() performs C-like 32-bit multiplication
+                        // For our integer type system, it's just regular multiplication
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Math.imul() expects exactly 2 arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate both arguments
+                        node.arguments[0]->accept(*this);
+                        auto* arg1 = lastValue_;
+                        node.arguments[1]->accept(*this);
+                        auto* arg2 = lastValue_;
+
+                        // Perform multiplication
+                        lastValue_ = builder_->createMul(arg1, arg2);
+                        return;
+                    }
+
                     // TODO: Math.sqrt() - needs proper runtime function linking or complex inline implementation
                 }
             }
