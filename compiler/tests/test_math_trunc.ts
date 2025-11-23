@@ -1,6 +1,11 @@
-// Test Math.trunc (for integers, should return the value)
+// Test Math.trunc() function
 function main(): number {
-    let value = 42;
-    let result = Math.trunc(value);
-    return result;  // Should be 42
+    // Math.trunc() removes fractional part
+    // For integer type system, it's a pass-through operation
+    let a = Math.trunc(42);      // 42
+    let b = Math.trunc(-25);     // -25
+    let c = Math.trunc(100);     // 100
+
+    // Result: 42 + (-25) + 100 = 117
+    return a + b + c;
 }
