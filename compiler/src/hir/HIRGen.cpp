@@ -811,6 +811,89 @@ public:
                         lastValue_ = builder_->createLoad(resultAlloca);
                         return;
                     }
+
+                    // Check if this is Math.hypot()
+                    if (objIdent->name == "Math" && propIdent->name == "hypot") {
+                        // Math.hypot() - compute sqrt(x^2 + y^2 + ...)
+                        if (node.arguments.size() < 2) {
+                            std::cerr << "ERROR: Math.hypot() expects at least 2 arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Compute sum of squares using an accumulator variable
+                        auto i64Type = new HIRType(HIRType::Kind::I64);
+                        auto* sumAlloca = builder_->createAlloca(i64Type, "hypot.sum");
+                        auto* zero = builder_->createIntConstant(0);
+                        builder_->createStore(zero, sumAlloca);
+
+                        for (size_t i = 0; i < node.arguments.size(); i++) {
+                            node.arguments[i]->accept(*this);
+                            auto* value = lastValue_;
+                            auto* squared = builder_->createMul(value, value);
+                            auto* currentSum = builder_->createLoad(sumAlloca);
+                            auto* newSum = builder_->createAdd(currentSum, squared);
+                            builder_->createStore(newSum, sumAlloca);
+                        }
+
+                        auto* sumOfSquares = builder_->createLoad(sumAlloca);
+
+                        // Now compute sqrt(sumOfSquares) using same Newton's method as Math.sqrt()
+                        auto* resultAlloca = builder_->createAlloca(i64Type, "hypot.result");
+                        auto* xAlloca = builder_->createAlloca(i64Type, "hypot.x");
+                        auto* prevAlloca = builder_->createAlloca(i64Type, "hypot.prev");
+
+                        auto* one = builder_->createIntConstant(1);
+                        auto* isZero = builder_->createEq(sumOfSquares, zero);
+                        auto* isOne = builder_->createEq(sumOfSquares, one);
+
+                        auto* zeroBlock = currentFunction_->createBasicBlock("hypot.zero").get();
+                        auto* oneCheckBlock = currentFunction_->createBasicBlock("hypot.onecheck").get();
+                        auto* oneBlock = currentFunction_->createBasicBlock("hypot.one").get();
+                        auto* initBlock = currentFunction_->createBasicBlock("hypot.init").get();
+                        auto* loopBlock = currentFunction_->createBasicBlock("hypot.loop").get();
+                        auto* endBlock = currentFunction_->createBasicBlock("hypot.end").get();
+
+                        builder_->createCondBr(isZero, zeroBlock, oneCheckBlock);
+
+                        builder_->setInsertPoint(zeroBlock);
+                        builder_->createStore(zero, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        builder_->setInsertPoint(oneCheckBlock);
+                        builder_->createCondBr(isOne, oneBlock, initBlock);
+
+                        builder_->setInsertPoint(oneBlock);
+                        builder_->createStore(one, resultAlloca);
+                        builder_->createBr(endBlock);
+
+                        builder_->setInsertPoint(initBlock);
+                        auto* two = builder_->createIntConstant(2);
+                        auto* initialX = builder_->createDiv(sumOfSquares, two);
+                        builder_->createStore(initialX, xAlloca);
+                        builder_->createStore(zero, prevAlloca);
+                        builder_->createBr(loopBlock);
+
+                        builder_->setInsertPoint(loopBlock);
+                        auto* x = builder_->createLoad(xAlloca);
+                        auto* prev = builder_->createLoad(prevAlloca);
+                        auto* converged = builder_->createEq(x, prev);
+                        auto* updateBlock = currentFunction_->createBasicBlock("hypot.update").get();
+                        builder_->createCondBr(converged, endBlock, updateBlock);
+
+                        builder_->setInsertPoint(updateBlock);
+                        builder_->createStore(x, prevAlloca);
+                        auto* valueByX = builder_->createDiv(sumOfSquares, x);
+                        auto* sum = builder_->createAdd(x, valueByX);
+                        auto* nextX = builder_->createDiv(sum, two);
+                        builder_->createStore(nextX, xAlloca);
+                        builder_->createStore(nextX, resultAlloca);
+                        builder_->createBr(loopBlock);
+
+                        builder_->setInsertPoint(endBlock);
+                        lastValue_ = builder_->createLoad(resultAlloca);
+                        return;
+                    }
                 }
             }
         }
