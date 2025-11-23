@@ -1009,6 +1009,23 @@ public:
                         node.arguments[0]->accept(*this);
                         return;
                     }
+
+                    // Check if this is Math.random()
+                    if (objIdent->name == "Math" && propIdent->name == "random") {
+                        // Math.random() returns a pseudo-random number
+                        // For simplicity in integer type system, return a fixed value
+                        // TODO: Implement proper PRNG when runtime support is added
+                        if (node.arguments.size() != 0) {
+                            std::cerr << "ERROR: Math.random() expects no arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Return a deterministic value for now (42)
+                        // This allows testing without complex state management
+                        lastValue_ = builder_->createIntConstant(42);
+                        return;
+                    }
                 }
             }
         }
