@@ -164,4 +164,36 @@ const char* nova_string_substring(const char* str, int64_t start, int64_t end) {
     return result;
 }
 
+// Convert string to lowercase
+const char* nova_string_toLowerCase(const char* str) {
+    if (!str) return "";
+
+    size_t len = std::strlen(str);
+    char* result = static_cast<char*>(malloc(len + 1));
+    if (!result) return "";
+
+    for (size_t i = 0; i < len; i++) {
+        result[i] = std::tolower(static_cast<unsigned char>(str[i]));
+    }
+    result[len] = '\0';
+
+    return result;
+}
+
+// Convert string to uppercase
+const char* nova_string_toUpperCase(const char* str) {
+    if (!str) return "";
+
+    size_t len = std::strlen(str);
+    char* result = static_cast<char*>(malloc(len + 1));
+    if (!result) return "";
+
+    for (size_t i = 0; i < len; i++) {
+        result[i] = std::toupper(static_cast<unsigned char>(str[i]));
+    }
+    result[len] = '\0';
+
+    return result;
+}
+
 }
