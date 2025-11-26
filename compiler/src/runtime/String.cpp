@@ -196,4 +196,40 @@ const char* nova_string_toUpperCase(const char* str) {
     return result;
 }
 
+// Trim whitespace from both ends of string
+const char* nova_string_trim(const char* str) {
+    if (!str) return "";
+
+    size_t len = std::strlen(str);
+    if (len == 0) return "";
+
+    // Find first non-whitespace character
+    size_t start = 0;
+    while (start < len && std::isspace(static_cast<unsigned char>(str[start]))) {
+        start++;
+    }
+
+    // If all whitespace, return empty string
+    if (start == len) return "";
+
+    // Find last non-whitespace character
+    size_t end = len - 1;
+    while (end > start && std::isspace(static_cast<unsigned char>(str[end]))) {
+        end--;
+    }
+
+    // Calculate trimmed length
+    size_t trimmed_len = end - start + 1;
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(trimmed_len + 1));
+    if (!result) return "";
+
+    // Copy trimmed string
+    std::memcpy(result, str + start, trimmed_len);
+    result[trimmed_len] = '\0';
+
+    return result;
+}
+
 }
