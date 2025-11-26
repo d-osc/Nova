@@ -396,4 +396,38 @@ const char* nova_string_padStart(const char* str, int64_t target_len, const char
     return result;
 }
 
+// Pad string to target length by appending fill string
+const char* nova_string_padEnd(const char* str, int64_t target_len, const char* fill) {
+    if (!str) return "";
+    if (!fill || target_len <= 0) return str;
+
+    int64_t str_len = static_cast<int64_t>(std::strlen(str));
+    size_t fill_len = std::strlen(fill);
+
+    // If already at or exceeds target length, return original
+    if (str_len >= target_len) return str;
+    if (fill_len == 0) return str;
+
+    int64_t pad_len = target_len - str_len;
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(target_len + 1));
+    if (!result) return str;
+
+    // Copy original string first
+    std::memcpy(result, str, str_len);
+
+    // Fill rest with repeated fill string
+    int64_t written = 0;
+    while (written < pad_len) {
+        int64_t to_copy = std::min(static_cast<int64_t>(fill_len), pad_len - written);
+        std::memcpy(result + str_len + written, fill, to_copy);
+        written += to_copy;
+    }
+
+    result[target_len] = '\0';
+
+    return result;
+}
+
 }
