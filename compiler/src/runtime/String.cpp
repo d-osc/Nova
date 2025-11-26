@@ -301,4 +301,33 @@ int64_t nova_string_includes(const char* str, const char* search) {
     return found ? 1 : 0;
 }
 
+// Extract slice of string (similar to substring, supports negative indices)
+const char* nova_string_slice(const char* str, int64_t start, int64_t end) {
+    if (!str) return "";
+
+    int64_t len = static_cast<int64_t>(std::strlen(str));
+
+    // Handle negative indices
+    if (start < 0) start = std::max(len + start, static_cast<int64_t>(0));
+    if (end < 0) end = std::max(len + end, static_cast<int64_t>(0));
+
+    // Clamp to valid range
+    if (start > len) start = len;
+    if (end > len) end = len;
+    if (start > end) start = end;  // If start > end, return empty string
+
+    int64_t slice_len = end - start;
+    if (slice_len <= 0) return "";
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(slice_len + 1));
+    if (!result) return "";
+
+    // Copy slice
+    std::memcpy(result, str + start, slice_len);
+    result[slice_len] = '\0';
+
+    return result;
+}
+
 }
