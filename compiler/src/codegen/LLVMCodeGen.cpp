@@ -1378,6 +1378,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "nova_value_array_fill") {
+                            // ptr @nova_value_array_fill(ptr, i64)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_fill declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_fill",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }

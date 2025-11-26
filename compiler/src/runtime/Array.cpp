@@ -300,6 +300,15 @@ void value_array_reverse(ValueArray* array) {
     }
 }
 
+// Fill array with a static value
+void value_array_fill(ValueArray* array, int64 value) {
+    if (!array) return;
+
+    for (int64 i = 0; i < array->length; i++) {
+        array->elements[i] = value;
+    }
+}
+
 } // namespace runtime
 } // namespace nova
 
@@ -407,6 +416,13 @@ int64_t nova_value_array_indexOf(void* array_ptr, int64_t value) {
 void* nova_value_array_reverse(void* array_ptr) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     nova::runtime::value_array_reverse(array);
+    write_back_to_metadata(array_ptr, array);
+    return array_ptr;  // Return array for chaining (like JavaScript)
+}
+
+void* nova_value_array_fill(void* array_ptr, int64_t value) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    nova::runtime::value_array_fill(array, value);
     write_back_to_metadata(array_ptr, array);
     return array_ptr;  // Return array for chaining (like JavaScript)
 }
