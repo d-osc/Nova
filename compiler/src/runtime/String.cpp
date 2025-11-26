@@ -232,4 +232,41 @@ const char* nova_string_trim(const char* str) {
     return result;
 }
 
+// Check if string starts with a prefix
+int64_t nova_string_startsWith(const char* str, const char* prefix) {
+    if (!str || !prefix) return 0;
+
+    size_t str_len = std::strlen(str);
+    size_t prefix_len = std::strlen(prefix);
+
+    // If prefix is longer than string, it can't match
+    if (prefix_len > str_len) return 0;
+
+    // Compare prefix
+    for (size_t i = 0; i < prefix_len; i++) {
+        if (str[i] != prefix[i]) return 0;
+    }
+
+    return 1;  // Match found
+}
+
+// Check if string ends with a suffix
+int64_t nova_string_endsWith(const char* str, const char* suffix) {
+    if (!str || !suffix) return 0;
+
+    size_t str_len = std::strlen(str);
+    size_t suffix_len = std::strlen(suffix);
+
+    // If suffix is longer than string, it can't match
+    if (suffix_len > str_len) return 0;
+
+    // Compare suffix (starting from the end)
+    size_t offset = str_len - suffix_len;
+    for (size_t i = 0; i < suffix_len; i++) {
+        if (str[offset + i] != suffix[i]) return 0;
+    }
+
+    return 1;  // Match found
+}
+
 }
