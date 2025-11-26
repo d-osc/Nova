@@ -269,4 +269,27 @@ int64_t nova_string_endsWith(const char* str, const char* suffix) {
     return 1;  // Match found
 }
 
+// Repeat string n times
+const char* nova_string_repeat(const char* str, int64_t count) {
+    if (!str || count <= 0) return "";
+
+    size_t str_len = std::strlen(str);
+    if (str_len == 0) return "";
+
+    // Calculate total length
+    size_t total_len = str_len * count;
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(total_len + 1));
+    if (!result) return "";
+
+    // Repeat the string
+    for (int64_t i = 0; i < count; i++) {
+        std::memcpy(result + (i * str_len), str, str_len);
+    }
+    result[total_len] = '\0';
+
+    return result;
+}
+
 }
