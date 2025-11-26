@@ -292,4 +292,13 @@ const char* nova_string_repeat(const char* str, int64_t count) {
     return result;
 }
 
+// Check if string contains a substring
+int64_t nova_string_includes(const char* str, const char* search) {
+    if (!str || !search) return 0;
+
+    // Use strstr to find the substring
+    const char* found = std::strstr(str, search);
+    return found ? 1 : 0;
+}
+
 }
