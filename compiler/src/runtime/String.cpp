@@ -330,4 +330,37 @@ const char* nova_string_slice(const char* str, int64_t start, int64_t end) {
     return result;
 }
 
+// Replace first occurrence of search string with replacement
+const char* nova_string_replace(const char* str, const char* search, const char* replace) {
+    if (!str) return "";
+    if (!search || !replace) return str;
+
+    size_t str_len = std::strlen(str);
+    size_t search_len = std::strlen(search);
+    size_t replace_len = std::strlen(replace);
+
+    // If search is empty, return original string
+    if (search_len == 0) return str;
+
+    // Find first occurrence
+    const char* found = std::strstr(str, search);
+    if (!found) return str;  // Not found, return original
+
+    // Calculate position and new length
+    size_t pos = found - str;
+    size_t new_len = str_len - search_len + replace_len;
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(new_len + 1));
+    if (!result) return str;
+
+    // Copy parts: before + replacement + after
+    std::memcpy(result, str, pos);
+    std::memcpy(result + pos, replace, replace_len);
+    std::memcpy(result + pos + replace_len, str + pos + search_len, str_len - pos - search_len);
+    result[new_len] = '\0';
+
+    return result;
+}
+
 }

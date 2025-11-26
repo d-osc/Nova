@@ -1394,6 +1394,24 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_replace") {
+                            // ptr @nova_string_replace(ptr, ptr, ptr)
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_replace declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_replace",
+                                module.get()
+                            );
+                        }
+
                         // ==================== Value Array Method Runtime Functions ====================
                         // These work with value-based arrays (int64 elements)
 
