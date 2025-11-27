@@ -824,8 +824,31 @@ int64_t nova_value_array_reduce(void* array_ptr, ReduceCallbackFunc callback, in
     // Start with initial value
     int64_t accumulator = initialValue;
 
-    // Apply callback to each element
+    // Apply callback to each element (left to right)
     for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        accumulator = callback(accumulator, element);  // Update accumulator with callback result
+    }
+
+    return accumulator;
+}
+
+// Array.reduceRight() implementation
+// Callback function type: same as reduce (2 parameters)
+typedef int64_t (*ReduceRightCallbackFunc)(int64_t, int64_t);
+
+int64_t nova_value_array_reduceRight(void* array_ptr, ReduceRightCallbackFunc callback, int64_t initialValue) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return initialValue;  // Return initial value if array or callback is null
+    }
+
+    // Start with initial value
+    int64_t accumulator = initialValue;
+
+    // Apply callback to each element (RIGHT TO LEFT - backwards)
+    for (int64_t i = array->length - 1; i >= 0; i--) {
         int64_t element = array->elements[i];
         accumulator = callback(accumulator, element);  // Update accumulator with callback result
     }

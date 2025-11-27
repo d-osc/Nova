@@ -1555,6 +1555,17 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // initial value
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns accumulated value
                         hasReturnValue = true;
+                    } else if (methodName == "reduceRight") {
+                        // array.reduceRight(callback, initialValue)
+                        // Callback: (accumulator, currentValue) => result (2 parameters!)
+                        // Processes from RIGHT to LEFT (backwards)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: reduceRight" << std::endl;
+                        runtimeFuncName = "nova_value_array_reduceRight";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // initial value
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns accumulated value
+                        hasReturnValue = true;
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
@@ -1572,7 +1583,7 @@ public:
                         arg->accept(*this);
 
                         // Check if this argument was an arrow function
-                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "findIndex" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every" || methodName == "forEach" || methodName == "reduce")) {
+                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "findIndex" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every" || methodName == "forEach" || methodName == "reduce" || methodName == "reduceRight")) {
                             // For callback methods, pass function name as string constant
                             // LLVM codegen will convert this to a function pointer
                             std::cerr << "DEBUG HIRGen: Detected arrow function argument: " << lastFunctionName_ << std::endl;
