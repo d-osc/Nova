@@ -35,7 +35,8 @@
 - `Array.prototype.map(callback)` - Transform each element **[v0.81.0]**
 - `Array.prototype.some(callback)` - Check if any element matches **[v0.82.0]**
 - `Array.prototype.every(callback)` - Check if all elements match **[v0.83.0]**
-- `Array.prototype.forEach(callback)` - Iterate with callback **[v0.84.0 NEW!]**
+- `Array.prototype.forEach(callback)` - Iterate with callback **[v0.84.0]**
+- `Array.prototype.reduce(callback, initialValue)` - Reduce to single value **[v0.85.0 NEW!]**
 - `Array.prototype.length` - Array length property
 - `Array.isArray(value)` - Check if value is array
 
@@ -83,17 +84,17 @@
    - ✅ Array.some() with arrow function callbacks **[v0.82.0]**
    - ✅ Array.every() with arrow function callbacks **[v0.83.0]**
    - ✅ Array.forEach() with arrow function callbacks **[v0.84.0]**
+   - ✅ Array.reduce() with 2-parameter arrow function callbacks **[v0.85.0]**
    - Note: Closures not yet supported (callbacks can't capture outer variables)
-   - Additional callback methods (reduce) coming soon
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.84.0
+- **Latest Version**: v0.85.0
 - **Test Suite**: 183/183 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 15+
-- **Array Methods**: 19+ (with 6 callback methods!)
+- **Array Methods**: 20+ (with 7 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
 

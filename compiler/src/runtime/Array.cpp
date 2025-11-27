@@ -764,6 +764,29 @@ void nova_value_array_forEach(void* array_ptr, ForEachCallbackFunc callback) {
     }
 }
 
+// Array.reduce() implementation
+// Callback function type: takes accumulator and element, returns new accumulator (2 parameters!)
+typedef int64_t (*ReduceCallbackFunc)(int64_t, int64_t);
+
+int64_t nova_value_array_reduce(void* array_ptr, ReduceCallbackFunc callback, int64_t initialValue) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return initialValue;  // Return initial value if array or callback is null
+    }
+
+    // Start with initial value
+    int64_t accumulator = initialValue;
+
+    // Apply callback to each element
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        accumulator = callback(accumulator, element);  // Update accumulator with callback result
+    }
+
+    return accumulator;
+}
+
 
 
 } // extern "C"
