@@ -2051,6 +2051,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "acos") {
+                            // double @acos(double) - C library arccosine function
+                            std::cerr << "DEBUG LLVM: Creating external acos declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "acos",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
