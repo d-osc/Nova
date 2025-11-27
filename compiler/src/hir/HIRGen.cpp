@@ -1477,6 +1477,15 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
                         hasReturnValue = false;
+                    } else if (methodName == "at") {
+                        // array.at(index)
+                        // Returns element at index (supports negative indices)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: at" << std::endl;
+                        runtimeFuncName = "nova_value_array_at";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 index
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 element
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*

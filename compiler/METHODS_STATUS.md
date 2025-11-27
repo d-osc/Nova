@@ -26,23 +26,24 @@
 - `Array.prototype.pop()` - Remove from end
 - `Array.prototype.shift()` - Remove from start
 - `Array.prototype.unshift(value)` - Add to start
+- `Array.prototype.at(index)` - Get element at index (supports negative) **[v0.92.0 NEW!]**
 - `Array.prototype.includes(value)` - Check if contains
 - `Array.prototype.indexOf(value)` - Find first index
-- `Array.prototype.lastIndexOf(value)` - Find last index **[v0.87.0 NEW!]**
+- `Array.prototype.lastIndexOf(value)` - Find last index **[v0.87.0]**
 - `Array.prototype.reverse()` - Reverse in place
 - `Array.prototype.fill(value)` - Fill with value
 - `Array.prototype.join(delimiter)` - Join to string **[v0.75.0]**
 - `Array.prototype.concat(otherArray)` - Concatenate arrays **[v0.76.0]**
 - `Array.prototype.slice(start, end)` - Extract sub-array **[v0.77.0]**
 - `Array.prototype.find(callback)` - Find first matching element **[v0.79.0]**
-- `Array.prototype.findIndex(callback)` - Find first matching index **[v0.86.0 NEW!]**
+- `Array.prototype.findIndex(callback)` - Find first matching index **[v0.86.0]**
 - `Array.prototype.filter(callback)` - Filter elements by condition **[v0.80.0]**
 - `Array.prototype.map(callback)` - Transform each element **[v0.81.0]**
 - `Array.prototype.some(callback)` - Check if any element matches **[v0.82.0]**
 - `Array.prototype.every(callback)` - Check if all elements match **[v0.83.0]**
 - `Array.prototype.forEach(callback)` - Iterate with callback **[v0.84.0]**
 - `Array.prototype.reduce(callback, initialValue)` - Reduce to single value **[v0.85.0]**
-- `Array.prototype.reduceRight(callback, initialValue)` - Reduce right-to-left **[v0.88.0 NEW!]**
+- `Array.prototype.reduceRight(callback, initialValue)` - Reduce right-to-left **[v0.88.0]**
 - `Array.prototype.length` - Array length property
 - `Array.isArray(value)` - Check if value is array
 
@@ -97,12 +98,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 52+ methods implemented
-- **Latest Version**: v0.91.0
-- **Test Suite**: 189/189 tests passing (100%) ✅
+- **Total Methods**: 53+ methods implemented
+- **Latest Version**: v0.92.0
+- **Test Suite**: 190/190 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 18+
-- **Array Methods**: 23+ (with 9 callback methods!)
+- **Array Methods**: 24+ (with 9 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
 

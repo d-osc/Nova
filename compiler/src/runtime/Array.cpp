@@ -280,6 +280,23 @@ void value_array_unshift(ValueArray* array, int64 value) {
     array->length++;
 }
 
+// Get element at index (supports negative indices)
+int64 value_array_at(ValueArray* array, int64 index) {
+    if (!array || array->length == 0) return 0;
+
+    // Handle negative indices (count from end)
+    if (index < 0) {
+        index = array->length + index;
+    }
+
+    // Check bounds
+    if (index < 0 || index >= array->length) {
+        return 0;  // Out of bounds - return 0
+    }
+
+    return array->elements[index];
+}
+
 // Check if array includes a value
 bool value_array_includes(ValueArray* array, int64 value) {
     if (!array) return false;
@@ -566,6 +583,11 @@ void nova_value_array_unshift(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     nova::runtime::value_array_unshift(array, value);
     write_back_to_metadata(array_ptr, array);
+}
+
+int64_t nova_value_array_at(void* array_ptr, int64_t index) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    return nova::runtime::value_array_at(array, index);
 }
 
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
