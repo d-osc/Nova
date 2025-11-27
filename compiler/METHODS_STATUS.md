@@ -75,7 +75,8 @@
 - `Math.atan(x)` - Arctangent / inverse tangent (radians) **[v1.0.3]**
 - `Math.asin(x)` - Arcsine / inverse sine (radians) **[v1.0.4]**
 - `Math.acos(x)` - Arccosine / inverse cosine (radians) **[v1.0.5]**
-- `Math.atan2(y, x)` - Two-argument arctangent (radians) **[v1.0.6 NEW!]**
+- `Math.atan2(y, x)` - Two-argument arctangent (radians) **[v1.0.6]**
+- `Math.sinh(x)` - Hyperbolic sine function **[v1.0.7 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -112,12 +113,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 67+ methods implemented
-- **Latest Version**: v1.0.6
-- **Test Suite**: 204/204 tests passing (100%) ✅
+- **Total Methods**: 68+ methods implemented
+- **Latest Version**: v1.0.7
+- **Test Suite**: 205/205 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 21+
 - **Array Methods**: 24+ (with 9 callback methods!)
-- **Math Methods**: 25+ (complete trig + inverse trig suite with atan2!)
+- **Math Methods**: 26+ (trig + inverse trig + hyperbolic functions!)
 - **Number Methods**: 4+
 
