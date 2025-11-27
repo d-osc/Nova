@@ -112,6 +112,20 @@ void value_array_set(ValueArray* array, int64 index, int64 value);
 int64 value_array_length(ValueArray* array);
 void value_array_push(ValueArray* array, int64 value);
 int64 value_array_pop(ValueArray* array);
+
+const char* value_array_join(ValueArray* array, const char* delimiter);
+ValueArray* value_array_concat(ValueArray* arr1, ValueArray* arr2);
+ValueArray* value_array_slice(ValueArray* array, int64 start, int64 end);
+
+// String array structure (for methods like String.split())
+struct StringArray {
+    ObjectHeader header;
+    int64 length;
+    int64 capacity;
+    const char** elements;  // Array of string pointers
+};
+
+StringArray* create_string_array(int64 initial_capacity);
 int64 value_array_shift(ValueArray* array);
 void value_array_unshift(ValueArray* array, int64 value);
 

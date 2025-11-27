@@ -430,4 +430,85 @@ const char* nova_string_padEnd(const char* str, int64_t target_len, const char* 
     return result;
 }
 
+
+// Create a new string array with initial capacity
+nova::runtime::StringArray* nova_string_array_create(int64_t capacity) {
+    using namespace nova::runtime;
+
+    if (capacity < 0) capacity = 0;
+
+    // Allocate StringArray structure
+    StringArray* array = static_cast<StringArray*>(allocate(sizeof(StringArray), TypeId::ARRAY));
+
+    // Initialize array
+    array->length = 0;
+    array->capacity = capacity;
+
+    // Allocate elements array
+    if (capacity > 0) {
+        size_t elements_size = capacity * sizeof(const char*);
+        array->elements = static_cast<const char**>(allocate(elements_size, TypeId::OBJECT));
+        // Initialize to null
+        for (int64_t i = 0; i < capacity; i++) {
+            array->elements[i] = nullptr;
+        }
+    } else {
+        array->elements = nullptr;
+    }
+
+    return array;
+}
+
+// Split string by delimiter
+void* nova_string_split(const char* str, const char* delimiter) {
+    if (!str) return nova_string_array_create(0);
+    if (!delimiter) return nova_string_array_create(1);
+
+    size_t str_len = std::strlen(str);
+    size_t delim_len = std::strlen(delimiter);
+
+    if (delim_len == 0) {
+        auto* array = nova_string_array_create(1);
+        array->length = 1;
+        array->elements[0] = str;
+        return array;
+    }
+
+    int64_t count = 1;
+    const char* pos = str;
+    while ((pos = std::strstr(pos, delimiter)) != nullptr) {
+        count++;
+        pos += delim_len;
+    }
+
+    auto* array = nova_string_array_create(count);
+    array->length = count;
+
+    int64_t index = 0;
+    const char* start = str;
+    pos = str;
+
+    while ((pos = std::strstr(pos, delimiter)) != nullptr) {
+        int64_t part_len = pos - start;
+        char* part = static_cast<char*>(malloc(part_len + 1));
+        if (part) {
+            std::memcpy(part, start, part_len);
+            part[part_len] = 0;
+            array->elements[index++] = part;
+        }
+        pos += delim_len;
+        start = pos;
+    }
+
+    int64_t last_len = (str + str_len) - start;
+    char* last_part = static_cast<char*>(malloc(last_len + 1));
+    if (last_part) {
+        std::memcpy(last_part, start, last_len);
+        last_part[last_len] = 0;
+        array->elements[index] = last_part;
+    }
+
+    return array;
+}
+
 }
