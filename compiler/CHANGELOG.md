@@ -1,5 +1,12 @@
 # Nova Compiler Changelog
 
+## v0.78.0 - Fixed Type Inference for Array Methods
+- **FIXED**: Array.concat() and Array.slice() now preserve type information
+- Variables storing array method results can now access .length property
+- Added LLVM function declarations for nova_value_array_concat and nova_value_array_slice
+- Proper HIRPointerType and HIRArrayType creation for array-returning methods
+- Array metadata type registration in LLVM codegen
+
 ## v0.77.0 - Array.slice() method
 - Added Array.slice(start, end) method
 - Creates sub-array from start to end index

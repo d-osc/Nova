@@ -1583,6 +1583,41 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "nova_value_array_concat") {
+                            // ptr @nova_value_array_concat(ptr, ptr)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_concat declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_concat",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_value_array_slice") {
+                            // ptr @nova_value_array_slice(ptr, i64, i64)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_slice declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_slice",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
@@ -1658,6 +1693,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 llvm::Value* result = builder->CreateCall(callee, args);
                 std::cerr << "DEBUG LLVM: CreateCall succeeded, result = " << result << std::endl;
 
+                // Special handling for array functions that return new arrays
+                std::string calleeName = callee->getName().str();
+                if (calleeName == "nova_value_array_concat" || calleeName == "nova_value_array_slice") {
+                    std::cerr << "DEBUG LLVM: Detected array-returning function: " << calleeName << std::endl;
+                    // Create ValueArrayMeta type and register it for the result
+                    // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }
+                    std::vector<llvm::Type*> metaFields = {
+                        llvm::ArrayType::get(llvm::Type::getInt8Ty(*context), 24), // padding
+                        llvm::Type::getInt64Ty(*context),                          // length
+                        llvm::Type::getInt64Ty(*context),                          // capacity
+                        llvm::PointerType::get(*context, 0)                        // elements pointer
+                    };
+                    llvm::StructType* arrayMetaType = llvm::StructType::get(*context, metaFields);
+                    arrayTypeMap[result] = arrayMetaType;
+                    std::cerr << "DEBUG LLVM: Registered array metadata type for result of " << calleeName << std::endl;
+                }
+
                 // Special handling for malloc in constructors
                 std::cerr << "DEBUG LLVM: Checking for malloc in constructor..." << std::endl;
                 // If this is a malloc call in a constructor, track the struct type
@@ -1681,6 +1733,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                     arrayTypeMap[result] = structType;
                                 }
                             }
+                        }
+
+                        // Special handling for array functions that return new arrays
+                        if (funcName == "nova_value_array_concat" || funcName == "nova_value_array_slice") {
+                            std::cerr << "DEBUG LLVM: Detected array-returning function: " << funcName << std::endl;
+                            // Create ValueArrayMeta type and register it for the result
+                            // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }
+                            std::vector<llvm::Type*> metaFields = {
+                                llvm::ArrayType::get(llvm::Type::getInt8Ty(*context), 24), // padding
+                                llvm::Type::getInt64Ty(*context),                          // length
+                                llvm::Type::getInt64Ty(*context),                          // capacity
+                                llvm::PointerType::get(*context, 0)                        // elements pointer
+                            };
+                            llvm::StructType* arrayMetaType = llvm::StructType::get(*context, metaFields);
+                            arrayTypeMap[result] = arrayMetaType;
+                            std::cerr << "DEBUG LLVM: Registered array metadata type for result of " << funcName << std::endl;
                         }
                     }
                 }

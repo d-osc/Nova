@@ -68,14 +68,14 @@
 - `console.log()` - Console output
 
 ## ⚠️ Known Limitations
-1. **Type Inference**: Array methods that return new arrays (concat, slice) lose type info when stored in variables
-   - Workaround: Access `.length` on original array or use inline
+1. **Type Inference**: ~~Array methods that return new arrays (concat, slice) lose type info when stored in variables~~ **FIXED in v0.78.0** ✅
+   - ~~Workaround: Access `.length` on original array or use inline~~
 2. **Callbacks**: Methods requiring callbacks (find, filter, map, reduce, etc.) not yet implemented
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.77.0
+- **Latest Version**: v0.78.0
 - **String Methods**: 15+
 - **Array Methods**: 13+
 - **Math Methods**: 14+

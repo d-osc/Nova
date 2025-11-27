@@ -1445,14 +1445,20 @@ public:
                         runtimeFuncName = "nova_value_array_concat";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray* (first array)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray* (second array)
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (new array)
+                        // Return proper array type: pointer to array of i64
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
+                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
                         hasReturnValue = true;
                     } else if (methodName == "slice") {
                         runtimeFuncName = "nova_value_array_slice";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // start index
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // end index
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (new array)
+                        // Return proper array type: pointer to array of i64
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
+                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
                         hasReturnValue = true;
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
