@@ -1652,6 +1652,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "nova_value_array_map") {
+                            // ptr @nova_value_array_map(ptr, ptr) - array and callback function pointer, returns new array
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_map declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_map",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
@@ -1679,7 +1696,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     std::cerr << "DEBUG LLVM: Argument converted, argValue = " << argValue << std::endl;
 
                     // Special handling for callback arguments: convert string constant to function pointer
-                    if ((calleeName == "nova_value_array_find" || calleeName == "nova_value_array_filter") && argIdx == 1) {
+                    if ((calleeName == "nova_value_array_find" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map") && argIdx == 1) {
                         // Second argument should be a function pointer, but comes as string constant
                         if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
                             std::cerr << "DEBUG LLVM: Detected string constant for callback argument" << std::endl;
@@ -1759,7 +1776,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                 // Special handling for array functions that return new arrays
                 // calleeName already declared above at line 1658
-                if (calleeName == "nova_value_array_concat" || calleeName == "nova_value_array_slice" || calleeName == "nova_value_array_filter") {
+                if (calleeName == "nova_value_array_concat" || calleeName == "nova_value_array_slice" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map") {
                     std::cerr << "DEBUG LLVM: Detected array-returning function: " << calleeName << std::endl;
                     // Create ValueArrayMeta type and register it for the result
                     // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }

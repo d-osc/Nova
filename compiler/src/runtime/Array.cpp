@@ -668,6 +668,34 @@ void* nova_value_array_filter(void* array_ptr, FilterCallbackFunc callback) {
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
+// Array.map() implementation
+// Callback function type: takes element, returns transformed value
+typedef int64_t (*MapCallbackFunc)(int64_t);
+
+void* nova_value_array_map(void* array_ptr, MapCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        // Return empty array
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        emptyArray->length = 0;
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    // Create new array with same size as input
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(array->length);
+    resultArray->length = array->length;
+
+    // Transform each element
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        int64_t transformed = callback(element);
+        resultArray->elements[i] = transformed;
+    }
+
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
 
 
 } // extern "C"
