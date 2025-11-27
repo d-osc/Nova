@@ -76,6 +76,8 @@
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
 - **Latest Version**: v0.78.0
+- **Test Suite**: 176/176 tests passing (100%) ✅
+- **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 15+
 - **Array Methods**: 13+
 - **Math Methods**: 14+
