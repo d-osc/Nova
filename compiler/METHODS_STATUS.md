@@ -41,7 +41,8 @@
 - `Array.prototype.slice(start, end)` - Extract sub-array **[v0.77.0]**
 - `Array.prototype.find(callback)` - Find first matching element **[v0.79.0]**
 - `Array.prototype.findIndex(callback)` - Find first matching index **[v0.86.0]**
-- `Array.prototype.findLast(callback)` - Find last matching element (ES2023) **[v1.1.6 NEW!]**
+- `Array.prototype.findLast(callback)` - Find last matching element (ES2023) **[v1.1.6]**
+- `Array.prototype.findLastIndex(callback)` - Find last matching index (ES2023) **[v1.1.7 NEW!]**
 - `Array.prototype.filter(callback)` - Filter elements by condition **[v0.80.0]**
 - `Array.prototype.map(callback)` - Transform each element **[v0.81.0]**
 - `Array.prototype.some(callback)` - Check if any element matches **[v0.82.0]**
@@ -122,12 +123,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 77+ methods implemented
-- **Latest Version**: v1.1.6
-- **Test Suite**: 214/214 tests passing (100%) ✅
+- **Total Methods**: 78+ methods implemented
+- **Latest Version**: v1.1.7
+- **Test Suite**: 215/215 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 22+ (includes ES2022 features!)
-- **Array Methods**: 25+ (with 10 callback methods! includes ES2023!)
+- **Array Methods**: 26+ (with 11 callback methods! includes ES2023!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 

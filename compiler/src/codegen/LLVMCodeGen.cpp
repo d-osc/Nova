@@ -1820,6 +1820,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_value_array_findLastIndex") {
+                            // i64 @nova_value_array_findLastIndex(ptr, ptr) - array and callback, returns index (ES2023)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_findLastIndex declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),  // Returns i64 (index or -1)
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_findLastIndex",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_filter") {
                             // ptr @nova_value_array_filter(ptr, ptr) - array and callback function pointer, returns new array
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_filter declaration" << std::endl;
