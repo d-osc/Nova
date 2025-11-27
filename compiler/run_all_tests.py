@@ -49,18 +49,8 @@ def main():
         return 1
 
     # Get all test files
-    test_files = sorted(tests_dir.glob('test_*.ts'))
-
-    # Filter out files with arrow functions (callbacks not supported yet)
-    test_files_to_run = []
+    test_files_to_run = sorted(tests_dir.glob('test_*.ts'))
     skipped_tests = []
-
-    for test_file in test_files:
-        content = test_file.read_text()
-        if '=>' in content and 'arr.find' in content:
-            skipped_tests.append(test_file.name)
-        else:
-            test_files_to_run.append(test_file)
 
     print(f"{BLUE}{'='*70}{RESET}")
     print(f"{BLUE}Nova Compiler - Test Suite Runner{RESET}")

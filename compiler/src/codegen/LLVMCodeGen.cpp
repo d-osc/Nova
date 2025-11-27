@@ -1655,10 +1655,40 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                 std::cerr << "DEBUG LLVM: callTerm->args.size() = " << callTerm->args.size() << std::endl;
                 int argIdx = 0;
+                std::string calleeName = callee->getName().str();
                 for (const auto& arg : callTerm->args) {
-                    std::cerr << "DEBUG LLVM: Processing argument " << argIdx++ << std::endl;
+                    std::cerr << "DEBUG LLVM: Processing argument " << argIdx << std::endl;
                     llvm::Value* argValue = convertOperand(arg.get());
                     std::cerr << "DEBUG LLVM: Argument converted, argValue = " << argValue << std::endl;
+
+                    // Special handling for callback arguments: convert string constant to function pointer
+                    if (calleeName == "nova_value_array_find" && argIdx == 1) {
+                        // Second argument should be a function pointer, but comes as string constant
+                        if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
+                            std::cerr << "DEBUG LLVM: Detected string constant for callback argument" << std::endl;
+
+                            // Try to extract the function name from the string constant
+                            if (globalStr->hasInitializer()) {
+                                if (auto* constData = llvm::dyn_cast<llvm::ConstantDataArray>(globalStr->getInitializer())) {
+                                    if (constData->isCString()) {
+                                        std::string funcName = constData->getAsCString().str();
+                                        std::cerr << "DEBUG LLVM: Extracted function name from string: " << funcName << std::endl;
+
+                                        // Look up the actual function
+                                        llvm::Function* callbackFunc = module->getFunction(funcName);
+                                        if (callbackFunc) {
+                                            std::cerr << "DEBUG LLVM: Found callback function, using function pointer" << std::endl;
+                                            argValue = callbackFunc;  // Use function pointer instead of string
+                                        } else {
+                                            std::cerr << "DEBUG LLVM: WARNING - Function not found: " << funcName << std::endl;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    argIdx++;
                     if (argValue && paramIt != callee->arg_end()) {
                         // Check if we need to convert types
                         llvm::Type* expectedType = paramIt->getType();
@@ -1711,7 +1741,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 std::cerr << "DEBUG LLVM: CreateCall succeeded, result = " << result << std::endl;
 
                 // Special handling for array functions that return new arrays
-                std::string calleeName = callee->getName().str();
+                // calleeName already declared above at line 1658
                 if (calleeName == "nova_value_array_concat" || calleeName == "nova_value_array_slice") {
                     std::cerr << "DEBUG LLVM: Detected array-returning function: " << calleeName << std::endl;
                     // Create ValueArrayMeta type and register it for the result

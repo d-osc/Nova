@@ -134,7 +134,15 @@
       "Bash(do)",
       "Bash(if [ -f \"tests/test_array_$method.ts\" ])",
       "Bash(then)",
-      "Bash(for test in abs ceil cbrt hypot)"
+      "Bash(for test in abs ceil cbrt hypot)",
+      "Bash(for test in concat slice join)",
+      "Bash(for test in abs sqrt pow)",
+      "Bash(if [ -f \"tests/test_math_$test.ts\" ])",
+      "Bash(for test in replace split)",
+      "Bash(if [ -f \"tests/test_string_$test.ts\" ])",
+      "Bash(find:*)",
+      "Bash(build\\Release\\nova.exe run:*)",
+      "Bash(build\\\\Release\\\\nova.exe run:*)"
     ],
     "deny": [],
     "ask": []

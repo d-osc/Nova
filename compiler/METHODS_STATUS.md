@@ -27,9 +27,10 @@
 - `Array.prototype.indexOf(value)` - Find first index
 - `Array.prototype.reverse()` - Reverse in place
 - `Array.prototype.fill(value)` - Fill with value
-- `Array.prototype.join(delimiter)` - Join to string **[v0.75.0 NEW!]**
-- `Array.prototype.concat(otherArray)` - Concatenate arrays **[v0.76.0 NEW!]**
-- `Array.prototype.slice(start, end)` - Extract sub-array **[v0.77.0 NEW!]**
+- `Array.prototype.join(delimiter)` - Join to string **[v0.75.0]**
+- `Array.prototype.concat(otherArray)` - Concatenate arrays **[v0.76.0]**
+- `Array.prototype.slice(start, end)` - Extract sub-array **[v0.77.0]**
+- `Array.prototype.find(callback)` - Find first matching element **[v0.79.0 NEW!]**
 - `Array.prototype.length` - Array length property
 - `Array.isArray(value)` - Check if value is array
 
@@ -70,16 +71,18 @@
 ## ⚠️ Known Limitations
 1. **Type Inference**: ~~Array methods that return new arrays (concat, slice) lose type info when stored in variables~~ **FIXED in v0.78.0** ✅
    - ~~Workaround: Access `.length` on original array or use inline~~
-2. **Callbacks**: Methods requiring callbacks (find, filter, map, reduce, etc.) not yet implemented
+2. **Callbacks**:
+   - ✅ Array.find() now supported with arrow function callbacks **[v0.79.0]**
+   - Additional callback methods (filter, map, reduce, forEach) coming soon
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.78.0
-- **Test Suite**: 176/176 tests passing (100%) ✅
+- **Latest Version**: v0.79.0
+- **Test Suite**: 177/177 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 15+
-- **Array Methods**: 13+
+- **Array Methods**: 14+ (now with callback support!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
 
