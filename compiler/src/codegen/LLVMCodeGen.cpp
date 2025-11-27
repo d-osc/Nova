@@ -2067,6 +2067,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "atan2") {
+                            // double @atan2(double, double) - C library two-argument arctangent function
+                            std::cerr << "DEBUG LLVM: Creating external atan2 declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context), llvm::Type::getDoubleTy(*context)},  // Takes two doubles
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "atan2",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }

@@ -74,7 +74,8 @@
 - `Math.tan(x)` - Tangent function (radians) **[v1.0.2]**
 - `Math.atan(x)` - Arctangent / inverse tangent (radians) **[v1.0.3]**
 - `Math.asin(x)` - Arcsine / inverse sine (radians) **[v1.0.4]**
-- `Math.acos(x)` - Arccosine / inverse cosine (radians) **[v1.0.5 NEW!]**
+- `Math.acos(x)` - Arccosine / inverse cosine (radians) **[v1.0.5]**
+- `Math.atan2(y, x)` - Two-argument arctangent (radians) **[v1.0.6 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -111,12 +112,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 66+ methods implemented
-- **Latest Version**: v1.0.5
-- **Test Suite**: 203/203 tests passing (100%) ✅
+- **Total Methods**: 67+ methods implemented
+- **Latest Version**: v1.0.6
+- **Test Suite**: 204/204 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 21+
 - **Array Methods**: 24+ (with 9 callback methods!)
-- **Math Methods**: 24+ (complete basic trig + inverse trig suite!)
+- **Math Methods**: 25+ (complete trig + inverse trig suite with atan2!)
 - **Number Methods**: 4+
 
