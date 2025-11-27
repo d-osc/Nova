@@ -2388,6 +2388,16 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
                         hasReturnValue = true;
+                    } else if (methodName == "splice") {
+                        // array.splice(start, deleteCount) - removes elements in place
+                        // Modifies array by removing deleteCount elements starting at start
+                        std::cerr << "DEBUG HIRGen: Detected array method call: splice" << std::endl;
+                        runtimeFuncName = "nova_value_array_splice";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 start
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 deleteCount
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*

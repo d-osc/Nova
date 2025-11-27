@@ -715,6 +715,49 @@ void* nova_value_array_sort(void* array_ptr) {
     return array_ptr;
 }
 
+// Array.splice(start, deleteCount) - removes elements in place
+// Modifies array by removing deleteCount elements starting at start
+void* nova_value_array_splice(void* array_ptr, int64_t start, int64_t deleteCount) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !array->elements || array->length == 0) {
+        return array_ptr;
+    }
+
+    // Handle negative start index
+    if (start < 0) {
+        start = array->length + start;
+        if (start < 0) start = 0;
+    }
+
+    // Clamp start to array bounds
+    if (start >= array->length) {
+        return array_ptr;
+    }
+
+    // Clamp deleteCount
+    if (deleteCount < 0) {
+        deleteCount = 0;
+    }
+    if (start + deleteCount > array->length) {
+        deleteCount = array->length - start;
+    }
+
+    // Shift elements left to fill the gap
+    for (int64_t i = start; i + deleteCount < array->length; i++) {
+        array->elements[i] = array->elements[i + deleteCount];
+    }
+
+    // Update length
+    array->length -= deleteCount;
+
+    // Write back to metadata
+    write_back_to_metadata(array_ptr, array);
+
+    // Return array pointer for chaining (like JavaScript)
+    return array_ptr;
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);

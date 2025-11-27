@@ -35,7 +35,8 @@
 - `Array.prototype.with(index, value)` - Return copy with element replaced (ES2023) **[v1.1.9]**
 - `Array.prototype.toReversed()` - Return reversed copy (immutable) (ES2023) **[v1.2.0]**
 - `Array.prototype.toSorted()` - Return sorted copy (immutable, ascending) (ES2023) **[v1.2.1]**
-- `Array.prototype.sort()` - Sort in place (mutable, ascending) **[v1.2.2 NEW!]**
+- `Array.prototype.sort()` - Sort in place (mutable, ascending) **[v1.2.2]**
+- `Array.prototype.splice(start, deleteCount)` - Remove elements in place **[v1.2.3 NEW!]**
 - `Array.prototype.includes(value)` - Check if contains
 - `Array.prototype.indexOf(value)` - Find first index
 - `Array.prototype.lastIndexOf(value)` - Find last index **[v0.87.0]**
@@ -128,12 +129,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 83+ methods implemented
-- **Latest Version**: v1.2.2
-- **Test Suite**: 229/229 tests passing (100%) ✅
+- **Total Methods**: 84+ methods implemented
+- **Latest Version**: v1.2.3
+- **Test Suite**: 230/230 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 23+ (includes ES2021 & ES2022!)
-- **Array Methods**: 30+ (with 11 callback methods! includes ES2023 immutable operations!)
+- **Array Methods**: 31+ (with 11 callback methods! includes ES2023 immutable operations!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 
