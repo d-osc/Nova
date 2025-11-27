@@ -667,6 +667,35 @@ void* nova_value_array_toReversed(void* array_ptr) {
     return nova::runtime::create_metadata_from_value_array(result);
 }
 
+// Array.toSorted() - ES2023
+// Returns NEW sorted array (immutable operation)
+void* nova_value_array_toSorted(void* array_ptr) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array) {
+        return nullptr;
+    }
+
+    // Create a copy of the array
+    nova::runtime::ValueArray* result = new nova::runtime::ValueArray();
+    result->capacity = array->capacity;
+    result->length = array->length;
+    result->elements = static_cast<int64_t*>(malloc(array->capacity * sizeof(int64_t)));
+
+    if (!result->elements) {
+        return nullptr;
+    }
+
+    // Copy all elements
+    std::memcpy(result->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Sort the elements (ascending numeric order)
+    std::sort(result->elements, result->elements + result->length);
+
+    // Create metadata struct for the new array
+    return nova::runtime::create_metadata_from_value_array(result);
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);
