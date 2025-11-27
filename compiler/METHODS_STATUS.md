@@ -80,7 +80,8 @@
 - `Math.cosh(x)` - Hyperbolic cosine function **[v1.0.8]**
 - `Math.tanh(x)` - Hyperbolic tangent function **[v1.0.9]**
 - `Math.asinh(x)` - Inverse hyperbolic sine function **[v1.1.0]**
-- `Math.acosh(x)` - Inverse hyperbolic cosine function **[v1.1.1 NEW!]**
+- `Math.acosh(x)` - Inverse hyperbolic cosine function **[v1.1.1]**
+- `Math.atanh(x)` - Inverse hyperbolic tangent function **[v1.1.2 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -117,12 +118,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 72+ methods implemented
-- **Latest Version**: v1.1.1
-- **Test Suite**: 209/209 tests passing (100%) ✅
+- **Total Methods**: 73+ methods implemented
+- **Latest Version**: v1.1.2
+- **Test Suite**: 210/210 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 21+
 - **Array Methods**: 24+ (with 9 callback methods!)
-- **Math Methods**: 30+ (trig + inverse trig + hyperbolic + inverse hyperbolic!)
+- **Math Methods**: 31+ (trig + inverse trig + hyperbolic + inverse hyperbolic - COMPLETE!)
 - **Number Methods**: 4+
 
