@@ -2846,6 +2846,66 @@ public:
                     return;
                 }
 
+                // Check if object is a number type
+                bool isNumberMethod = object && object->type &&
+                                     (object->type->kind == hir::HIRType::Kind::I64 ||
+                                      object->type->kind == hir::HIRType::Kind::F64);
+
+                if (isNumberMethod) {
+                    std::cerr << "DEBUG HIRGen: Detected number method call: " << methodName << std::endl;
+
+                    // Generate arguments
+                    std::vector<HIRValue*> args;
+                    args.push_back(object);  // First argument is the number itself
+                    for (auto& arg : node.arguments) {
+                        arg->accept(*this);
+                        args.push_back(lastValue_);
+                    }
+
+                    // Create or get runtime function based on method name
+                    std::string runtimeFuncName;
+                    std::vector<HIRTypePtr> paramTypes;
+                    HIRTypePtr returnType;
+
+                    if (methodName == "toFixed") {
+                        // num.toFixed(digits)
+                        // Formats number with fixed decimal places
+                        // Returns string representation
+                        std::cerr << "DEBUG HIRGen: Detected number method call: toFixed" << std::endl;
+                        runtimeFuncName = "nova_number_toFixed";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // digits (i64)
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
+                    } else {
+                        std::cerr << "DEBUG HIRGen: Unknown number method: " << methodName << std::endl;
+                        lastValue_ = builder_->createIntConstant(0);
+                        return;
+                    }
+
+                    // Check if function already exists
+                    HIRFunction* runtimeFunc = nullptr;
+                    auto& functions = module_->functions;
+                    for (auto& func : functions) {
+                        if (func->name == runtimeFuncName) {
+                            runtimeFunc = func.get();
+                            break;
+                        }
+                    }
+
+                    // Create function if it doesn't exist
+                    if (!runtimeFunc) {
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                        HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        runtimeFunc = funcPtr.get();
+                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    }
+
+                    // Create call to runtime function
+                    lastValue_ = builder_->createCall(runtimeFunc, args, "num_method");
+                    return;
+                }
+
                 // Check if object is an array type
                 bool isArrayMethod = false;
                 if (object && object->type) {

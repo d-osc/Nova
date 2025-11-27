@@ -116,6 +116,7 @@ set(NOVA_SOURCES
     src/runtime/Array.cpp
     src/runtime/String.cpp
     src/runtime/Object.cpp
+    src/runtime/Number.cpp
     src/runtime/Function.cpp
     src/runtime/Utility.cpp
     

@@ -108,9 +108,10 @@
 - `Number.isNaN(value)` - Check if NaN
 - `Number.isInteger(value)` - Check if integer
 - `Number.isSafeInteger(value)` - Check if safe integer
+- `Number.prototype.toFixed(digits)` - Format number with fixed decimal places **[v1.3.12 NEW!]**
 
 ## ✅ Object Methods (Working)
-- `Object.isSealed(obj)` - Checks if object is sealed (static, ES5) **[v1.3.11 NEW!]**
+- `Object.isSealed(obj)` - Checks if object is sealed (static, ES5) **[v1.3.11]**
 - `Object.seal(obj)` - Seals object, prevents add/delete properties (static, ES5) **[v1.3.10]**
 - `Object.isFrozen(obj)` - Checks if object is frozen (static, ES5) **[v1.3.9]**
 - `Object.freeze(obj)` - Makes object immutable (static, ES5) **[v1.3.8]**
@@ -149,13 +150,13 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 102+ methods implemented
-- **Latest Version**: v1.3.11
-- **Test Suite**: 247/247 tests passing (100%) ✅
+- **Total Methods**: 103+ methods implemented
+- **Latest Version**: v1.3.12
+- **Test Suite**: 248/248 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
-- **Number Methods**: 4+
+- **Number Methods**: 5+ (includes instance methods!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
 
