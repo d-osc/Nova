@@ -2345,6 +2345,19 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 index
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 element
                         hasReturnValue = true;
+                    } else if (methodName == "with") {
+                        // array.with(index, value) - ES2023
+                        // Returns NEW array with element at index replaced (immutable)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: with" << std::endl;
+                        runtimeFuncName = "nova_value_array_with";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 index
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        // Return proper array type: pointer to array of i64
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
+                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*

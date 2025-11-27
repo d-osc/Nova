@@ -20,7 +20,7 @@
 - `String.prototype.includes(searchString)` - Check if contains
 - `String.prototype.slice(start, end)` - Extract slice (supports negative indices)
 - `String.prototype.replace(search, replace)` - Replace first occurrence
-- `String.prototype.replaceAll(search, replace)` - Replace all occurrences (ES2021) **[v1.1.8 NEW!]**
+- `String.prototype.replaceAll(search, replace)` - Replace all occurrences (ES2021) **[v1.1.8]**
 - `String.prototype.padStart(length, fillString)` - Pad at start
 - `String.prototype.padEnd(length, fillString)` - Pad at end
 - `String.prototype.split(delimiter)` - Split into array **[v0.74.0]**
@@ -31,7 +31,8 @@
 - `Array.prototype.pop()` - Remove from end
 - `Array.prototype.shift()` - Remove from start
 - `Array.prototype.unshift(value)` - Add to start
-- `Array.prototype.at(index)` - Get element at index (supports negative) **[v0.92.0 NEW!]**
+- `Array.prototype.at(index)` - Get element at index (supports negative) **[v0.92.0]**
+- `Array.prototype.with(index, value)` - Return copy with element replaced (ES2023) **[v1.1.9 NEW!]**
 - `Array.prototype.includes(value)` - Check if contains
 - `Array.prototype.indexOf(value)` - Find first index
 - `Array.prototype.lastIndexOf(value)` - Find last index **[v0.87.0]**
@@ -124,12 +125,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 79+ methods implemented
-- **Latest Version**: v1.1.8
-- **Test Suite**: 216/216 tests passing (100%) ✅
+- **Total Methods**: 80+ methods implemented
+- **Latest Version**: v1.1.9
+- **Test Suite**: 217/217 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 23+ (includes ES2021 & ES2022 features!)
-- **Array Methods**: 26+ (with 11 callback methods! includes ES2023!)
+- **String Methods**: 23+ (includes ES2021 & ES2022!)
+- **Array Methods**: 27+ (with 11 callback methods! includes ES2023 immutable operations!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 

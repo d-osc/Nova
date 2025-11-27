@@ -590,6 +590,55 @@ int64_t nova_value_array_at(void* array_ptr, int64_t index) {
     return nova::runtime::value_array_at(array, index);
 }
 
+// Array.with(index, value) - ES2023
+// Returns NEW array with element at index replaced (immutable operation)
+void* nova_value_array_with(void* array_ptr, int64_t index, int64_t value) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array) {
+        return nullptr;
+    }
+
+    int64_t len = array->length;
+
+    // Handle negative indices: convert to positive
+    if (index < 0) {
+        index = len + index;
+    }
+
+    // Check bounds after conversion
+    if (index < 0 || index >= len) {
+        // Out of bounds - return copy of original array unchanged
+        nova::runtime::ValueArray* result = new nova::runtime::ValueArray();
+        result->capacity = array->capacity;
+        result->length = array->length;
+        result->elements = static_cast<int64_t*>(malloc(array->capacity * sizeof(int64_t)));
+        if (result->elements && array->elements) {
+            std::memcpy(result->elements, array->elements, array->length * sizeof(int64_t));
+        }
+        return nova::runtime::create_metadata_from_value_array(result);
+    }
+
+    // Create a copy of the array
+    nova::runtime::ValueArray* result = new nova::runtime::ValueArray();
+    result->capacity = array->capacity;
+    result->length = array->length;
+    result->elements = static_cast<int64_t*>(malloc(array->capacity * sizeof(int64_t)));
+
+    if (!result->elements) {
+        return nullptr;
+    }
+
+    // Copy all elements
+    std::memcpy(result->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Replace element at index
+    result->elements[index] = value;
+
+    // Create metadata struct for the new array
+    return nova::runtime::create_metadata_from_value_array(result);
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);
