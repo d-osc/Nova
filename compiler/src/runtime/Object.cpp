@@ -193,4 +193,36 @@ void* nova_object_entries(void* obj_ptr) {
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
+// Object.assign(target, source) - copies properties from source to target (ES2015)
+void* nova_object_assign(void* target_ptr, void* source_ptr) {
+    nova::runtime::Object* target = static_cast<nova::runtime::Object*>(target_ptr);
+    nova::runtime::Object* source = static_cast<nova::runtime::Object*>(source_ptr);
+
+    if (!target) {
+        // Return null if target is null
+        return nullptr;
+    }
+
+    if (!source || !source->properties) {
+        // Return target unchanged if source is null or has no properties
+        return target_ptr;
+    }
+
+    // Lazily allocate target properties map if needed
+    if (!target->properties) {
+        target->properties = new std::unordered_map<std::string, nova::runtime::Property>();
+    }
+
+    auto* targetProps = static_cast<std::unordered_map<std::string, nova::runtime::Property>*>(target->properties);
+    auto* sourceProps = static_cast<std::unordered_map<std::string, nova::runtime::Property>*>(source->properties);
+
+    // Copy all properties from source to target
+    for (const auto& pair : *sourceProps) {
+        (*targetProps)[pair.first] = pair.second;
+    }
+
+    // Return the modified target object
+    return target_ptr;
+}
+
 } // extern "C"

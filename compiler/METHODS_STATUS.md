@@ -110,7 +110,8 @@
 - `Number.isSafeInteger(value)` - Check if safe integer
 
 ## ✅ Object Methods (Working)
-- `Object.entries(obj)` - Returns array of [key, value] pairs (static, ES2017) **[v1.3.5 NEW!]**
+- `Object.assign(target, source)` - Copies properties from source to target (static, ES2015) **[v1.3.6 NEW!]**
+- `Object.entries(obj)` - Returns array of [key, value] pairs (static, ES2017) **[v1.3.5]**
 - `Object.keys(obj)` - Returns array of object's property keys (static, ES2015) **[v1.3.4]**
 - `Object.values(obj)` - Returns array of object's property values (static, ES2017) **[v1.3.3]**
 
@@ -143,13 +144,13 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 96+ methods implemented
-- **Latest Version**: v1.3.5
+- **Total Methods**: 97+ methods implemented
+- **Latest Version**: v1.3.6
 - **Test Suite**: 242/242 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
-- **Object Methods**: 3+ (ES2015 & ES2017 features - complete introspection trio!)
+- **Object Methods**: 4+ (ES2015 & ES2017 features - introspection + manipulation!)
 

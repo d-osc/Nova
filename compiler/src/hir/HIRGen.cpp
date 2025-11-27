@@ -2376,6 +2376,53 @@ public:
                         lastValue_ = builder_->createCall(runtimeFunc, args, "object_entries_result");
                         return;
                     }
+
+                    if (objIdent->name == "Object" && propIdent->name == "assign") {
+                        // Object.assign(target, source) - copies properties from source to target (ES2015)
+                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.assign" << std::endl;
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Object.assign() expects exactly 2 arguments" << std::endl;
+                            return;
+                        }
+
+                        // Evaluate the arguments (target and source)
+                        node.arguments[0]->accept(*this);
+                        auto* target = lastValue_;
+
+                        node.arguments[1]->accept(*this);
+                        auto* source = lastValue_;
+
+                        // Setup function signature
+                        std::string runtimeFuncName = "nova_object_assign";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // target object
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // source object
+
+                        // Return type is pointer to the modified target object
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {target, source};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "object_assign_result");
+                        return;
+                    }
                 }
             }
         }
