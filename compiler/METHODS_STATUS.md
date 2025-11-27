@@ -66,8 +66,9 @@
 - `Math.imul(a, b)` - Integer multiplication
 - `Math.clz32(x)` - Count leading zeros
 - `Math.log(x)` - Natural logarithm (base e) **[v0.96.0]**
+- `Math.log1p(x)` - Returns ln(1 + x) (precise for small x) **[v1.1.4 NEW!]**
 - `Math.exp(x)` - Exponential function (e^x) **[v0.97.0]**
-- `Math.expm1(x)` - Returns e^x - 1 (precise for small x) **[v1.1.3 NEW!]**
+- `Math.expm1(x)` - Returns e^x - 1 (precise for small x) **[v1.1.3]**
 - `Math.log10(x)` - Base 10 logarithm **[v0.98.0]**
 - `Math.log2(x)` - Base 2 logarithm **[v0.99.0]**
 - `Math.sin(x)` - Sine function (radians) **[v1.0.0]**
@@ -119,12 +120,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 74+ methods implemented
-- **Latest Version**: v1.1.3
-- **Test Suite**: 211/211 tests passing (100%) ✅
+- **Total Methods**: 75+ methods implemented
+- **Latest Version**: v1.1.4
+- **Test Suite**: 212/212 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 21+
 - **Array Methods**: 24+ (with 9 callback methods!)
-- **Math Methods**: 32+ (trig + inverse trig + hyperbolic + inverse hyperbolic + advanced!)
+- **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 

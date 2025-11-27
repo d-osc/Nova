@@ -2195,6 +2195,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "log1p") {
+                            // double @log1p(double) - C library function returns ln(1 + x)
+                            std::cerr << "DEBUG LLVM: Creating external log1p declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "log1p",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }

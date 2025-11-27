@@ -1589,6 +1589,49 @@ public:
                         return;
                     }
 
+                    // Check if this is Math.log1p()
+                    if (objIdent->name == "Math" && propIdent->name == "log1p") {
+                        // Math.log1p() - returns ln(1 + x)
+                        std::cerr << "DEBUG HIRGen: Detected Math.log1p() call" << std::endl;
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: Math.log1p() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the argument
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // Create call to log1p() C library function
+                        std::string runtimeFuncName = "log1p";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {value};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "log1p_result");
+                        return;
+                    }
+
                     // Check if this is Math.hypot()
                     if (objIdent->name == "Math" && propIdent->name == "hypot") {
                         // Math.hypot() - compute sqrt(x^2 + y^2 + ...)
