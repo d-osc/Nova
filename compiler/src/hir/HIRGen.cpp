@@ -1331,6 +1331,11 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else if (methodName == "split") {
+                        runtimeFuncName = "nova_string_split";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown string method: " << methodName << std::endl;
                         lastValue_ = nullptr;
@@ -1429,6 +1434,25 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
+                        hasReturnValue = true;
+                    } else if (methodName == "join") {
+                        runtimeFuncName = "nova_value_array_join";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));  // delimiter
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);           // returns string
+                        hasReturnValue = true;
+                    } else if (methodName == "concat") {
+                        runtimeFuncName = "nova_value_array_concat";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray* (first array)
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray* (second array)
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (new array)
+                        hasReturnValue = true;
+                    } else if (methodName == "slice") {
+                        runtimeFuncName = "nova_value_array_slice";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // start index
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // end index
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (new array)
                         hasReturnValue = true;
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
