@@ -823,6 +823,30 @@ void* nova_value_array_flatMap(void* array_ptr, FlatMapCallbackFunc callback) {
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
+// Array.from(arrayLike) - creates new array from array-like object (ES2015)
+// Static method: Array.from(), not array.from()
+// Creates a shallow copy of the input array
+void* nova_array_from(void* array_ptr) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || array->length == 0) {
+        // Return empty array
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        emptyArray->length = 0;
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    // Create new array with same size
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(array->length);
+    resultArray->length = array->length;
+
+    // Copy all elements (shallow copy)
+    std::memcpy(resultArray->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Return new array
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);
