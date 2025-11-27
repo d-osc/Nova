@@ -695,6 +695,34 @@ int64_t nova_value_array_findIndex(void* array_ptr, FindIndexCallbackFunc callba
     return -1;  // JavaScript standard: return -1 when not found
 }
 
+// Array.findLast() implementation - ES2023
+// Callback function type: same as find
+typedef int64_t (*FindLastCallbackFunc)(int64_t);
+
+int64_t nova_value_array_findLast(void* array_ptr, FindLastCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return 0;  // Not found
+    }
+
+    // Iterate through array elements BACKWARDS (from end to start)
+    for (int64_t i = array->length - 1; i >= 0; i--) {
+        int64_t element = array->elements[i];
+
+        // Call the callback function
+        int64_t result = callback(element);
+
+        // If callback returns truthy value, return this element
+        if (result != 0) {
+            return element;  // Return the ELEMENT, not the index
+        }
+    }
+
+    // Not found
+    return 0;
+}
+
 // Array.filter() implementation
 // Callback function type: same as find
 typedef int64_t (*FilterCallbackFunc)(int64_t);

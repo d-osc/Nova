@@ -4,7 +4,7 @@
 - `String.fromCharCode(code)` - Create string from character code (static) **[v0.91.0]**
 - `String.prototype.charAt(index)` - Get character at index
 - `String.prototype.charCodeAt(index)` - Get character code at index **[v0.90.0]**
-- `String.prototype.at(index)` - Get character at index (supports negative) **[v1.1.5 NEW!]**
+- `String.prototype.at(index)` - Get character at index (supports negative) **[v1.1.5]**
 - `String.prototype.concat(otherString)` - Concatenate strings **[v0.93.0]**
 - `String.prototype.substring(start, end)` - Extract substring
 - `String.prototype.indexOf(searchString)` - Find first occurrence
@@ -41,6 +41,7 @@
 - `Array.prototype.slice(start, end)` - Extract sub-array **[v0.77.0]**
 - `Array.prototype.find(callback)` - Find first matching element **[v0.79.0]**
 - `Array.prototype.findIndex(callback)` - Find first matching index **[v0.86.0]**
+- `Array.prototype.findLast(callback)` - Find last matching element (ES2023) **[v1.1.6 NEW!]**
 - `Array.prototype.filter(callback)` - Filter elements by condition **[v0.80.0]**
 - `Array.prototype.map(callback)` - Transform each element **[v0.81.0]**
 - `Array.prototype.some(callback)` - Check if any element matches **[v0.82.0]**
@@ -121,12 +122,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 76+ methods implemented
-- **Latest Version**: v1.1.5
-- **Test Suite**: 213/213 tests passing (100%) ✅
+- **Total Methods**: 77+ methods implemented
+- **Latest Version**: v1.1.6
+- **Test Suite**: 214/214 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 22+ (includes ES2022 features!)
-- **Array Methods**: 24+ (with 9 callback methods!)
+- **Array Methods**: 25+ (with 10 callback methods! includes ES2023!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 

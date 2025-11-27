@@ -2412,6 +2412,16 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns index (i64)
                         hasReturnValue = true;
+                    } else if (methodName == "findLast") {
+                        // array.findLast(callback) - ES2023
+                        // Callback: (element) => boolean
+                        // Returns the last element matching condition (searches right to left)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: findLast" << std::endl;
+                        runtimeFuncName = "nova_value_array_findLast";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns element value
+                        hasReturnValue = true;
                     } else if (methodName == "filter") {
                         // array.filter(callback)
                         // Callback: (element) => boolean
@@ -2507,7 +2517,7 @@ public:
                         arg->accept(*this);
 
                         // Check if this argument was an arrow function
-                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "findIndex" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every" || methodName == "forEach" || methodName == "reduce" || methodName == "reduceRight")) {
+                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "findIndex" || methodName == "findLast" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every" || methodName == "forEach" || methodName == "reduce" || methodName == "reduceRight")) {
                             // For callback methods, pass function name as string constant
                             // LLVM codegen will convert this to a function pointer
                             std::cerr << "DEBUG HIRGen: Detected arrow function argument: " << lastFunctionName_ << std::endl;
