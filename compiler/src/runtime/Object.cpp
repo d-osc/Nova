@@ -288,4 +288,26 @@ int64_t nova_object_isFrozen(void* obj_ptr) {
     return 0;
 }
 
+// Object.seal(obj) - seals object, prevents add/delete properties (ES5)
+void* nova_object_seal(void* obj_ptr) {
+    nova::runtime::Object* obj = static_cast<nova::runtime::Object*>(obj_ptr);
+
+    if (!obj) {
+        // Return null if object is null
+        return nullptr;
+    }
+
+    // Note: Full seal functionality would prevent adding/deleting properties
+    // but allow modifying existing property values (unlike freeze)
+    // For now, this is a no-op that returns the object pointer
+    // Full implementation would require:
+    // 1. Adding a sealed flag to the Object structure
+    // 2. Checking sealed state in object_set (allow modification)
+    // 3. Checking sealed state in object_delete (prevent deletion)
+    // 4. Preventing property additions
+
+    // Return the object pointer (sealed in theory)
+    return obj_ptr;
+}
+
 } // extern "C"
