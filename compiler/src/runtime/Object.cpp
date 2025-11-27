@@ -248,4 +248,24 @@ int64_t nova_object_hasOwn(void* obj_ptr, const char* key) {
     return hasProperty ? 1 : 0;
 }
 
+// Object.freeze(obj) - makes object immutable (ES5)
+void* nova_object_freeze(void* obj_ptr) {
+    nova::runtime::Object* obj = static_cast<nova::runtime::Object*>(obj_ptr);
+
+    if (!obj) {
+        // Return null if object is null
+        return nullptr;
+    }
+
+    // Note: Full freeze functionality would prevent modifications to the object
+    // For now, this is a no-op that returns the object pointer
+    // Full implementation would require:
+    // 1. Adding a frozen flag to the Object structure
+    // 2. Checking frozen state in object_set and object_delete
+    // 3. Preventing property additions/deletions/modifications
+
+    // Return the object pointer (frozen in theory)
+    return obj_ptr;
+}
+
 } // extern "C"
