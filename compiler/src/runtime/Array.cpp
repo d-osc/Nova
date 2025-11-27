@@ -627,6 +627,47 @@ int64_t nova_value_array_find(void* array_ptr, FindCallbackFunc callback) {
     return 0;
 }
 
+// Array.filter() implementation
+// Callback function type: same as find
+typedef int64_t (*FilterCallbackFunc)(int64_t);
+
+void* nova_value_array_filter(void* array_ptr, FilterCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        // Return empty array
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        emptyArray->length = 0;
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    // First pass: count matching elements
+    int64_t matchCount = 0;
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        int64_t result = callback(element);
+        if (result != 0) {
+            matchCount++;
+        }
+    }
+
+    // Create new array with exact size needed
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(matchCount);
+    resultArray->length = matchCount;
+
+    // Second pass: copy matching elements
+    int64_t writeIndex = 0;
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        int64_t result = callback(element);
+        if (result != 0) {
+            resultArray->elements[writeIndex++] = element;
+        }
+    }
+
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
 
 
 } // extern "C"

@@ -1,13 +1,38 @@
 # Nova Compiler - TODO List
 
 > **Last Updated**: 2025-11-27
-> **Current Version**: v0.78.0
-> **Current Sprint**: Type System & Callback Support Phase
-> **Focus**: Array Method Type Inference (FIXED), Callback-based Methods (Next)
+> **Current Version**: v0.79.0
+> **Current Sprint**: Callback Methods Implementation Phase
+> **Focus**: Array.find() (COMPLETE), Additional Callback Methods (Next)
 
 ---
 
 ## ✅ Recently Completed
+
+### 0. ✅ Implement Array.find() with Callback Support - COMPLETED! 🎉
+**Priority**: P1 - High
+**Completed**: 2025-11-27 (v0.79.0)
+
+**Problem**: No callback-based array methods were implemented
+
+**Solution**:
+- Implemented string-to-function-pointer conversion in LLVMCodeGen.cpp (lines 1664-1689)
+- Arrow functions compile to LLVM functions with auto-generated names
+- Function names passed as string constants through HIR/MIR
+- LLVM codegen converts strings to function pointers at call site
+- Runtime receives actual function pointer and invokes callback
+
+**Technical Implementation**:
+- HIR: Arrow function detection and find() method support
+- Runtime: nova_value_array_find() function with callback parameter
+- LLVM: Function pointer lookup and substitution
+
+**Result**: ✅ Array.find() works perfectly! First callback method implemented!
+
+**Test**: `arr.find((x) => x > 3)` returns 4 ✅
+**Test Suite**: 177/177 tests passing (100%) ✅
+
+**Impact**: Establishes foundation for all callback-based methods (filter, map, reduce, forEach, some, every)
 
 ### 1. ✅ Fix Loop Condition Generation Bug - COMPLETED! 🎉
 **Priority**: P0 - Highest
@@ -120,6 +145,66 @@ let x = obj.x;             // ✅ Works - Returns 10
 ## 🔥 CRITICAL - Must Do Now (P0)
 
 (No critical issues blocking development)
+
+---
+
+## 🎯 HIGH PRIORITY - Next Up (P1)
+
+### 0. Implement Additional Callback-Based Array Methods 🟡
+**Priority**: P1 - High
+**Status**: IN PROGRESS - Infrastructure complete, ready for implementation
+**Estimated Time**: 2-4 hours per method
+
+**Foundation Complete**:
+- ✅ Arrow function compilation to LLVM
+- ✅ String-to-function-pointer conversion
+- ✅ Callback invocation in runtime
+- ✅ Test infrastructure
+
+**Methods to Implement**:
+
+#### Array.filter(callback) - NEXT 🎯
+```typescript
+let arr = [1, 2, 3, 4, 5];
+let filtered = arr.filter((x) => x > 3);  // Returns [4, 5]
+```
+**Action Items**:
+- [ ] Add find handler in HIRGen.cpp (similar to find)
+- [ ] Create nova_value_array_filter() in Array.cpp
+- [ ] Add LLVM declaration for filter function
+- [ ] Create test_array_filter.ts
+- [ ] Test and verify
+
+#### Array.map(callback)
+```typescript
+let doubled = arr.map((x) => x * 2);  // Returns [2, 4, 6, 8, 10]
+```
+
+#### Array.forEach(callback)
+```typescript
+arr.forEach((x) => console.log(x));  // Void return, iteration only
+```
+
+#### Array.some(callback)
+```typescript
+let hasLarge = arr.some((x) => x > 3);  // Returns true/false
+```
+
+#### Array.every(callback)
+```typescript
+let allSmall = arr.every((x) => x < 10);  // Returns true/false
+```
+
+#### Array.reduce(callback, initial)
+```typescript
+let sum = arr.reduce((acc, x) => acc + x, 0);  // Returns 15
+```
+
+**Implementation Pattern** (established by Array.find()):
+1. HIR: Detect method call, extract arrow function
+2. Runtime: Create nova_value_array_XXX(array_ptr, callback_ptr)
+3. LLVM: Declare function, convert string to function pointer
+4. Test: Verify correct behavior
 
 ---
 
