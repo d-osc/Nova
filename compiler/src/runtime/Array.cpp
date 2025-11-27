@@ -1,6 +1,7 @@
 #include "nova/runtime/Runtime.h"
 #include <cstring>
 #include <algorithm>
+#include <cstdarg>
 
 namespace nova {
 namespace runtime {
@@ -842,6 +843,37 @@ void* nova_array_from(void* array_ptr) {
 
     // Copy all elements (shallow copy)
     std::memcpy(resultArray->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Return new array
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
+// Array.of(...elements) - creates new array from arguments (ES2015)
+// Static method: Array.of(), not array.of()
+// Variadic function: takes count, then individual elements
+void* nova_array_of(int64_t count, ...) {
+    if (count <= 0) {
+        // Return empty array
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        emptyArray->length = 0;
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    // Create new array with exact size needed
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(count);
+    resultArray->length = count;
+
+    // Use va_list to get variable arguments
+    va_list args;
+    va_start(args, count);
+
+    // Fill array with arguments
+    for (int64_t i = 0; i < count; i++) {
+        int64_t element = va_arg(args, int64_t);
+        resultArray->elements[i] = element;
+    }
+
+    va_end(args);
 
     // Return new array
     return nova::runtime::create_metadata_from_value_array(resultArray);

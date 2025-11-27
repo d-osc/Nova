@@ -2032,6 +2032,61 @@ public:
                         lastValue_ = builder_->createCall(runtimeFunc, args, "array_from_result");
                         return;
                     }
+
+                    if (objIdent->name == "Array" && propIdent->name == "of") {
+                        // Array.of(...elements) - creates new array from arguments (ES2015)
+                        std::cerr << "DEBUG HIRGen: Detected static method call: Array.of" << std::endl;
+
+                        // Evaluate all arguments (variable number)
+                        std::vector<HIRValue*> elementValues;
+                        for (auto& arg : node.arguments) {
+                            arg->accept(*this);
+                            elementValues.push_back(lastValue_);
+                        }
+
+                        // Setup function signature
+                        // nova_array_of takes count and then elements as varargs
+                        std::string runtimeFuncName = "nova_array_of";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // count
+                        // Add parameter type for each element
+                        for (size_t i = 0; i < elementValues.size(); i++) {
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        }
+
+                        // Return type: pointer to array of i64
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0);
+                        auto returnType = std::make_shared<HIRPointerType>(arrayType, true);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external variadic function: " << runtimeFuncName << std::endl;
+                        }
+
+                        // Create arguments: count + elements
+                        std::vector<HIRValue*> args;
+                        args.push_back(builder_->createIntConstant(elementValues.size())); // count
+                        for (auto* val : elementValues) {
+                            args.push_back(val);
+                        }
+
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "array_of_result");
+                        return;
+                    }
                 }
             }
         }

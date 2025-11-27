@@ -61,7 +61,8 @@
 - `Array.prototype.reduceRight(callback, initialValue)` - Reduce right-to-left **[v0.88.0]**
 - `Array.prototype.length` - Array length property
 - `Array.isArray(value)` - Check if value is array (static)
-- `Array.from(arrayLike)` - Create array from array-like object (static, ES2015) **[v1.2.7 NEW!]**
+- `Array.from(arrayLike)` - Create array from array-like object (static, ES2015) **[v1.2.7]**
+- `Array.of(...elements)` - Create array from arguments (static, ES2015) **[v1.2.8 NEW!]**
 
 ## ✅ Math Methods (Working)
 - `Math.abs(x)` - Absolute value
@@ -133,12 +134,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 88+ methods implemented
-- **Latest Version**: v1.2.7
-- **Test Suite**: 234/234 tests passing (100%) ✅
+- **Total Methods**: 89+ methods implemented
+- **Latest Version**: v1.2.8
+- **Test Suite**: 235/235 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 23+ (includes ES2021 & ES2022!)
-- **Array Methods**: 35+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
+- **Array Methods**: 36+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 
