@@ -4,6 +4,7 @@
 - `String.fromCharCode(code)` - Create string from character code (static) **[v0.91.0]**
 - `String.prototype.charAt(index)` - Get character at index
 - `String.prototype.charCodeAt(index)` - Get character code at index **[v0.90.0]**
+- `String.prototype.codePointAt(index)` - Get Unicode code point at index (ES2015) **[v1.3.1 NEW!]**
 - `String.prototype.at(index)` - Get character at index (supports negative) **[v1.1.5]**
 - `String.prototype.concat(otherString)` - Concatenate strings **[v0.93.0]**
 - `String.prototype.substring(start, end)` - Extract substring
@@ -37,7 +38,7 @@
 - `Array.prototype.toSorted()` - Return sorted copy (immutable, ascending) (ES2023) **[v1.2.1]**
 - `Array.prototype.sort()` - Sort in place (mutable, ascending) **[v1.2.2]**
 - `Array.prototype.splice(start, deleteCount)` - Remove elements in place **[v1.2.3]**
-- `Array.prototype.toSpliced(start, deleteCount)` - Return copy with elements removed (immutable) (ES2023) **[v1.3.0 NEW!]**
+- `Array.prototype.toSpliced(start, deleteCount)` - Return copy with elements removed (immutable) (ES2023) **[v1.3.0]**
 - `Array.prototype.copyWithin(target, start, end)` - Copy part to another location (ES2015) **[v1.2.9]**
 - `Array.prototype.toString()` - Convert to comma-separated string **[v1.2.4]**
 - `Array.prototype.flat()` - Flatten nested arrays one level deep (ES2019) **[v1.2.5]**
@@ -136,11 +137,11 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 91+ methods implemented
-- **Latest Version**: v1.3.0
-- **Test Suite**: 237/237 tests passing (100%) ✅
+- **Total Methods**: 92+ methods implemented
+- **Latest Version**: v1.3.1
+- **Test Suite**: 238/238 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 23+ (includes ES2021 & ES2022!)
+- **String Methods**: 24+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+

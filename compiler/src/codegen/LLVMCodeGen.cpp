@@ -1294,6 +1294,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_codePointAt") {
+                            // i64 @nova_string_codePointAt(ptr, i64) - returns Unicode code point (ES2015)
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_codePointAt declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),  // Returns i64 (code point)
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_codePointAt",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_string_at") {
                             // i64 @nova_string_at(ptr, i64) - returns character code at index (supports negative)
                             std::cerr << "DEBUG LLVM: Creating external nova_string_at declaration" << std::endl;

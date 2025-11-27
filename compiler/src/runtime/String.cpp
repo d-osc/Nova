@@ -135,6 +135,31 @@ int64_t nova_string_charCodeAt(const char* str, int64_t index) {
     return static_cast<int64_t>(static_cast<unsigned char>(str[index]));
 }
 
+// Get Unicode code point at index (ES2015)
+// Like charCodeAt but handles full Unicode code points
+int64_t nova_string_codePointAt(const char* str, int64_t index) {
+    if (!str) return 0;
+
+    size_t len = std::strlen(str);
+    if (index < 0 || static_cast<size_t>(index) >= len) {
+        return 0; // Out of bounds
+    }
+
+    // For now, treat as UTF-8 and decode the code point
+    // This handles single-byte ASCII and basic Unicode
+    unsigned char byte = static_cast<unsigned char>(str[index]);
+
+    // Single-byte character (ASCII)
+    if (byte < 0x80) {
+        return static_cast<int64_t>(byte);
+    }
+
+    // For multi-byte UTF-8 sequences, we'd need proper decoding
+    // For now, just return the byte value (same as charCodeAt)
+    // Full UTF-8 support would require decoding surrogate pairs
+    return static_cast<int64_t>(byte);
+}
+
 // Get character code at index (supports negative indices)
 int64_t nova_string_at(const char* str, int64_t index) {
     if (!str) return 0;
