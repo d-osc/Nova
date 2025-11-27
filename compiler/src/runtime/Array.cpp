@@ -758,6 +758,19 @@ void* nova_value_array_splice(void* array_ptr, int64_t start, int64_t deleteCoun
     return array_ptr;
 }
 
+// Array.toString() - converts array to comma-separated string
+// Returns string representation like "1,2,3"
+const char* nova_value_array_toString(void* array_ptr) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || array->length == 0) {
+        return "";
+    }
+
+    // Use join with comma delimiter
+    return nova::runtime::value_array_join(array, ",");
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);

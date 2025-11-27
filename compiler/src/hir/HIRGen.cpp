@@ -2398,6 +2398,14 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 deleteCount
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
                         hasReturnValue = true;
+                    } else if (methodName == "toString") {
+                        // array.toString() - converts to comma-separated string
+                        // Returns string representation like "1,2,3"
+                        std::cerr << "DEBUG HIRGen: Detected array method call: toString" << std::endl;
+                        runtimeFuncName = "nova_value_array_toString";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);           // returns string
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
