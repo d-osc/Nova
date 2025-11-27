@@ -1294,6 +1294,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_fromCharCode") {
+                            // ptr @nova_string_fromCharCode(i64) - returns string from character code
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_fromCharCode declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns ptr (string)
+                                {llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_fromCharCode",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_string_toLowerCase") {
                             // ptr @nova_string_toLowerCase(ptr)
                             std::cerr << "DEBUG LLVM: Creating external nova_string_toLowerCase declaration" << std::endl;

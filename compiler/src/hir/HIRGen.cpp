@@ -1230,6 +1230,55 @@ public:
             }
         }
 
+        // Check if this is String static method call (e.g., String.fromCharCode())
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    if (objIdent->name == "String" && propIdent->name == "fromCharCode") {
+                        // String.fromCharCode(code) - create string from character code
+                        std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCharCode" << std::endl;
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: String.fromCharCode() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createStringConstant("");
+                            return;
+                        }
+
+                        // Evaluate the argument (character code)
+                        node.arguments[0]->accept(*this);
+                        auto* charCode = lastValue_;
+
+                        // Setup function signature
+                        std::string runtimeFuncName = "nova_string_fromCharCode";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {charCode};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "fromCharCode_result");
+                        return;
+                    }
+                }
+            }
+        }
+
         // Check if this is a string method call: str.substring(...)
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             // Get the object and method name

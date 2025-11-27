@@ -135,6 +135,15 @@ int64_t nova_string_charCodeAt(const char* str, int64_t index) {
     return static_cast<int64_t>(static_cast<unsigned char>(str[index]));
 }
 
+// Create string from character code (static method)
+const char* nova_string_fromCharCode(int64_t code) {
+    // Allocate a 2-character string (char + null terminator)
+    char* result = new char[2];
+    result[0] = static_cast<char>(code);  // Convert code to character
+    result[1] = '\0';  // Null terminator
+    return result;
+}
+
 // Find first occurrence of substring, returns -1 if not found
 int64_t nova_string_indexOf(const char* str, const char* search) {
     if (!str || !search) return -1;
