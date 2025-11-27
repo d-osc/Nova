@@ -1618,6 +1618,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "nova_value_array_find") {
+                            // i64 @nova_value_array_find(ptr, ptr) - array and callback function pointer
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_find declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_find",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }

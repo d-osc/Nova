@@ -1460,6 +1460,15 @@ public:
                         auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
                         returnType = std::make_shared<HIRPointerType>(arrayType, true);
                         hasReturnValue = true;
+                    } else if (methodName == "find") {
+                        // array.find(callback)
+                        // Callback: (element) => boolean
+                        // Returns the element or 0 if not found
+                        runtimeFuncName = "nova_value_array_find";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns element value
+                        hasReturnValue = true;
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
@@ -1470,8 +1479,23 @@ public:
                     std::vector<HIRValue*> args;
                     args.push_back(object);  // First argument is the array itself
                     for (auto& arg : node.arguments) {
+                        // Clear lastFunctionName_ before processing argument
+                        std::string savedFuncName = lastFunctionName_;
+                        lastFunctionName_ = "";
+
                         arg->accept(*this);
-                        args.push_back(lastValue_);
+
+                        // Check if this argument was an arrow function
+                        if (!lastFunctionName_.empty() && methodName == "find") {
+                            // For callback methods, pass function name as string constant
+                            // LLVM codegen will convert this to a function pointer
+                            std::cerr << "DEBUG HIRGen: Detected arrow function argument: " << lastFunctionName_ << std::endl;
+                            HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
+                            args.push_back(funcNameValue);
+                            lastFunctionName_ = "";  // Reset
+                        } else {
+                            args.push_back(lastValue_);
+                        }
                     }
 
                     // Check if function already exists

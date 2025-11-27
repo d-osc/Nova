@@ -600,6 +600,33 @@ void* nova_value_array_slice(void* array_ptr, int64_t start, int64_t end) {
     return nova::runtime::create_metadata_from_value_array(result);
 }
 
+// Callback function type: takes element value, returns boolean (as i64)
+typedef int64_t (*FindCallbackFunc)(int64_t);
+
+int64_t nova_value_array_find(void* array_ptr, FindCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return 0;  // Not found
+    }
+
+    // Iterate through array elements
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+
+        // Call the callback function
+        int64_t result = callback(element);
+
+        // If callback returns truthy value, return this element
+        if (result != 0) {
+            return element;
+        }
+    }
+
+    // Not found
+    return 0;
+}
+
 
 
 } // extern "C"
