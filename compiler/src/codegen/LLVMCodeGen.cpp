@@ -2099,6 +2099,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "cosh") {
+                            // double @cosh(double) - C library hyperbolic cosine function
+                            std::cerr << "DEBUG LLVM: Creating external cosh declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "cosh",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
