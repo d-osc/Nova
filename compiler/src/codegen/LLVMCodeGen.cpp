@@ -2115,6 +2115,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "tanh") {
+                            // double @tanh(double) - C library hyperbolic tangent function
+                            std::cerr << "DEBUG LLVM: Creating external tanh declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "tanh",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
