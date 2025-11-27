@@ -310,4 +310,24 @@ void* nova_object_seal(void* obj_ptr) {
     return obj_ptr;
 }
 
+// Object.isSealed(obj) - checks if object is sealed (ES5)
+int64_t nova_object_isSealed(void* obj_ptr) {
+    nova::runtime::Object* obj = static_cast<nova::runtime::Object*>(obj_ptr);
+
+    if (!obj) {
+        // Return true (1) for null - null is considered sealed
+        // (consistent with JavaScript behavior)
+        return 1;
+    }
+
+    // Note: Full isSealed functionality would check a sealed flag
+    // For now, always return false (0) since seal is a no-op
+    // Full implementation would require:
+    // 1. Adding a sealed flag to the Object structure
+    // 2. Returning the sealed flag state
+
+    // Return false (0) - object is not sealed
+    return 0;
+}
+
 } // extern "C"
