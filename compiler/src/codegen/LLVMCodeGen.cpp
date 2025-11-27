@@ -1703,6 +1703,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "nova_value_array_forEach") {
+                            // void @nova_value_array_forEach(ptr, ptr) - array and callback function pointer, returns void
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_forEach declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),  // Returns void
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_forEach",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
@@ -1730,7 +1747,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     std::cerr << "DEBUG LLVM: Argument converted, argValue = " << argValue << std::endl;
 
                     // Special handling for callback arguments: convert string constant to function pointer
-                    if ((calleeName == "nova_value_array_find" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map" || calleeName == "nova_value_array_some" || calleeName == "nova_value_array_every") && argIdx == 1) {
+                    if ((calleeName == "nova_value_array_find" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map" || calleeName == "nova_value_array_some" || calleeName == "nova_value_array_every" || calleeName == "nova_value_array_forEach") && argIdx == 1) {
                         // Second argument should be a function pointer, but comes as string constant
                         if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
                             std::cerr << "DEBUG LLVM: Detected string constant for callback argument" << std::endl;

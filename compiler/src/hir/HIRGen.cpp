@@ -1515,6 +1515,16 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns boolean as i64
                         hasReturnValue = true;
+                    } else if (methodName == "forEach") {
+                        // array.forEach(callback)
+                        // Callback: (element) => void
+                        // Returns void (but we return 0 for consistency)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: forEach" << std::endl;
+                        runtimeFuncName = "nova_value_array_forEach";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Void);  // returns void
+                        hasReturnValue = false;  // No return value
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
@@ -1532,7 +1542,7 @@ public:
                         arg->accept(*this);
 
                         // Check if this argument was an arrow function
-                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every")) {
+                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every" || methodName == "forEach")) {
                             // For callback methods, pass function name as string constant
                             // LLVM codegen will convert this to a function pointer
                             std::cerr << "DEBUG HIRGen: Detected arrow function argument: " << lastFunctionName_ << std::endl;

@@ -746,6 +746,24 @@ int64_t nova_value_array_every(void* array_ptr, EveryCallbackFunc callback) {
     return 1;  // true - all elements matched
 }
 
+// Array.forEach() implementation
+// Callback function type: takes element, returns value (ignored)
+typedef int64_t (*ForEachCallbackFunc)(int64_t);
+
+void nova_value_array_forEach(void* array_ptr, ForEachCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return;  // Nothing to do
+    }
+
+    // Call callback for each element (return value ignored)
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        callback(element);  // Call for side effects only
+    }
+}
+
 
 
 } // extern "C"
