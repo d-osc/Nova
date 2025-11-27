@@ -70,7 +70,8 @@
 - `Math.log10(x)` - Base 10 logarithm **[v0.98.0]**
 - `Math.log2(x)` - Base 2 logarithm **[v0.99.0]**
 - `Math.sin(x)` - Sine function (radians) **[v1.0.0]**
-- `Math.cos(x)` - Cosine function (radians) **[v1.0.1 NEW!]**
+- `Math.cos(x)` - Cosine function (radians) **[v1.0.1]**
+- `Math.tan(x)` - Tangent function (radians) **[v1.0.2 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -107,12 +108,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 62+ methods implemented
-- **Latest Version**: v1.0.1
-- **Test Suite**: 199/199 tests passing (100%) ✅
+- **Total Methods**: 63+ methods implemented
+- **Latest Version**: v1.0.2
+- **Test Suite**: 200/200 tests passing (100%) ✅ 🎯
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 21+
 - **Array Methods**: 24+ (with 9 callback methods!)
-- **Math Methods**: 20+ (including trigonometric functions!)
+- **Math Methods**: 21+ (complete trigonometric trio: sin, cos, tan!)
 - **Number Methods**: 4+
 
