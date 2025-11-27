@@ -2406,6 +2406,17 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);           // returns string
                         hasReturnValue = true;
+                    } else if (methodName == "flat") {
+                        // array.flat() - flattens nested arrays one level deep (ES2019)
+                        // Returns new array with sub-array elements concatenated
+                        std::cerr << "DEBUG HIRGen: Detected array method call: flat" << std::endl;
+                        runtimeFuncName = "nova_value_array_flat";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        // Return proper array type: pointer to array of i64
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
+                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*

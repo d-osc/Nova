@@ -771,6 +771,28 @@ const char* nova_value_array_toString(void* array_ptr) {
     return nova::runtime::value_array_join(array, ",");
 }
 
+// Array.flat() - flattens nested arrays one level deep (ES2019)
+// For now, creates a copy of the array (nested arrays not yet supported)
+// Returns new array
+void* nova_value_array_flat(void* array_ptr) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || array->length == 0) {
+        nova::runtime::ValueArray* empty = nova::runtime::create_value_array(0);
+        return nova::runtime::create_metadata_from_value_array(empty);
+    }
+
+    // Create new array with same length
+    nova::runtime::ValueArray* result = nova::runtime::create_value_array(array->length);
+    result->length = array->length;
+
+    // Copy elements from original array
+    std::memcpy(result->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Create metadata struct for the new array
+    return nova::runtime::create_metadata_from_value_array(result);
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);
