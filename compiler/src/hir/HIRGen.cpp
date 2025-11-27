@@ -2894,6 +2894,15 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // precision (i64)
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
+                    } else if (methodName == "toString") {
+                        // num.toString(radix)
+                        // Converts number to string with optional radix (base 2-36)
+                        // Returns string representation
+                        std::cerr << "DEBUG HIRGen: Detected number method call: toString" << std::endl;
+                        runtimeFuncName = "nova_number_toString";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // radix (i64)
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown number method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);

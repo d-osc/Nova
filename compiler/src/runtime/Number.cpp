@@ -145,4 +145,74 @@ const char* nova_number_toPrecision(double num, int64_t precision) {
     return buffer;
 }
 
+// Number.prototype.toString(radix) - converts number to string with optional radix
+const char* nova_number_toString(double num, int64_t radix) {
+    // Validate radix range (JavaScript spec: 2-36, default 10)
+    if (radix < 2 || radix > 36) {
+        radix = 10;  // Default to base 10 if invalid
+    }
+
+    // Handle special values
+    if (std::isnan(num)) {
+        char* result = new char[4];
+        std::strcpy(result, "NaN");
+        return result;
+    }
+    if (std::isinf(num)) {
+        if (num > 0) {
+            char* result = new char[9];
+            std::strcpy(result, "Infinity");
+            return result;
+        } else {
+            char* result = new char[10];
+            std::strcpy(result, "-Infinity");
+            return result;
+        }
+    }
+
+    // For base 10, use simple sprintf
+    if (radix == 10) {
+        char* buffer = new char[64];
+        std::snprintf(buffer, 64, "%.0f", num);
+        return buffer;
+    }
+
+    // For other bases, convert to integer first (JavaScript behavior)
+    int64_t intNum = static_cast<int64_t>(num);
+
+    // Handle negative numbers
+    bool isNegative = intNum < 0;
+    if (isNegative) {
+        intNum = -intNum;
+    }
+
+    // Convert to specified radix
+    char* buffer = new char[128];
+    char* ptr = buffer + 127;
+    *ptr = '\0';
+
+    const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+    if (intNum == 0) {
+        *--ptr = '0';
+    } else {
+        while (intNum > 0) {
+            *--ptr = digits[intNum % radix];
+            intNum /= radix;
+        }
+    }
+
+    if (isNegative) {
+        *--ptr = '-';
+    }
+
+    // Copy result to new buffer
+    size_t len = buffer + 127 - ptr;
+    char* result = new char[len + 1];
+    std::strcpy(result, ptr);
+
+    delete[] buffer;
+    return result;
+}
+
 } // extern "C"
