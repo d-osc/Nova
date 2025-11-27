@@ -2885,6 +2885,15 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // fractionDigits (i64)
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
+                    } else if (methodName == "toPrecision") {
+                        // num.toPrecision(precision)
+                        // Formats number with specified precision (total significant digits)
+                        // Returns string representation
+                        std::cerr << "DEBUG HIRGen: Detected number method call: toPrecision" << std::endl;
+                        runtimeFuncName = "nova_number_toPrecision";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // precision (i64)
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown number method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);

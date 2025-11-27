@@ -101,4 +101,48 @@ const char* nova_number_toExponential(double num, int64_t fractionDigits) {
     return buffer;
 }
 
+// Number.prototype.toPrecision(precision) - formats number with specified precision
+const char* nova_number_toPrecision(double num, int64_t precision) {
+    // Validate precision range (JavaScript spec: 1-100)
+    if (precision < 1 || precision > 100) {
+        // In JavaScript, this would throw RangeError
+        // For now, clamp to valid range
+        if (precision < 1) precision = 1;
+        if (precision > 100) precision = 100;
+    }
+
+    // Handle special values
+    if (std::isnan(num)) {
+        char* result = new char[4];
+        std::strcpy(result, "NaN");
+        return result;
+    }
+    if (std::isinf(num)) {
+        if (num > 0) {
+            char* result = new char[9];
+            std::strcpy(result, "Infinity");
+            return result;
+        } else {
+            char* result = new char[10];
+            std::strcpy(result, "-Infinity");
+            return result;
+        }
+    }
+
+    // Format the number with specified precision (significant digits)
+    // Use snprintf with %g format (chooses between %f and %e based on value)
+    // The precision in %g is the number of significant digits
+    char format[32];
+    std::snprintf(format, sizeof(format), "%%.%ldg", (long)precision);
+
+    // Calculate buffer size needed
+    // Maximum: sign(1) + digits(100) + decimal(1) + 'e'(1) + exponent sign(1) + exponent(3) + null(1)
+    int bufferSize = 256;
+    char* buffer = new char[bufferSize];
+
+    std::snprintf(buffer, bufferSize, format, num);
+
+    return buffer;
+}
+
 } // extern "C"

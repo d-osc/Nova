@@ -2083,6 +2083,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_number_toPrecision") {
+                            // ptr @nova_number_toPrecision(double, i64) - formats number with specified precision
+                            std::cerr << "DEBUG LLVM: Creating external nova_number_toPrecision declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns string pointer
+                                {llvm::Type::getDoubleTy(*context),      // Number (as double/F64)
+                                 llvm::Type::getInt64Ty(*context)},      // Precision (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_number_toPrecision",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
