@@ -1939,6 +1939,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "log10") {
+                            // double @log10(double) - C library base 10 logarithm function
+                            std::cerr << "DEBUG LLVM: Creating external log10 declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "log10",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }

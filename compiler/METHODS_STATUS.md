@@ -66,7 +66,8 @@
 - `Math.imul(a, b)` - Integer multiplication
 - `Math.clz32(x)` - Count leading zeros
 - `Math.log(x)` - Natural logarithm (base e) **[v0.96.0]**
-- `Math.exp(x)` - Exponential function (e^x) **[v0.97.0 NEW!]**
+- `Math.exp(x)` - Exponential function (e^x) **[v0.97.0]**
+- `Math.log10(x)` - Base 10 logarithm **[v0.98.0 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -103,12 +104,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 58+ methods implemented
-- **Latest Version**: v0.97.0
-- **Test Suite**: 195/195 tests passing (100%) ✅
+- **Total Methods**: 59+ methods implemented
+- **Latest Version**: v0.98.0
+- **Test Suite**: 196/196 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 21+
 - **Array Methods**: 24+ (with 9 callback methods!)
-- **Math Methods**: 16+
+- **Math Methods**: 17+
 - **Number Methods**: 4+
 
