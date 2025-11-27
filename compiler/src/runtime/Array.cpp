@@ -721,6 +721,31 @@ int64_t nova_value_array_some(void* array_ptr, SomeCallbackFunc callback) {
     return 0;  // false - no elements matched
 }
 
+// Array.every() implementation
+// Callback function type: takes element, returns boolean
+typedef int64_t (*EveryCallbackFunc)(int64_t);
+
+int64_t nova_value_array_every(void* array_ptr, EveryCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return 1;  // true - vacuous truth (empty array returns true)
+    }
+
+    // Check if all elements match
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        int64_t result = callback(element);
+
+        // If callback returns falsy value, return false immediately
+        if (result == 0) {
+            return 0;  // false
+        }
+    }
+
+    return 1;  // true - all elements matched
+}
+
 
 
 } // extern "C"

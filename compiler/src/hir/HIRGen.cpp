@@ -1505,6 +1505,16 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns boolean as i64
                         hasReturnValue = true;
+                    } else if (methodName == "every") {
+                        // array.every(callback)
+                        // Callback: (element) => boolean
+                        // Returns true if all elements match
+                        std::cerr << "DEBUG HIRGen: Detected array method call: every" << std::endl;
+                        runtimeFuncName = "nova_value_array_every";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns boolean as i64
+                        hasReturnValue = true;
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
@@ -1522,7 +1532,7 @@ public:
                         arg->accept(*this);
 
                         // Check if this argument was an arrow function
-                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "filter" || methodName == "map" || methodName == "some")) {
+                        if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every")) {
                             // For callback methods, pass function name as string constant
                             // LLVM codegen will convert this to a function pointer
                             std::cerr << "DEBUG HIRGen: Detected arrow function argument: " << lastFunctionName_ << std::endl;
