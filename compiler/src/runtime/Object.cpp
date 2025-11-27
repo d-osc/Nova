@@ -225,4 +225,27 @@ void* nova_object_assign(void* target_ptr, void* source_ptr) {
     return target_ptr;
 }
 
+// Object.hasOwn(obj, key) - checks if object has own property (ES2022)
+int64_t nova_object_hasOwn(void* obj_ptr, const char* key) {
+    nova::runtime::Object* obj = static_cast<nova::runtime::Object*>(obj_ptr);
+
+    if (!obj || !key) {
+        // Return false (0) if object or key is null
+        return 0;
+    }
+
+    if (!obj->properties) {
+        // Return false (0) if object has no properties
+        return 0;
+    }
+
+    auto* properties = static_cast<std::unordered_map<std::string, nova::runtime::Property>*>(obj->properties);
+
+    // Check if property exists
+    bool hasProperty = properties->find(key) != properties->end();
+
+    // Return 1 for true, 0 for false
+    return hasProperty ? 1 : 0;
+}
+
 } // extern "C"
