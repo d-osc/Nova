@@ -32,7 +32,8 @@
 - `Array.prototype.shift()` - Remove from start
 - `Array.prototype.unshift(value)` - Add to start
 - `Array.prototype.at(index)` - Get element at index (supports negative) **[v0.92.0]**
-- `Array.prototype.with(index, value)` - Return copy with element replaced (ES2023) **[v1.1.9 NEW!]**
+- `Array.prototype.with(index, value)` - Return copy with element replaced (ES2023) **[v1.1.9]**
+- `Array.prototype.toReversed()` - Return reversed copy (immutable) (ES2023) **[v1.2.0 NEW!]**
 - `Array.prototype.includes(value)` - Check if contains
 - `Array.prototype.indexOf(value)` - Find first index
 - `Array.prototype.lastIndexOf(value)` - Find last index **[v0.87.0]**
@@ -125,12 +126,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 80+ methods implemented
-- **Latest Version**: v1.1.9
-- **Test Suite**: 217/217 tests passing (100%) ✅
+- **Total Methods**: 81+ methods implemented
+- **Latest Version**: v1.2.0
+- **Test Suite**: 227/227 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 23+ (includes ES2021 & ES2022!)
-- **Array Methods**: 27+ (with 11 callback methods! includes ES2023 immutable operations!)
+- **Array Methods**: 28+ (with 11 callback methods! includes ES2023 immutable operations!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 

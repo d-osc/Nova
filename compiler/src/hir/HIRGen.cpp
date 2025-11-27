@@ -2358,6 +2358,17 @@ public:
                         auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
                         returnType = std::make_shared<HIRPointerType>(arrayType, true);
                         hasReturnValue = true;
+                    } else if (methodName == "toReversed") {
+                        // array.toReversed() - ES2023
+                        // Returns NEW reversed array (immutable operation)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: toReversed" << std::endl;
+                        runtimeFuncName = "nova_value_array_toReversed";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        // Return proper array type: pointer to array of i64
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
+                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
