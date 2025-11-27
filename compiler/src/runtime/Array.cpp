@@ -304,6 +304,19 @@ int64 value_array_indexOf(ValueArray* array, int64 value) {
     return -1;  // Not found
 }
 
+// Find last index of a value in array (search from end)
+int64 value_array_lastIndexOf(ValueArray* array, int64 value) {
+    if (!array) return -1;
+
+    // Search backwards from end to start
+    for (int64 i = array->length - 1; i >= 0; i--) {
+        if (array->elements[i] == value) {
+            return i;
+        }
+    }
+    return -1;  // Not found
+}
+
 // Reverse array in place
 void value_array_reverse(ValueArray* array) {
     if (!array || array->length <= 1) return;
@@ -564,6 +577,11 @@ int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
 int64_t nova_value_array_indexOf(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     return nova::runtime::value_array_indexOf(array, value);
+}
+
+int64_t nova_value_array_lastIndexOf(void* array_ptr, int64_t value) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    return nova::runtime::value_array_lastIndexOf(array, value);
 }
 
 void* nova_value_array_reverse(void* array_ptr) {

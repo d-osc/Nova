@@ -25,6 +25,7 @@
 - `Array.prototype.unshift(value)` - Add to start
 - `Array.prototype.includes(value)` - Check if contains
 - `Array.prototype.indexOf(value)` - Find first index
+- `Array.prototype.lastIndexOf(value)` - Find last index **[v0.87.0 NEW!]**
 - `Array.prototype.reverse()` - Reverse in place
 - `Array.prototype.fill(value)` - Fill with value
 - `Array.prototype.join(delimiter)` - Join to string **[v0.75.0]**
@@ -92,11 +93,11 @@
 
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.86.0
-- **Test Suite**: 184/184 tests passing (100%) ✅
+- **Latest Version**: v0.87.0
+- **Test Suite**: 185/185 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 15+
-- **Array Methods**: 21+ (with 8 callback methods!)
+- **Array Methods**: 22+ (with 8 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
 

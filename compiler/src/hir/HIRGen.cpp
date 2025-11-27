@@ -1424,6 +1424,15 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 index
                         hasReturnValue = true;
+                    } else if (methodName == "lastIndexOf") {
+                        // array.lastIndexOf(value)
+                        // Searches from end to start, returns last occurrence index
+                        std::cerr << "DEBUG HIRGen: Detected array method call: lastIndexOf" << std::endl;
+                        runtimeFuncName = "nova_value_array_lastIndexOf";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 index
+                        hasReturnValue = true;
                     } else if (methodName == "reverse") {
                         runtimeFuncName = "nova_value_array_reverse";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*

@@ -1551,6 +1551,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_value_array_lastIndexOf") {
+                            // i64 @nova_value_array_lastIndexOf(ptr, i64) - searches from end
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_lastIndexOf declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),  // Returns i64 (index or -1)
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_lastIndexOf",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_reverse") {
                             // ptr @nova_value_array_reverse(ptr)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_reverse declaration" << std::endl;
