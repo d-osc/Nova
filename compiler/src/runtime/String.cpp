@@ -135,6 +135,26 @@ int64_t nova_string_charCodeAt(const char* str, int64_t index) {
     return static_cast<int64_t>(static_cast<unsigned char>(str[index]));
 }
 
+// Get character code at index (supports negative indices)
+int64_t nova_string_at(const char* str, int64_t index) {
+    if (!str) return 0;
+
+    size_t len = std::strlen(str);
+
+    // Handle negative indices: convert to positive index from end
+    if (index < 0) {
+        index = static_cast<int64_t>(len) + index;
+    }
+
+    // Check bounds after conversion
+    if (index < 0 || static_cast<size_t>(index) >= len) {
+        return 0; // Out of bounds
+    }
+
+    // Cast to unsigned char first to avoid sign extension issues
+    return static_cast<int64_t>(static_cast<unsigned char>(str[index]));
+}
+
 // Create string from character code (static method)
 const char* nova_string_fromCharCode(int64_t code) {
     // Allocate a 2-character string (char + null terminator)

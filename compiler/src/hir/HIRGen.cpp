@@ -2160,6 +2160,14 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // Returns character code as i64
+                    } else if (methodName == "at") {
+                        // str.at(index)
+                        // Returns character code at index (supports negative indices)
+                        std::cerr << "DEBUG HIRGen: Detected string method call: at" << std::endl;
+                        runtimeFuncName = "nova_string_at";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // Returns character code as i64
                     } else if (methodName == "concat") {
                         // str.concat(otherStr)
                         // Concatenates two strings together

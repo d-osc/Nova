@@ -4,7 +4,8 @@
 - `String.fromCharCode(code)` - Create string from character code (static) **[v0.91.0]**
 - `String.prototype.charAt(index)` - Get character at index
 - `String.prototype.charCodeAt(index)` - Get character code at index **[v0.90.0]**
-- `String.prototype.concat(otherString)` - Concatenate strings **[v0.93.0 NEW!]**
+- `String.prototype.at(index)` - Get character at index (supports negative) **[v1.1.5 NEW!]**
+- `String.prototype.concat(otherString)` - Concatenate strings **[v0.93.0]**
 - `String.prototype.substring(start, end)` - Extract substring
 - `String.prototype.indexOf(searchString)` - Find first occurrence
 - `String.prototype.lastIndexOf(searchString)` - Find last occurrence **[v0.89.0]**
@@ -12,7 +13,7 @@
 - `String.prototype.toUpperCase()` - Convert to uppercase
 - `String.prototype.trim()` - Remove whitespace
 - `String.prototype.trimStart()` - Remove leading whitespace **[v0.94.0]**
-- `String.prototype.trimEnd()` - Remove trailing whitespace **[v0.95.0 NEW!]**
+- `String.prototype.trimEnd()` - Remove trailing whitespace **[v0.95.0]**
 - `String.prototype.startsWith(prefix)` - Check if starts with
 - `String.prototype.endsWith(suffix)` - Check if ends with
 - `String.prototype.repeat(count)` - Repeat string
@@ -120,11 +121,11 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 75+ methods implemented
-- **Latest Version**: v1.1.4
-- **Test Suite**: 212/212 tests passing (100%) ✅
+- **Total Methods**: 76+ methods implemented
+- **Latest Version**: v1.1.5
+- **Test Suite**: 213/213 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 21+
+- **String Methods**: 22+ (includes ES2022 features!)
 - **Array Methods**: 24+ (with 9 callback methods!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+

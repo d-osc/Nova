@@ -1294,6 +1294,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_at") {
+                            // i64 @nova_string_at(ptr, i64) - returns character code at index (supports negative)
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_at declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),  // Returns i64 (character code)
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_at",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_string_fromCharCode") {
                             // ptr @nova_string_fromCharCode(i64) - returns string from character code
                             std::cerr << "DEBUG LLVM: Creating external nova_string_fromCharCode declaration" << std::endl;
