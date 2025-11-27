@@ -2147,6 +2147,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "acosh") {
+                            // double @acosh(double) - C library inverse hyperbolic cosine function
+                            std::cerr << "DEBUG LLVM: Creating external acosh declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "acosh",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
