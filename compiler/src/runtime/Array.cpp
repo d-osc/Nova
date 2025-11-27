@@ -696,6 +696,25 @@ void* nova_value_array_toSorted(void* array_ptr) {
     return nova::runtime::create_metadata_from_value_array(result);
 }
 
+// Array.sort() - in-place sorting
+// Sorts the array in ascending numeric order (modifies original)
+void* nova_value_array_sort(void* array_ptr) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !array->elements) {
+        return array_ptr;
+    }
+
+    // Sort the elements in place (ascending numeric order)
+    std::sort(array->elements, array->elements + array->length);
+
+    // Write back to metadata
+    write_back_to_metadata(array_ptr, array);
+
+    // Return array pointer for chaining (like JavaScript)
+    return array_ptr;
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);

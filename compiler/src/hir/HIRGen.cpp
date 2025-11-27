@@ -2380,6 +2380,14 @@ public:
                         auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
                         returnType = std::make_shared<HIRPointerType>(arrayType, true);
                         hasReturnValue = true;
+                    } else if (methodName == "sort") {
+                        // array.sort() - in-place sorting
+                        // Sorts array in ascending order (modifies original)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: sort" << std::endl;
+                        runtimeFuncName = "nova_value_array_sort";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
