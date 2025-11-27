@@ -164,6 +164,28 @@ ValueArray* convert_to_value_array(void* metadata_ptr) {
     return array;
 }
 
+
+// Helper: Create metadata struct from ValueArray
+void* create_metadata_from_value_array(ValueArray* array) {
+    if (!array) return nullptr;
+    
+    // Allocate metadata struct: { [24 x i8], i64 length, i64 capacity, ptr elements }
+    size_t metadata_size = 24 + 8 + 8 + 8;  // header + length + capacity + elements ptr
+    void* metadata = malloc(metadata_size);
+    if (!metadata) return nullptr;
+    
+    // Zero out header
+    std::memset(metadata, 0, 24);
+    
+    // Write length, capacity, and elements pointer
+    *reinterpret_cast<int64*>(static_cast<char*>(metadata) + 24) = array->length;
+    *reinterpret_cast<int64*>(static_cast<char*>(metadata) + 32) = array->capacity;
+    *reinterpret_cast<int64**>(static_cast<char*>(metadata) + 40) = array->elements;
+    
+    return metadata;
+}
+
+
 void resize_value_array(ValueArray* array, int64 new_capacity) {
     if (!array) return;
 
@@ -309,6 +331,137 @@ void value_array_fill(ValueArray* array, int64 value) {
     }
 }
 
+
+
+// Create a new string array with initial capacity
+StringArray* create_string_array(int64 initial_capacity) {
+    if (initial_capacity < 0) initial_capacity = 0;
+
+    // Allocate StringArray structure
+    StringArray* array = static_cast<StringArray*>(allocate(sizeof(StringArray), TypeId::ARRAY));
+
+    // Initialize array
+    array->length = 0;
+    array->capacity = initial_capacity;
+
+    // Allocate elements array
+    if (initial_capacity > 0) {
+        size_t elements_size = initial_capacity * sizeof(const char*);
+        array->elements = static_cast<const char**>(allocate(elements_size, TypeId::OBJECT));
+        // Initialize to null
+        for (int64 i = 0; i < initial_capacity; i++) {
+            array->elements[i] = nullptr;
+        }
+    } else {
+        array->elements = nullptr;
+    }
+
+    return array;
+}
+
+
+// Join array elements into a string with delimiter
+const char* value_array_join(ValueArray* array, const char* delimiter) {
+    if (!array || array->length == 0) return "";
+    if (!delimiter) delimiter = ",";
+
+    size_t delim_len = std::strlen(delimiter);
+    
+    // Calculate total length needed
+    size_t total_len = 0;
+    for (int64 i = 0; i < array->length; i++) {
+        // Convert int64 to string to get length
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%lld", (long long)array->elements[i]);
+        total_len += std::strlen(buffer);
+        if (i < array->length - 1) {
+            total_len += delim_len;
+        }
+    }
+    
+    // Allocate result
+    char* result = static_cast<char*>(malloc(total_len + 1));
+    if (!result) return "";
+    
+    // Build the string
+    size_t pos = 0;
+    for (int64 i = 0; i < array->length; i++) {
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%lld", (long long)array->elements[i]);
+        size_t len = std::strlen(buffer);
+        std::memcpy(result + pos, buffer, len);
+        pos += len;
+        
+        if (i < array->length - 1) {
+            std::memcpy(result + pos, delimiter, delim_len);
+            pos += delim_len;
+        }
+    }
+    result[total_len] = 0;
+    
+    return result;
+}
+
+// Concatenate two arrays into a new array
+ValueArray* value_array_concat(ValueArray* arr1, ValueArray* arr2) {
+    if (!arr1 && !arr2) return create_value_array(0);
+    if (!arr1) {
+        // Copy arr2
+        ValueArray* result = create_value_array(arr2->length);
+        result->length = arr2->length;
+        std::memcpy(result->elements, arr2->elements, arr2->length * sizeof(int64));
+        return result;
+    }
+    if (!arr2) {
+        // Copy arr1
+        ValueArray* result = create_value_array(arr1->length);
+        result->length = arr1->length;
+        std::memcpy(result->elements, arr1->elements, arr1->length * sizeof(int64));
+        return result;
+    }
+    
+    // Create new array with combined length
+    int64 total_len = arr1->length + arr2->length;
+    ValueArray* result = create_value_array(total_len);
+    result->length = total_len;
+    
+    // Copy elements from both arrays
+    std::memcpy(result->elements, arr1->elements, arr1->length * sizeof(int64));
+    std::memcpy(result->elements + arr1->length, arr2->elements, arr2->length * sizeof(int64));
+    
+    return result;
+}
+
+
+// Slice array to create a new array from start to end
+ValueArray* value_array_slice(ValueArray* array, int64 start, int64 end) {
+    if (!array) return create_value_array(0);
+    
+    int64 length = array->length;
+    
+    // Handle negative indices
+    if (start < 0) start = std::max(length + start, static_cast<int64>(0));
+    if (end < 0) end = std::max(length + end, static_cast<int64>(0));
+    
+    // Clamp to valid range
+    if (start > length) start = length;
+    if (end > length) end = length;
+    if (start > end) start = end;
+    
+    int64 slice_len = end - start;
+    if (slice_len <= 0) return create_value_array(0);
+    
+    // Create new array with sliced elements
+    ValueArray* result = create_value_array(slice_len);
+    result->length = slice_len;
+    
+    // Copy elements
+    std::memcpy(result->elements, array->elements + start, slice_len * sizeof(int64));
+    
+    return result;
+}
+
+
 } // namespace runtime
 } // namespace nova
 
@@ -426,5 +579,27 @@ void* nova_value_array_fill(void* array_ptr, int64_t value) {
     write_back_to_metadata(array_ptr, array);
     return array_ptr;  // Return array for chaining (like JavaScript)
 }
+
+const char* nova_value_array_join(void* array_ptr, const char* delimiter) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    return nova::runtime::value_array_join(array, delimiter);
+}
+
+void* nova_value_array_concat(void* arr1_ptr, void* arr2_ptr) {
+    nova::runtime::ValueArray* arr1 = ensure_value_array(arr1_ptr);
+    nova::runtime::ValueArray* arr2 = ensure_value_array(arr2_ptr);
+    nova::runtime::ValueArray* result = nova::runtime::value_array_concat(arr1, arr2);
+    // Create metadata struct for the new array
+    return nova::runtime::create_metadata_from_value_array(result);
+}
+
+void* nova_value_array_slice(void* array_ptr, int64_t start, int64_t end) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    nova::runtime::ValueArray* result = nova::runtime::value_array_slice(array, start, end);
+    // Create metadata struct for the new array
+    return nova::runtime::create_metadata_from_value_array(result);
+}
+
+
 
 } // extern "C"
