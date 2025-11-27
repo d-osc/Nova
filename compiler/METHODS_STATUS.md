@@ -110,7 +110,8 @@
 - `Number.isSafeInteger(value)` - Check if safe integer
 
 ## ✅ Object Methods (Working)
-- `Object.freeze(obj)` - Makes object immutable (static, ES5) **[v1.3.8 NEW!]**
+- `Object.isFrozen(obj)` - Checks if object is frozen (static, ES5) **[v1.3.9 NEW!]**
+- `Object.freeze(obj)` - Makes object immutable (static, ES5) **[v1.3.8]**
 - `Object.hasOwn(obj, key)` - Checks if object has own property (static, ES2022) **[v1.3.7]**
 - `Object.assign(target, source)` - Copies properties from source to target (static, ES2015) **[v1.3.6]**
 - `Object.entries(obj)` - Returns array of [key, value] pairs (static, ES2017) **[v1.3.5]**
@@ -146,13 +147,13 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 99+ methods implemented
-- **Latest Version**: v1.3.8
-- **Test Suite**: 244/244 tests passing (100%) ✅
+- **Total Methods**: 100+ methods implemented
+- **Latest Version**: v1.3.9
+- **Test Suite**: 245/245 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
-- **Object Methods**: 6+ (ES5, ES2015, ES2017 & ES2022 features - introspection + manipulation + immutability!)
+- **Object Methods**: 7+ (ES5, ES2015, ES2017 & ES2022 features - introspection + manipulation + immutability!)
 

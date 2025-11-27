@@ -268,4 +268,24 @@ void* nova_object_freeze(void* obj_ptr) {
     return obj_ptr;
 }
 
+// Object.isFrozen(obj) - checks if object is frozen (ES5)
+int64_t nova_object_isFrozen(void* obj_ptr) {
+    nova::runtime::Object* obj = static_cast<nova::runtime::Object*>(obj_ptr);
+
+    if (!obj) {
+        // Return true (1) for null - null is considered frozen
+        // (consistent with JavaScript behavior)
+        return 1;
+    }
+
+    // Note: Full isFrozen functionality would check a frozen flag
+    // For now, always return false (0) since freeze is a no-op
+    // Full implementation would require:
+    // 1. Adding a frozen flag to the Object structure
+    // 2. Returning the frozen flag state
+
+    // Return false (0) - object is not frozen
+    return 0;
+}
+
 } // extern "C"

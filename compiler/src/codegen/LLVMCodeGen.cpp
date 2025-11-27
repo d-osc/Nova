@@ -2001,6 +2001,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_object_isFrozen") {
+                            // i64 @nova_object_isFrozen(ptr) - checks if object is frozen (ES5)
+                            std::cerr << "DEBUG LLVM: Creating external nova_object_isFrozen declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),        // Returns boolean (i64)
+                                {llvm::PointerType::getUnqual(*context)}, // Object pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_object_isFrozen",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
