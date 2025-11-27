@@ -2179,6 +2179,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        if (!callee && funcName == "expm1") {
+                            // double @expm1(double) - C library function returns e^x - 1
+                            std::cerr << "DEBUG LLVM: Creating external expm1 declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "expm1",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
