@@ -3,7 +3,8 @@
 ## ✅ String Methods (Working)
 - `String.prototype.charAt(index)` - Get character at index
 - `String.prototype.substring(start, end)` - Extract substring
-- `String.prototype.indexOf(searchString)` - Find first occurrence  
+- `String.prototype.indexOf(searchString)` - Find first occurrence
+- `String.prototype.lastIndexOf(searchString)` - Find last occurrence **[v0.89.0 NEW!]**
 - `String.prototype.toLowerCase()` - Convert to lowercase
 - `String.prototype.toUpperCase()` - Convert to uppercase
 - `String.prototype.trim()` - Remove whitespace
@@ -95,10 +96,10 @@
 
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.88.0
-- **Test Suite**: 186/186 tests passing (100%) ✅
+- **Latest Version**: v0.89.0
+- **Test Suite**: 187/187 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 15+
+- **String Methods**: 16+
 - **Array Methods**: 23+ (with 9 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+

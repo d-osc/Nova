@@ -1270,6 +1270,14 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    } else if (methodName == "lastIndexOf") {
+                        // str.lastIndexOf(searchString)
+                        // Searches from end to start, returns last occurrence index
+                        std::cerr << "DEBUG HIRGen: Detected string method call: lastIndexOf" << std::endl;
+                        runtimeFuncName = "nova_string_lastIndexOf";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
                     } else if (methodName == "charAt") {
                         runtimeFuncName = "nova_string_charAt";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));

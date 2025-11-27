@@ -132,6 +132,28 @@ int64_t nova_string_indexOf(const char* str, const char* search) {
     return static_cast<int64_t>(found - str);
 }
 
+// Find last occurrence of substring, returns -1 if not found
+int64_t nova_string_lastIndexOf(const char* str, const char* search) {
+    if (!str || !search) return -1;
+
+    size_t str_len = std::strlen(str);
+    size_t search_len = std::strlen(search);
+
+    // If search string is longer than main string, can't find it
+    if (search_len > str_len) return -1;
+
+    // Search backwards from the end
+    // Start at position where search string could still fit
+    for (int64_t i = str_len - search_len; i >= 0; i--) {
+        // Check if substring matches at position i
+        if (std::strncmp(str + i, search, search_len) == 0) {
+            return i;  // Found - return index
+        }
+    }
+
+    return -1;  // Not found
+}
+
 // Extract substring from start to end (exclusive)
 const char* nova_string_substring(const char* str, int64_t start, int64_t end) {
     if (!str) return "";
