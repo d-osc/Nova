@@ -122,6 +122,19 @@ int64_t nova_string_charAt(const char* str, int64_t index) {
     return static_cast<int64_t>(str[index]);
 }
 
+// Get character code at index (returns character's ASCII/Unicode value)
+int64_t nova_string_charCodeAt(const char* str, int64_t index) {
+    if (!str) return 0;
+
+    size_t len = std::strlen(str);
+    if (index < 0 || static_cast<size_t>(index) >= len) {
+        return 0; // Out of bounds - return 0 or could return NaN equivalent
+    }
+
+    // Cast to unsigned char first to avoid sign extension issues
+    return static_cast<int64_t>(static_cast<unsigned char>(str[index]));
+}
+
 // Find first occurrence of substring, returns -1 if not found
 int64_t nova_string_indexOf(const char* str, const char* search) {
     if (!str || !search) return -1;

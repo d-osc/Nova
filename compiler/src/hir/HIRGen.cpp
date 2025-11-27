@@ -1283,6 +1283,14 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else if (methodName == "charCodeAt") {
+                        // str.charCodeAt(index)
+                        // Returns character code (ASCII/Unicode value) at index
+                        std::cerr << "DEBUG HIRGen: Detected string method call: charCodeAt" << std::endl;
+                        runtimeFuncName = "nova_string_charCodeAt";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // Returns character code as i64
                     } else if (methodName == "toLowerCase") {
                         runtimeFuncName = "nova_string_toLowerCase";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));

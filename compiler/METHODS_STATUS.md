@@ -2,9 +2,10 @@
 
 ## ✅ String Methods (Working)
 - `String.prototype.charAt(index)` - Get character at index
+- `String.prototype.charCodeAt(index)` - Get character code at index **[v0.90.0 NEW!]**
 - `String.prototype.substring(start, end)` - Extract substring
 - `String.prototype.indexOf(searchString)` - Find first occurrence
-- `String.prototype.lastIndexOf(searchString)` - Find last occurrence **[v0.89.0 NEW!]**
+- `String.prototype.lastIndexOf(searchString)` - Find last occurrence **[v0.89.0]**
 - `String.prototype.toLowerCase()` - Convert to lowercase
 - `String.prototype.toUpperCase()` - Convert to uppercase
 - `String.prototype.trim()` - Remove whitespace
@@ -16,7 +17,7 @@
 - `String.prototype.replace(search, replace)` - Replace first occurrence
 - `String.prototype.padStart(length, fillString)` - Pad at start
 - `String.prototype.padEnd(length, fillString)` - Pad at end
-- `String.prototype.split(delimiter)` - Split into array **[v0.74.0 NEW!]**
+- `String.prototype.split(delimiter)` - Split into array **[v0.74.0]**
 - `String.prototype.length` - String length property
 
 ## ✅ Array Methods (Working)
@@ -95,11 +96,11 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.89.0
-- **Test Suite**: 187/187 tests passing (100%) ✅
+- **Total Methods**: 51+ methods implemented
+- **Latest Version**: v0.90.0
+- **Test Suite**: 188/188 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 16+
+- **String Methods**: 17+
 - **Array Methods**: 23+ (with 9 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
