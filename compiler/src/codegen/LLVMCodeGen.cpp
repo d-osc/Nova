@@ -1752,6 +1752,25 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_value_array_copyWithin") {
+                            // ptr @nova_value_array_copyWithin(ptr, i64, i64, i64) - copies part to another location
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_copyWithin declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns pointer to same array
+                                {llvm::PointerType::getUnqual(*context),  // array pointer
+                                 llvm::Type::getInt64Ty(*context),        // target
+                                 llvm::Type::getInt64Ty(*context),        // start
+                                 llvm::Type::getInt64Ty(*context)},       // end
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_copyWithin",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_toString") {
                             // ptr @nova_value_array_toString(ptr) - returns comma-separated string
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_toString declaration" << std::endl;

@@ -37,6 +37,7 @@
 - `Array.prototype.toSorted()` - Return sorted copy (immutable, ascending) (ES2023) **[v1.2.1]**
 - `Array.prototype.sort()` - Sort in place (mutable, ascending) **[v1.2.2]**
 - `Array.prototype.splice(start, deleteCount)` - Remove elements in place **[v1.2.3]**
+- `Array.prototype.copyWithin(target, start, end)` - Copy part to another location (ES2015) **[v1.2.9 NEW!]**
 - `Array.prototype.toString()` - Convert to comma-separated string **[v1.2.4]**
 - `Array.prototype.flat()` - Flatten nested arrays one level deep (ES2019) **[v1.2.5]**
 - `Array.prototype.flatMap(callback)` - Map then flatten one level (ES2019) **[v1.2.6 NEW!]**
@@ -134,12 +135,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 89+ methods implemented
-- **Latest Version**: v1.2.8
-- **Test Suite**: 235/235 tests passing (100%) ✅
+- **Total Methods**: 90+ methods implemented
+- **Latest Version**: v1.2.9
+- **Test Suite**: 236/236 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 23+ (includes ES2021 & ES2022!)
-- **Array Methods**: 36+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
+- **Array Methods**: 37+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
 

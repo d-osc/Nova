@@ -2500,6 +2500,19 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 deleteCount
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
                         hasReturnValue = true;
+                    } else if (methodName == "copyWithin") {
+                        // array.copyWithin(target, start, end) - shallow copies part to another location (ES2015)
+                        // Modifies array in place and returns it
+                        // end is optional (defaults to array length)
+                        std::cerr << "DEBUG HIRGen: Detected array method call: copyWithin" << std::endl;
+                        runtimeFuncName = "nova_value_array_copyWithin";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 target
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 start
+                        // For 2-arg version, pass array length as end; for 3-arg pass the actual end
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 end
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
+                        hasReturnValue = true;
                     } else if (methodName == "toString") {
                         // array.toString() - converts to comma-separated string
                         // Returns string representation like "1,2,3"

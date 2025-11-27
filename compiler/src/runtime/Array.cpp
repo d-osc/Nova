@@ -759,6 +759,71 @@ void* nova_value_array_splice(void* array_ptr, int64_t start, int64_t deleteCoun
     return array_ptr;
 }
 
+// Array.copyWithin(target, start, end) - shallow copies part to another location (ES2015)
+// Modifies array in place and returns it
+void* nova_value_array_copyWithin(void* array_ptr, int64_t target, int64_t start, int64_t end) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !array->elements || array->length == 0) {
+        return array_ptr;
+    }
+
+    // Handle negative indices
+    if (target < 0) {
+        target = array->length + target;
+        if (target < 0) target = 0;
+    }
+    if (start < 0) {
+        start = array->length + start;
+        if (start < 0) start = 0;
+    }
+    if (end < 0) {
+        end = array->length + end;
+        if (end < 0) end = 0;
+    }
+
+    // Default end to array length if not specified (end defaults to length in JS)
+    // But since we always pass 3 params from caller, we handle it there
+    if (end > array->length) {
+        end = array->length;
+    }
+
+    // Clamp target and start
+    if (target >= array->length) {
+        return array_ptr;
+    }
+    if (start >= array->length) {
+        return array_ptr;
+    }
+
+    // Calculate copy length
+    int64_t copyLength = end - start;
+    if (copyLength <= 0) {
+        return array_ptr;
+    }
+
+    // Adjust copy length if it would exceed array bounds
+    if (target + copyLength > array->length) {
+        copyLength = array->length - target;
+    }
+    if (start + copyLength > array->length) {
+        copyLength = array->length - start;
+    }
+
+    // Use memmove for overlapping regions (handles overlap correctly)
+    std::memmove(
+        &array->elements[target],
+        &array->elements[start],
+        copyLength * sizeof(int64_t)
+    );
+
+    // Write back to metadata
+    write_back_to_metadata(array_ptr, array);
+
+    // Return array pointer for chaining (like JavaScript)
+    return array_ptr;
+}
+
 // Array.toString() - converts array to comma-separated string
 // Returns string representation like "1,2,3"
 const char* nova_value_array_toString(void* array_ptr) {
