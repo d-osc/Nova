@@ -2903,6 +2903,14 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // radix (i64)
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
+                    } else if (methodName == "valueOf") {
+                        // num.valueOf()
+                        // Returns the primitive value of a Number object
+                        // No parameters beyond the number itself
+                        std::cerr << "DEBUG HIRGen: Detected number method call: valueOf" << std::endl;
+                        runtimeFuncName = "nova_number_valueOf";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::F64);  // returns F64
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown number method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);

@@ -215,4 +215,12 @@ const char* nova_number_toString(double num, int64_t radix) {
     return result;
 }
 
+// Number.prototype.valueOf() - returns the primitive value
+double nova_number_valueOf(double num) {
+    // Simply return the number itself
+    // In JavaScript, this unwraps a Number object to its primitive value
+    // For primitive numbers (which we use), this is just an identity function
+    return num;
+}
+
 } // extern "C"
