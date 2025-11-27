@@ -1367,6 +1367,13 @@ public:
                         runtimeFuncName = "nova_string_trimStart";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else if (methodName == "trimEnd" || methodName == "trimRight") {
+                        // str.trimEnd() or str.trimRight()
+                        // Removes whitespace from the end of the string
+                        std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
+                        runtimeFuncName = "nova_string_trimEnd";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "startsWith") {
                         runtimeFuncName = "nova_string_startsWith";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));

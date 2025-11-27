@@ -327,6 +327,38 @@ const char* nova_string_trimStart(const char* str) {
     return result;
 }
 
+// Trim whitespace from end of string (trimEnd/trimRight)
+const char* nova_string_trimEnd(const char* str) {
+    if (!str) return "";
+
+    size_t len = std::strlen(str);
+    if (len == 0) return "";
+
+    // Find last non-whitespace character
+    size_t end = len - 1;
+    while (end > 0 && std::isspace(static_cast<unsigned char>(str[end]))) {
+        end--;
+    }
+
+    // Check if first character is also whitespace
+    if (end == 0 && std::isspace(static_cast<unsigned char>(str[0]))) {
+        return "";  // All whitespace
+    }
+
+    // Calculate trimmed length (from start to end, no trimming at start)
+    size_t trimmed_len = end + 1;
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(trimmed_len + 1));
+    if (!result) return "";
+
+    // Copy trimmed string (from beginning to end, no trimming at start)
+    std::memcpy(result, str, trimmed_len);
+    result[trimmed_len] = '\0';
+
+    return result;
+}
+
 // Check if string starts with a prefix
 int64_t nova_string_startsWith(const char* str, const char* prefix) {
     if (!str || !prefix) return 0;
