@@ -1,6 +1,7 @@
 #include "nova/runtime/Runtime.h"
 #include <cstring>
 #include <unordered_map>
+#include <vector>
 
 namespace nova {
 namespace runtime {
@@ -68,14 +69,14 @@ bool object_has(Object* obj, const char* key) {
 
 void object_delete(Object* obj, const char* key) {
     if (!obj || !key) return;
-    
+
     if (!obj->properties) {
         return;
     }
-    
+
     auto* properties = static_cast<std::unordered_map<std::string, Property>*>(obj->properties);
     properties->erase(key);
-    
+
     // Clean up if empty
     if (properties->empty()) {
         delete properties;
@@ -85,3 +86,37 @@ void object_delete(Object* obj, const char* key) {
 
 } // namespace runtime
 } // namespace nova
+
+// Extern "C" wrapper for Object static methods (for easier linking)
+extern "C" {
+
+// Object.values(obj) - returns array of object's property values (ES2017)
+void* nova_object_values(void* obj_ptr) {
+    nova::runtime::Object* obj = static_cast<nova::runtime::Object*>(obj_ptr);
+
+    if (!obj || !obj->properties) {
+        // Return empty array for null object or object with no properties
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    auto* properties = static_cast<std::unordered_map<std::string, nova::runtime::Property>*>(obj->properties);
+
+    // Create array with same size as number of properties
+    int64_t count = static_cast<int64_t>(properties->size());
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(count);
+    resultArray->length = count;
+
+    // Extract values from properties
+    int64_t index = 0;
+    for (const auto& pair : *properties) {
+        // For now, assume values are stored as int64_t
+        // In a full implementation, we'd need to handle different types
+        resultArray->elements[index] = reinterpret_cast<int64_t>(pair.second.value);
+        index++;
+    }
+
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
+} // extern "C"

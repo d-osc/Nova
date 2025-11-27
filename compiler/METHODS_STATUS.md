@@ -2,7 +2,7 @@
 
 ## ✅ String Methods (Working)
 - `String.fromCharCode(code)` - Create string from character code (static) **[v0.91.0]**
-- `String.fromCodePoint(codePoint)` - Create string from Unicode code point (static, ES2015) **[v1.3.2 NEW!]**
+- `String.fromCodePoint(codePoint)` - Create string from Unicode code point (static, ES2015) **[v1.3.2]**
 - `String.prototype.charAt(index)` - Get character at index
 - `String.prototype.charCodeAt(index)` - Get character code at index **[v0.90.0]**
 - `String.prototype.codePointAt(index)` - Get Unicode code point at index (ES2015) **[v1.3.1]**
@@ -109,6 +109,9 @@
 - `Number.isInteger(value)` - Check if integer
 - `Number.isSafeInteger(value)` - Check if safe integer
 
+## ✅ Object Methods (Working)
+- `Object.values(obj)` - Returns array of object's property values (static, ES2017) **[v1.3.3 NEW!]**
+
 ## ✅ Operators & Language Features (Working)
 - `typeof` - Type checking operator
 - `instanceof` - Instance checking operator
@@ -138,12 +141,13 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 93+ methods implemented
-- **Latest Version**: v1.3.2
-- **Test Suite**: 239/239 tests passing (100%) ✅
+- **Total Methods**: 94+ methods implemented
+- **Latest Version**: v1.3.3
+- **Test Suite**: 240/240 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
+- **Object Methods**: 1+ (ES2017 features!)
 

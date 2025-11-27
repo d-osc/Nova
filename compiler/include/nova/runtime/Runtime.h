@@ -106,6 +106,7 @@ struct ValueArray {
 
 ValueArray* create_value_array(int64 initial_capacity);
 ValueArray* convert_to_value_array(void* metadata_ptr);
+void* create_metadata_from_value_array(ValueArray* array);
 void resize_value_array(ValueArray* array, int64 new_capacity);
 int64 value_array_get(ValueArray* array, int64 index);
 void value_array_set(ValueArray* array, int64 index, int64 value);
