@@ -696,6 +696,31 @@ void* nova_value_array_map(void* array_ptr, MapCallbackFunc callback) {
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
+// Array.some() implementation
+// Callback function type: takes element, returns boolean
+typedef int64_t (*SomeCallbackFunc)(int64_t);
+
+int64_t nova_value_array_some(void* array_ptr, SomeCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return 0;  // false
+    }
+
+    // Check if any element matches
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        int64_t result = callback(element);
+
+        // If callback returns truthy value, return true immediately
+        if (result != 0) {
+            return 1;  // true
+        }
+    }
+
+    return 0;  // false - no elements matched
+}
+
 
 
 } // extern "C"

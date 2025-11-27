@@ -32,7 +32,8 @@
 - `Array.prototype.slice(start, end)` - Extract sub-array **[v0.77.0]**
 - `Array.prototype.find(callback)` - Find first matching element **[v0.79.0]**
 - `Array.prototype.filter(callback)` - Filter elements by condition **[v0.80.0]**
-- `Array.prototype.map(callback)` - Transform each element **[v0.81.0 NEW!]**
+- `Array.prototype.map(callback)` - Transform each element **[v0.81.0]**
+- `Array.prototype.some(callback)` - Check if any element matches **[v0.82.0 NEW!]**
 - `Array.prototype.length` - Array length property
 - `Array.isArray(value)` - Check if value is array
 
@@ -77,16 +78,17 @@
    - ✅ Array.find() with arrow function callbacks **[v0.79.0]**
    - ✅ Array.filter() with arrow function callbacks **[v0.80.0]**
    - ✅ Array.map() with arrow function callbacks **[v0.81.0]**
-   - Additional callback methods (reduce, forEach, some, every) coming soon
+   - ✅ Array.some() with arrow function callbacks **[v0.82.0]**
+   - Additional callback methods (reduce, forEach, every) coming soon
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.81.0
-- **Test Suite**: 179/179 tests passing (100%) ✅
+- **Latest Version**: v0.82.0
+- **Test Suite**: 180/180 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 15+
-- **Array Methods**: 16+ (with 3 callback methods!)
+- **Array Methods**: 17+ (with 4 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
 
