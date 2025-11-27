@@ -1,9 +1,10 @@
 # Nova Compiler - Implemented Methods Status
 
 ## ✅ String Methods (Working)
-- `String.fromCharCode(code)` - Create string from character code (static) **[v0.91.0 NEW!]**
+- `String.fromCharCode(code)` - Create string from character code (static) **[v0.91.0]**
 - `String.prototype.charAt(index)` - Get character at index
 - `String.prototype.charCodeAt(index)` - Get character code at index **[v0.90.0]**
+- `String.prototype.concat(otherString)` - Concatenate strings **[v0.93.0 NEW!]**
 - `String.prototype.substring(start, end)` - Extract substring
 - `String.prototype.indexOf(searchString)` - Find first occurrence
 - `String.prototype.lastIndexOf(searchString)` - Find last occurrence **[v0.89.0]**
@@ -98,11 +99,11 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 53+ methods implemented
-- **Latest Version**: v0.92.0
-- **Test Suite**: 190/190 tests passing (100%) ✅
+- **Total Methods**: 54+ methods implemented
+- **Latest Version**: v0.93.0
+- **Test Suite**: 191/191 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 18+
+- **String Methods**: 19+
 - **Array Methods**: 24+ (with 9 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+

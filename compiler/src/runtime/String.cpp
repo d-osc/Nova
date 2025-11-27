@@ -144,6 +144,27 @@ const char* nova_string_fromCharCode(int64_t code) {
     return result;
 }
 
+// Concatenate two strings
+const char* nova_string_concat(const char* str1, const char* str2) {
+    if (!str1 && !str2) return "";
+    if (!str1) return str2;
+    if (!str2) return str1;
+
+    size_t len1 = std::strlen(str1);
+    size_t len2 = std::strlen(str2);
+    size_t total_len = len1 + len2;
+
+    // Allocate memory for concatenated string (+ 1 for null terminator)
+    char* result = new char[total_len + 1];
+
+    // Copy first string
+    std::strcpy(result, str1);
+    // Concatenate second string
+    std::strcat(result, str2);
+
+    return result;
+}
+
 // Find first occurrence of substring, returns -1 if not found
 int64_t nova_string_indexOf(const char* str, const char* search) {
     if (!str || !search) return -1;

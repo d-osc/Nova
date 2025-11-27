@@ -1310,6 +1310,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_concat") {
+                            // ptr @nova_string_concat(ptr, ptr) - concatenates two strings
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_concat declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns ptr (string)
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_concat",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_string_toLowerCase") {
                             // ptr @nova_string_toLowerCase(ptr)
                             std::cerr << "DEBUG LLVM: Creating external nova_string_toLowerCase declaration" << std::endl;

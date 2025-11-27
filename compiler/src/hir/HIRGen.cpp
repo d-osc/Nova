@@ -1340,6 +1340,14 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // Returns character code as i64
+                    } else if (methodName == "concat") {
+                        // str.concat(otherStr)
+                        // Concatenates two strings together
+                        std::cerr << "DEBUG HIRGen: Detected string method call: concat" << std::endl;
+                        runtimeFuncName = "nova_string_concat";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "toLowerCase") {
                         runtimeFuncName = "nova_string_toLowerCase";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
