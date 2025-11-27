@@ -31,6 +31,7 @@
 - `Array.prototype.concat(otherArray)` - Concatenate arrays **[v0.76.0]**
 - `Array.prototype.slice(start, end)` - Extract sub-array **[v0.77.0]**
 - `Array.prototype.find(callback)` - Find first matching element **[v0.79.0]**
+- `Array.prototype.findIndex(callback)` - Find first matching index **[v0.86.0 NEW!]**
 - `Array.prototype.filter(callback)` - Filter elements by condition **[v0.80.0]**
 - `Array.prototype.map(callback)` - Transform each element **[v0.81.0]**
 - `Array.prototype.some(callback)` - Check if any element matches **[v0.82.0]**
@@ -79,6 +80,7 @@
    - ~~Workaround: Access `.length` on original array or use inline~~
 2. **Callbacks**:
    - ✅ Array.find() with arrow function callbacks **[v0.79.0]**
+   - ✅ Array.findIndex() with arrow function callbacks **[v0.86.0]**
    - ✅ Array.filter() with arrow function callbacks **[v0.80.0]**
    - ✅ Array.map() with arrow function callbacks **[v0.81.0]**
    - ✅ Array.some() with arrow function callbacks **[v0.82.0]**
@@ -90,11 +92,11 @@
 
 ## 📊 Statistics
 - **Total Methods**: 50+ methods implemented
-- **Latest Version**: v0.85.0
-- **Test Suite**: 183/183 tests passing (100%) ✅
+- **Latest Version**: v0.86.0
+- **Test Suite**: 184/184 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 15+
-- **Array Methods**: 20+ (with 7 callback methods!)
+- **Array Methods**: 21+ (with 8 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
 

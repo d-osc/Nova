@@ -627,6 +627,34 @@ int64_t nova_value_array_find(void* array_ptr, FindCallbackFunc callback) {
     return 0;
 }
 
+// Array.findIndex() implementation
+// Callback function type: same as find
+typedef int64_t (*FindIndexCallbackFunc)(int64_t);
+
+int64_t nova_value_array_findIndex(void* array_ptr, FindIndexCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        return -1;  // Not found
+    }
+
+    // Iterate through array elements
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+
+        // Call the callback function
+        int64_t result = callback(element);
+
+        // If callback returns truthy value, return this index
+        if (result != 0) {
+            return i;  // Return the INDEX, not the element
+        }
+    }
+
+    // Not found
+    return -1;  // JavaScript standard: return -1 when not found
+}
+
 // Array.filter() implementation
 // Callback function type: same as find
 typedef int64_t (*FilterCallbackFunc)(int64_t);
