@@ -2513,6 +2513,19 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 end
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);          // returns ptr (array)
                         hasReturnValue = true;
+                    } else if (methodName == "toSpliced") {
+                        // array.toSpliced(start, deleteCount) - returns new array with elements removed (ES2023)
+                        // Immutable version of splice() - does not modify original array
+                        std::cerr << "DEBUG HIRGen: Detected array method call: toSpliced" << std::endl;
+                        runtimeFuncName = "nova_value_array_toSpliced";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 start
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 deleteCount
+                        // Return new array - use proper 3-step pattern for array type
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0);
+                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        hasReturnValue = true;
                     } else if (methodName == "toString") {
                         // array.toString() - converts to comma-separated string
                         // Returns string representation like "1,2,3"

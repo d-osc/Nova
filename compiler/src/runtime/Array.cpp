@@ -824,6 +824,62 @@ void* nova_value_array_copyWithin(void* array_ptr, int64_t target, int64_t start
     return array_ptr;
 }
 
+// Array.toSpliced(start, deleteCount) - returns new array with elements removed (ES2023)
+// Immutable version of splice() - does not modify original array
+void* nova_value_array_toSpliced(void* array_ptr, int64_t start, int64_t deleteCount) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !array->elements || array->length == 0) {
+        // Return empty array
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    // Handle negative start index
+    if (start < 0) {
+        start = array->length + start;
+        if (start < 0) start = 0;
+    }
+
+    // Clamp start to array bounds
+    if (start >= array->length) {
+        // Return copy of entire original array
+        nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(array->length);
+        resultArray->length = array->length;
+        for (int64_t i = 0; i < array->length; i++) {
+            resultArray->elements[i] = array->elements[i];
+        }
+        return nova::runtime::create_metadata_from_value_array(resultArray);
+    }
+
+    // Clamp deleteCount
+    if (deleteCount < 0) {
+        deleteCount = 0;
+    }
+    if (start + deleteCount > array->length) {
+        deleteCount = array->length - start;
+    }
+
+    // Calculate new array length
+    int64_t newLength = array->length - deleteCount;
+
+    // Create new array
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(newLength);
+    resultArray->length = newLength;
+
+    // Copy elements before the deleted range
+    for (int64_t i = 0; i < start; i++) {
+        resultArray->elements[i] = array->elements[i];
+    }
+
+    // Copy elements after the deleted range
+    for (int64_t i = start; i < newLength; i++) {
+        resultArray->elements[i] = array->elements[i + deleteCount];
+    }
+
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
 // Array.toString() - converts array to comma-separated string
 // Returns string representation like "1,2,3"
 const char* nova_value_array_toString(void* array_ptr) {

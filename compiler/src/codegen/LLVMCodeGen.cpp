@@ -1771,6 +1771,24 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_value_array_toSpliced") {
+                            // ptr @nova_value_array_toSpliced(ptr, i64, i64) - returns new array with elements removed (ES2023)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_toSpliced declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
+                                {llvm::PointerType::getUnqual(*context),  // array pointer
+                                 llvm::Type::getInt64Ty(*context),        // start
+                                 llvm::Type::getInt64Ty(*context)},       // deleteCount
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_toSpliced",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_toString") {
                             // ptr @nova_value_array_toString(ptr) - returns comma-separated string
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_toString declaration" << std::endl;
