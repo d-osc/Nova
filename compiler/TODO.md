@@ -1,9 +1,9 @@
 # Nova Compiler - TODO List
 
-> **Last Updated**: 2025-11-13
-> **Current Version**: v0.6.0
-> **Current Sprint**: Feature Enhancement Phase
-> **Focus**: Arrays, Objects, and String Operations
+> **Last Updated**: 2025-11-27
+> **Current Version**: v0.78.0
+> **Current Sprint**: Type System & Callback Support Phase
+> **Focus**: Array Method Type Inference (FIXED), Callback-based Methods (Next)
 
 ---
 
