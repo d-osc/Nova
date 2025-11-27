@@ -1375,6 +1375,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_trimStart") {
+                            // ptr @nova_string_trimStart(ptr) - removes leading whitespace
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_trimStart declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_trimStart",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_string_startsWith") {
                             // i64 @nova_string_startsWith(ptr, ptr)
                             std::cerr << "DEBUG LLVM: Creating external nova_string_startsWith declaration" << std::endl;

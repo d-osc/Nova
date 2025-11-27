@@ -11,6 +11,7 @@
 - `String.prototype.toLowerCase()` - Convert to lowercase
 - `String.prototype.toUpperCase()` - Convert to uppercase
 - `String.prototype.trim()` - Remove whitespace
+- `String.prototype.trimStart()` - Remove leading whitespace **[v0.94.0 NEW!]**
 - `String.prototype.startsWith(prefix)` - Check if starts with
 - `String.prototype.endsWith(suffix)` - Check if ends with
 - `String.prototype.repeat(count)` - Repeat string
@@ -99,11 +100,11 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 54+ methods implemented
-- **Latest Version**: v0.93.0
-- **Test Suite**: 191/191 tests passing (100%) ✅
+- **Total Methods**: 55+ methods implemented
+- **Latest Version**: v0.94.0
+- **Test Suite**: 192/192 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 19+
+- **String Methods**: 20+
 - **Array Methods**: 24+ (with 9 callback methods!)
 - **Math Methods**: 14+
 - **Number Methods**: 4+
