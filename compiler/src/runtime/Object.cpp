@@ -119,4 +119,36 @@ void* nova_object_values(void* obj_ptr) {
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
+// Object.keys(obj) - returns array of object's property keys (ES2015)
+void* nova_object_keys(void* obj_ptr) {
+    nova::runtime::Object* obj = static_cast<nova::runtime::Object*>(obj_ptr);
+
+    if (!obj || !obj->properties) {
+        // Return empty array for null object or object with no properties
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    auto* properties = static_cast<std::unordered_map<std::string, nova::runtime::Property>*>(obj->properties);
+
+    // Create array with same size as number of properties
+    int64_t count = static_cast<int64_t>(properties->size());
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(count);
+    resultArray->length = count;
+
+    // Extract keys (property names) from properties
+    int64_t index = 0;
+    for (const auto& pair : *properties) {
+        // Store the key as a pointer to a string
+        // We need to allocate and copy the string
+        const char* keyStr = pair.first.c_str();
+        char* keyCopy = new char[pair.first.length() + 1];
+        std::strcpy(keyCopy, keyStr);
+        resultArray->elements[index] = reinterpret_cast<int64_t>(keyCopy);
+        index++;
+    }
+
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
 } // extern "C"
