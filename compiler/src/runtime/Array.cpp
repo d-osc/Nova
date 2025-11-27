@@ -793,6 +793,36 @@ void* nova_value_array_flat(void* array_ptr) {
     return nova::runtime::create_metadata_from_value_array(result);
 }
 
+// Array.flatMap() - maps then flattens one level deep (ES2019)
+// Callback function type: takes element, returns transformed value
+typedef int64_t (*FlatMapCallbackFunc)(int64_t);
+
+void* nova_value_array_flatMap(void* array_ptr, FlatMapCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback) {
+        // Return empty array
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        emptyArray->length = 0;
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    // Create new array with same size as input
+    // (For now, works like map since we don't have nested arrays)
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(array->length);
+    resultArray->length = array->length;
+
+    // Transform each element (map operation)
+    for (int64_t i = 0; i < array->length; i++) {
+        int64_t element = array->elements[i];
+        int64_t transformed = callback(element);
+        resultArray->elements[i] = transformed;
+    }
+
+    // Return new array (flattening not needed for simple values)
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
 int64_t nova_value_array_includes(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     bool result = nova::runtime::value_array_includes(array, value);

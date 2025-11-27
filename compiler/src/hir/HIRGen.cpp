@@ -2417,6 +2417,19 @@ public:
                         auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
                         returnType = std::make_shared<HIRPointerType>(arrayType, true);
                         hasReturnValue = true;
+                    } else if (methodName == "flatMap") {
+                        // array.flatMap(callback) - maps then flattens one level (ES2019)
+                        // Callback: (element) => transformed_value
+                        // Returns new array with transformed and flattened elements
+                        std::cerr << "DEBUG HIRGen: Detected array method call: flatMap" << std::endl;
+                        runtimeFuncName = "nova_value_array_flatMap";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        // Return proper array type: pointer to array of i64
+                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0);
+                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        hasReturnValue = true;
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*

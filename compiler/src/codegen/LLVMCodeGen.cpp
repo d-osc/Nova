@@ -1784,6 +1784,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_value_array_flatMap") {
+                            // ptr @nova_value_array_flatMap(ptr, ptr) - maps then flattens (ES2019)
+                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_flatMap declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
+                                {llvm::PointerType::getUnqual(*context),  // array pointer
+                                 llvm::PointerType::getUnqual(*context)}, // callback function pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_value_array_flatMap",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
@@ -2519,7 +2536,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                 // Special handling for array functions that return new arrays
                 // calleeName already declared above at line 1658
-                if (calleeName == "nova_value_array_concat" || calleeName == "nova_value_array_slice" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map" || calleeName == "nova_value_array_toReversed" || calleeName == "nova_value_array_toSorted" || calleeName == "nova_value_array_flat") {
+                if (calleeName == "nova_value_array_concat" || calleeName == "nova_value_array_slice" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map" || calleeName == "nova_value_array_toReversed" || calleeName == "nova_value_array_toSorted" || calleeName == "nova_value_array_flat" || calleeName == "nova_value_array_flatMap") {
                     std::cerr << "DEBUG LLVM: Detected array-returning function: " << calleeName << std::endl;
                     // Create ValueArrayMeta type and register it for the result
                     // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }
@@ -2564,7 +2581,8 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             funcName == "nova_value_array_slice" ||
                             funcName == "nova_value_array_toReversed" ||
                             funcName == "nova_value_array_toSorted" ||
-                            funcName == "nova_value_array_flat") {
+                            funcName == "nova_value_array_flat" ||
+                            funcName == "nova_value_array_flatMap") {
                             std::cerr << "DEBUG LLVM: Detected array-returning function: " << funcName << std::endl;
                             // Create ValueArrayMeta type and register it for the result
                             // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }
