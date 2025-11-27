@@ -2876,6 +2876,15 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // digits (i64)
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
+                    } else if (methodName == "toExponential") {
+                        // num.toExponential(fractionDigits)
+                        // Formats number in exponential notation (scientific notation)
+                        // Returns string representation
+                        std::cerr << "DEBUG HIRGen: Detected number method call: toExponential" << std::endl;
+                        runtimeFuncName = "nova_number_toExponential";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // fractionDigits (i64)
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown number method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);

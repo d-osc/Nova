@@ -2066,6 +2066,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_number_toExponential") {
+                            // ptr @nova_number_toExponential(double, i64) - formats number in exponential notation
+                            std::cerr << "DEBUG LLVM: Creating external nova_number_toExponential declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns string pointer
+                                {llvm::Type::getDoubleTy(*context),      // Number (as double/F64)
+                                 llvm::Type::getInt64Ty(*context)},      // FractionDigits (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_number_toExponential",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
