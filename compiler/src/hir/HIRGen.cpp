@@ -2234,6 +2234,15 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else if (methodName == "replaceAll") {
+                        // str.replaceAll(search, replace) - ES2021
+                        // Replaces ALL occurrences (not just first like replace())
+                        std::cerr << "DEBUG HIRGen: Detected string method call: replaceAll" << std::endl;
+                        runtimeFuncName = "nova_string_replaceAll";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "padStart") {
                         runtimeFuncName = "nova_string_padStart";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));

@@ -510,6 +510,65 @@ const char* nova_string_replace(const char* str, const char* search, const char*
     return result;
 }
 
+// Replace ALL occurrences of search string with replacement (ES2021)
+const char* nova_string_replaceAll(const char* str, const char* search, const char* replace) {
+    if (!str) return "";
+    if (!search || !replace) return str;
+
+    size_t str_len = std::strlen(str);
+    size_t search_len = std::strlen(search);
+    size_t replace_len = std::strlen(replace);
+
+    // If search is empty, return original string
+    if (search_len == 0) return str;
+
+    // Count occurrences to calculate final size
+    size_t count = 0;
+    const char* temp = str;
+    while ((temp = std::strstr(temp, search)) != nullptr) {
+        count++;
+        temp += search_len;
+    }
+
+    // If no occurrences found, return original
+    if (count == 0) return str;
+
+    // Calculate new length
+    size_t new_len = str_len - (count * search_len) + (count * replace_len);
+
+    // Allocate result
+    char* result = static_cast<char*>(malloc(new_len + 1));
+    if (!result) return str;
+
+    // Build result by replacing all occurrences
+    const char* src = str;
+    char* dst = result;
+
+    while (true) {
+        const char* found = std::strstr(src, search);
+        if (!found) {
+            // Copy remaining part
+            std::strcpy(dst, src);
+            break;
+        }
+
+        // Copy part before match
+        size_t before_len = found - src;
+        std::memcpy(dst, src, before_len);
+        dst += before_len;
+
+        // Copy replacement
+        std::memcpy(dst, replace, replace_len);
+        dst += replace_len;
+
+        // Move src past the match
+        src = found + search_len;
+    }
+
+    result[new_len] = '\0';
+    return result;
+}
+
 // Pad string to target length by prepending fill string
 const char* nova_string_padStart(const char* str, int64_t target_len, const char* fill) {
     if (!str) return "";
