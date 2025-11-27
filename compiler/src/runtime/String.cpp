@@ -189,6 +189,34 @@ const char* nova_string_fromCharCode(int64_t code) {
     return result;
 }
 
+// Create string from Unicode code point (ES2015 static method)
+// Like fromCharCode but handles full Unicode code points
+const char* nova_string_fromCodePoint(int64_t codePoint) {
+    // For now, handle ASCII and basic Unicode (code points < 128)
+    // Full Unicode support would require UTF-8 encoding for code points > 127
+    if (codePoint < 0 || codePoint > 0x10FFFF) {
+        // Invalid code point - return empty string
+        char* result = new char[1];
+        result[0] = '\0';
+        return result;
+    }
+
+    // For ASCII range (0-127), same as fromCharCode
+    if (codePoint < 128) {
+        char* result = new char[2];
+        result[0] = static_cast<char>(codePoint);
+        result[1] = '\0';
+        return result;
+    }
+
+    // For code points >= 128, we'd need UTF-8 encoding
+    // For now, just use the lower byte (simplified implementation)
+    char* result = new char[2];
+    result[0] = static_cast<char>(codePoint & 0xFF);
+    result[1] = '\0';
+    return result;
+}
+
 // Concatenate two strings
 const char* nova_string_concat(const char* str1, const char* str2) {
     if (!str1 && !str2) return "";

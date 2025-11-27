@@ -1344,6 +1344,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_fromCodePoint") {
+                            // ptr @nova_string_fromCodePoint(i64) - returns string from Unicode code point (ES2015)
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_fromCodePoint declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns ptr (string)
+                                {llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_fromCodePoint",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_string_concat") {
                             // ptr @nova_string_concat(ptr, ptr) - concatenates two strings
                             std::cerr << "DEBUG LLVM: Creating external nova_string_concat declaration" << std::endl;

@@ -2197,6 +2197,48 @@ public:
                         lastValue_ = builder_->createCall(runtimeFunc, args, "fromCharCode_result");
                         return;
                     }
+
+                    if (objIdent->name == "String" && propIdent->name == "fromCodePoint") {
+                        // String.fromCodePoint(codePoint) - create string from Unicode code point (ES2015)
+                        std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCodePoint" << std::endl;
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: String.fromCodePoint() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createStringConstant("");
+                            return;
+                        }
+
+                        // Evaluate the argument (code point)
+                        node.arguments[0]->accept(*this);
+                        auto* codePoint = lastValue_;
+
+                        // Setup function signature
+                        std::string runtimeFuncName = "nova_string_fromCodePoint";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {codePoint};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "fromCodePoint_result");
+                        return;
+                    }
                 }
             }
         }

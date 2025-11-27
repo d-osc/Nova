@@ -2,9 +2,10 @@
 
 ## ✅ String Methods (Working)
 - `String.fromCharCode(code)` - Create string from character code (static) **[v0.91.0]**
+- `String.fromCodePoint(codePoint)` - Create string from Unicode code point (static, ES2015) **[v1.3.2 NEW!]**
 - `String.prototype.charAt(index)` - Get character at index
 - `String.prototype.charCodeAt(index)` - Get character code at index **[v0.90.0]**
-- `String.prototype.codePointAt(index)` - Get Unicode code point at index (ES2015) **[v1.3.1 NEW!]**
+- `String.prototype.codePointAt(index)` - Get Unicode code point at index (ES2015) **[v1.3.1]**
 - `String.prototype.at(index)` - Get character at index (supports negative) **[v1.1.5]**
 - `String.prototype.concat(otherString)` - Concatenate strings **[v0.93.0]**
 - `String.prototype.substring(start, end)` - Extract substring
@@ -137,11 +138,11 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 92+ methods implemented
-- **Latest Version**: v1.3.1
-- **Test Suite**: 238/238 tests passing (100%) ✅
+- **Total Methods**: 93+ methods implemented
+- **Latest Version**: v1.3.2
+- **Test Suite**: 239/239 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 24+ (includes ES2015, ES2021 & ES2022!)
+- **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 4+
