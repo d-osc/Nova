@@ -65,6 +65,7 @@
 - `Math.fround(x)` - Round to float32
 - `Math.imul(a, b)` - Integer multiplication
 - `Math.clz32(x)` - Count leading zeros
+- `Math.log(x)` - Natural logarithm (base e) **[v0.96.0 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -101,12 +102,12 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 56+ methods implemented
-- **Latest Version**: v0.95.0
-- **Test Suite**: 193/193 tests passing (100%) ✅
+- **Total Methods**: 57+ methods implemented
+- **Latest Version**: v0.96.0
+- **Test Suite**: 194/194 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 21+
 - **Array Methods**: 24+ (with 9 callback methods!)
-- **Math Methods**: 14+
+- **Math Methods**: 15+
 - **Number Methods**: 4+
 

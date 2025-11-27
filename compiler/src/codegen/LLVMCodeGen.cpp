@@ -1906,6 +1906,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        // Math functions
+                        if (!callee && funcName == "log") {
+                            // double @log(double) - C library natural logarithm function
+                            std::cerr << "DEBUG LLVM: Creating external log declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "log",
+                                module.get()
+                            );
+                        }
                     }
                 }
             }
@@ -1986,16 +2003,26 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             else if (actualType->isIntegerTy() && expectedType->isIntegerTy()) {
                                 auto actualIntType = static_cast<llvm::IntegerType*>(actualType);
                                 auto expectedIntType = static_cast<llvm::IntegerType*>(expectedType);
-                                
+
                                 if (actualIntType->getBitWidth() < expectedIntType->getBitWidth()) {
-                                    std::cerr << "DEBUG LLVM: Extending integer from " << actualIntType->getBitWidth() 
+                                    std::cerr << "DEBUG LLVM: Extending integer from " << actualIntType->getBitWidth()
                                               << " to " << expectedIntType->getBitWidth() << std::endl;
                                     argValue = builder->CreateSExt(argValue, expectedType);
                                 } else if (actualIntType->getBitWidth() > expectedIntType->getBitWidth()) {
-                                    std::cerr << "DEBUG LLVM: Truncating integer from " << actualIntType->getBitWidth() 
+                                    std::cerr << "DEBUG LLVM: Truncating integer from " << actualIntType->getBitWidth()
                                               << " to " << expectedIntType->getBitWidth() << std::endl;
                                     argValue = builder->CreateTrunc(argValue, expectedType);
                                 }
+                            }
+                            // Handle integer to float/double conversion
+                            else if (actualType->isIntegerTy() && (expectedType->isFloatTy() || expectedType->isDoubleTy())) {
+                                std::cerr << "DEBUG LLVM: Converting integer to floating point" << std::endl;
+                                argValue = builder->CreateSIToFP(argValue, expectedType, "int_to_fp");
+                            }
+                            // Handle float/double to integer conversion
+                            else if ((actualType->isFloatTy() || actualType->isDoubleTy()) && expectedType->isIntegerTy()) {
+                                std::cerr << "DEBUG LLVM: Converting floating point to integer" << std::endl;
+                                argValue = builder->CreateFPToSI(argValue, expectedType, "fp_to_int");
                             }
                         }
                         
@@ -2010,6 +2037,12 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 std::cerr << "DEBUG LLVM: callee name = " << callee->getName().str() << std::endl;
                 llvm::Value* result = builder->CreateCall(callee, args);
                 std::cerr << "DEBUG LLVM: CreateCall succeeded, result = " << result << std::endl;
+
+                // Handle return value type conversion (e.g., double to I64 for Math functions)
+                if (result && result->getType()->isFloatingPointTy()) {
+                    std::cerr << "DEBUG LLVM: Converting floating point return value to i64" << std::endl;
+                    result = builder->CreateFPToSI(result, llvm::Type::getInt64Ty(*context), "fp_result_to_i64");
+                }
 
                 // Special handling for array functions that return new arrays
                 // calleeName already declared above at line 1658
