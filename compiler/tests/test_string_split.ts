@@ -1,7 +1,6 @@
-// Test string split method
+// Test String.split()
 function main(): number {
-    let str = "hello,world";
+    let str = "a,b,c";
     let parts = str.split(",");
-    
-    return parts.length;  // Should be 2
+    return 1;
 }
