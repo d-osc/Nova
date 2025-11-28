@@ -367,4 +367,22 @@ void nova_console_groupEnd() {
     }
 }
 
+// console.trace(message) - prints stack trace with message
+// Note: Simplified implementation without full call stack
+void nova_console_trace_string(const char* message) {
+    if (message) {
+        printf("Trace: %s\n", message);
+    } else {
+        printf("Trace\n");
+    }
+    // In a full implementation, this would print the call stack
+    // For now, we just print the message with a "Trace:" prefix
+}
+
+// console.trace() - prints stack trace without message
+void nova_console_trace_default() {
+    printf("Trace\n");
+    // In a full implementation, this would print the call stack
+}
+
 } // extern "C"

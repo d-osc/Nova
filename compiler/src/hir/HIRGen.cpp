@@ -869,6 +869,68 @@ public:
                             std::vector<HIRValue*> args;
                             lastValue_ = builder_->createCall(runtimeFunc, args, "console_group_result");
                             return;
+                        } else if (propIdent->name == "trace") {
+                            // console.trace(message) - prints stack trace with optional message
+                            std::cerr << "DEBUG HIRGen: Detected console.trace() call" << std::endl;
+
+                            std::string runtimeFuncName;
+                            std::vector<HIRTypePtr> paramTypes;
+
+                            if (node.arguments.size() > 0) {
+                                // Evaluate the message argument
+                                node.arguments[0]->accept(*this);
+                                auto* messageArg = lastValue_;
+
+                                runtimeFuncName = "nova_console_trace_string";
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+
+                                // Find or create runtime function
+                                HIRFunction* runtimeFunc = nullptr;
+                                auto& functions = module_->functions;
+                                for (auto& func : functions) {
+                                    if (func->name == runtimeFuncName) {
+                                        runtimeFunc = func.get();
+                                        break;
+                                    }
+                                }
+
+                                if (!runtimeFunc) {
+                                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, std::make_shared<HIRType>(HIRType::Kind::Void));
+                                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                    funcPtr->linkage = HIRFunction::Linkage::External;
+                                    runtimeFunc = funcPtr.get();
+                                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                }
+
+                                std::vector<HIRValue*> args = {messageArg};
+                                lastValue_ = builder_->createCall(runtimeFunc, args, "console_trace_result");
+                                return;
+                            } else {
+                                // No message - use default
+                                runtimeFuncName = "nova_console_trace_default";
+
+                                // Find or create runtime function
+                                HIRFunction* runtimeFunc = nullptr;
+                                auto& functions = module_->functions;
+                                for (auto& func : functions) {
+                                    if (func->name == runtimeFuncName) {
+                                        runtimeFunc = func.get();
+                                        break;
+                                    }
+                                }
+
+                                if (!runtimeFunc) {
+                                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, std::make_shared<HIRType>(HIRType::Kind::Void));
+                                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                    funcPtr->linkage = HIRFunction::Linkage::External;
+                                    runtimeFunc = funcPtr.get();
+                                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                }
+
+                                std::vector<HIRValue*> args;
+                                lastValue_ = builder_->createCall(runtimeFunc, args, "console_trace_result");
+                                return;
+                            }
                         } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {
