@@ -285,4 +285,38 @@ int64_t nova_number_parseInt(const char* str, int64_t radix) {
     return isNegative ? -result : result;
 }
 
+// Number.parseFloat(string) - parses a string and returns a floating-point number
+double nova_number_parseFloat(const char* str) {
+    if (!str) {
+        return 0.0;  // Return 0.0 for null string (NaN behavior)
+    }
+
+    // Skip leading whitespace
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') {
+        str++;
+    }
+
+    // Handle empty string after whitespace
+    if (*str == '\0') {
+        return 0.0;  // NaN behavior
+    }
+
+    // Use standard C library function strtod for parsing
+    // This handles:
+    // - Sign (+ or -)
+    // - Decimal points
+    // - Scientific notation (e.g., 1.23e2)
+    // - Infinity
+    // - NaN (if string is "NaN")
+    char* endPtr;
+    double result = std::strtod(str, &endPtr);
+
+    // If no valid conversion was performed, return 0.0 (NaN behavior)
+    if (endPtr == str) {
+        return 0.0;
+    }
+
+    return result;
+}
+
 } // extern "C"

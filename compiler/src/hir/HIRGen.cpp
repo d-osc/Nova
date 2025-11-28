@@ -2190,6 +2190,47 @@ public:
                             std::vector<HIRValue*> args = {stringArg, radixArg};
                             lastValue_ = builder_->createCall(runtimeFunc, args, "parseInt_result");
                             return;
+                        } else if (propIdent->name == "parseFloat") {
+                            // Number.parseFloat(string) - parse string to floating point
+                            std::cerr << "DEBUG HIRGen: Detected static method call: Number.parseFloat" << std::endl;
+                            if (node.arguments.size() != 1) {
+                                std::cerr << "ERROR: Number.parseFloat() expects exactly 1 argument" << std::endl;
+                                lastValue_ = builder_->createFloatConstant(0.0);
+                                return;
+                            }
+
+                            // Evaluate the string argument
+                            node.arguments[0]->accept(*this);
+                            auto* stringArg = lastValue_;
+
+                            // Setup function signature
+                            std::string runtimeFuncName = "nova_number_parseFloat";
+                            std::vector<HIRTypePtr> paramTypes;
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
+
+                            // Find or create runtime function
+                            HIRFunction* runtimeFunc = nullptr;
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == runtimeFuncName) {
+                                    runtimeFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            }
+
+                            // Create call to runtime function
+                            std::vector<HIRValue*> args = {stringArg};
+                            lastValue_ = builder_->createCall(runtimeFunc, args, "parseFloat_result");
+                            return;
                         }
                     }
                 }

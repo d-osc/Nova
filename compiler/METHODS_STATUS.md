@@ -108,7 +108,8 @@
 - `Number.isNaN(value)` - Check if NaN
 - `Number.isInteger(value)` - Check if integer
 - `Number.isSafeInteger(value)` - Check if safe integer
-- `Number.parseInt(string, radix)` - Parse string and return integer (static, ES5) **[v1.3.17 NEW!]**
+- `Number.parseInt(string, radix)` - Parse string and return integer (static, ES5) **[v1.3.17]**
+- `Number.parseFloat(string)` - Parse string and return floating-point number (static, ES5) **[v1.3.18 NEW!]**
 - `Number.prototype.toFixed(digits)` - Format number with fixed decimal places **[v1.3.12]**
 - `Number.prototype.toExponential(fractionDigits)` - Format number in exponential notation **[v1.3.13]**
 - `Number.prototype.toPrecision(precision)` - Format number with specified precision **[v1.3.14]**
@@ -155,13 +156,13 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 108+ methods implemented
-- **Latest Version**: v1.3.17
-- **Test Suite**: 253/253 tests passing (100%) ✅
+- **Total Methods**: 109+ methods implemented
+- **Latest Version**: v1.3.18
+- **Test Suite**: 254/254 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
-- **Number Methods**: 10+ (complete suite: static parseInt, formatting, conversion, valueOf!)
+- **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
 
