@@ -663,6 +663,53 @@ public:
                             std::vector<HIRValue*> args = {labelArg};
                             lastValue_ = builder_->createCall(runtimeFunc, args, "console_time_result");
                             return;
+                        } else if (propIdent->name == "assert") {
+                            // console.assert(condition, message) - prints error if condition is false
+                            std::cerr << "DEBUG HIRGen: Detected console.assert() call" << std::endl;
+
+                            if (node.arguments.size() < 2) {
+                                // Need both condition and message
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+
+                            // Evaluate the condition (first argument)
+                            node.arguments[0]->accept(*this);
+                            auto* conditionArg = lastValue_;
+
+                            // Evaluate the message (second argument)
+                            node.arguments[1]->accept(*this);
+                            auto* messageArg = lastValue_;
+
+                            // Setup function signature (condition and message)
+                            std::string runtimeFuncName = "nova_console_assert";
+                            std::vector<HIRTypePtr> paramTypes;
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // Condition
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String)); // Message
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                            // Find or create runtime function
+                            HIRFunction* runtimeFunc = nullptr;
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == runtimeFuncName) {
+                                    runtimeFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            }
+
+                            // Create call to runtime function
+                            std::vector<HIRValue*> args = {conditionArg, messageArg};
+                            lastValue_ = builder_->createCall(runtimeFunc, args, "console_assert_result");
+                            return;
                         } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {

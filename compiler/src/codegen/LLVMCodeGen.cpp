@@ -2439,6 +2439,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_console_assert") {
+                            // void @nova_console_assert(i64, ptr) - prints error if condition is false
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_assert declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),           // Returns void
+                                {llvm::Type::getInt64Ty(*context),         // Condition (i64)
+                                 llvm::PointerType::getUnqual(*context)},  // Message (string pointer)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_assert",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;

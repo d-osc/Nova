@@ -269,4 +269,16 @@ void nova_console_timeEnd_string(const char* label) {
     timers.erase(it);
 }
 
+// console.assert(condition, message) - prints error if condition is false
+void nova_console_assert(int64_t condition, const char* message) {
+    // If condition is falsy (0), print assertion error to stderr
+    if (!condition) {
+        if (message) {
+            fprintf(stderr, "Assertion failed: %s\n", message);
+        } else {
+            fprintf(stderr, "Assertion failed\n");
+        }
+    }
+}
+
 } // extern "C"
