@@ -3802,6 +3802,10 @@ public:
                         // Math.SQRT1_2 ≈ 0.707106... -> return 0 for integer (truncated)
                         lastValue_ = builder_->createIntConstant(0);
                         return;
+                    } else if (propIdent->name == "SQRT2") {
+                        // Math.SQRT2 ≈ 1.414213... -> return 1 for integer (truncated)
+                        lastValue_ = builder_->createIntConstant(1);
+                        return;
                     }
                 }
             }
