@@ -491,6 +491,73 @@ public:
             }
         }
 
+        // Check if this is a console method call (console.log, console.error, etc.)
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    if (objIdent->name == "console") {
+                        if (propIdent->name == "log" || propIdent->name == "error") {
+                            std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+
+                            // console methods can have any number of arguments
+                            // For simplicity, we'll handle the first argument
+                            if (node.arguments.size() < 1) {
+                                // No arguments - just return without error
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+
+                            // Evaluate the first argument
+                            node.arguments[0]->accept(*this);
+                            auto* arg = lastValue_;
+
+                            // Determine which runtime function to call based on method and argument type
+                            std::string runtimeFuncName;
+                            std::vector<HIRTypePtr> paramTypes;
+
+                            bool isString = arg->type && arg->type->kind == HIRType::Kind::String;
+                            if (propIdent->name == "log") {
+                                runtimeFuncName = isString ? "nova_console_log_string" : "nova_console_log_number";
+                            } else { // error
+                                runtimeFuncName = isString ? "nova_console_error_string" : "nova_console_error_number";
+                            }
+
+                            // Setup function signature based on argument type
+                            if (isString) {
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            } else {
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                            }
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                            // Find or create runtime function
+                            HIRFunction* runtimeFunc = nullptr;
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == runtimeFuncName) {
+                                    runtimeFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            }
+
+                            // Create call to runtime function
+                            std::vector<HIRValue*> args = {arg};
+                            lastValue_ = builder_->createCall(runtimeFunc, args, "console_result");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         // Check if this is a Math.abs() call
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {

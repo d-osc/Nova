@@ -129,7 +129,11 @@
 
 ## ✅ Global Functions (Working)
 - `isNaN(value)` - Tests if value is NaN after coercing to number (global) **[v1.3.19]**
-- `isFinite(value)` - Tests if value is finite after coercing to number (global) **[v1.3.20 NEW!]**
+- `isFinite(value)` - Tests if value is finite after coercing to number (global) **[v1.3.20]**
+
+## ✅ Console Methods (Working)
+- `console.log(message)` - Outputs message to stdout
+- `console.error(message)` - Outputs error message to stderr **[v1.3.21 NEW!]**
 
 ## ✅ Operators & Language Features (Working)
 - `typeof` - Type checking operator
@@ -160,9 +164,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 111+ methods implemented
-- **Latest Version**: v1.3.20
-- **Test Suite**: 256/256 tests passing (100%) ✅
+- **Total Methods**: 112+ methods implemented
+- **Latest Version**: v1.3.21
+- **Test Suite**: 257/257 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
@@ -170,4 +174,5 @@
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
 - **Global Functions**: 2+ (NaN & Finite detection with type coercion!)
+- **Console Methods**: 2+ (stdout & stderr logging!)
 

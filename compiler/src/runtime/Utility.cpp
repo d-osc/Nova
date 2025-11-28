@@ -168,3 +168,32 @@ char* read_line() {
 
 } // namespace runtime
 } // namespace nova
+
+// Extern "C" wrapper for console functions
+extern "C" {
+
+// console.log() - outputs string message to stdout
+void nova_console_log_string(const char* str) {
+    if (str) {
+        printf("%s\n", str);
+    }
+}
+
+// console.log() - outputs number to stdout
+void nova_console_log_number(int64_t value) {
+    printf("%lld\n", (long long)value);
+}
+
+// console.error() - outputs error message to stderr
+void nova_console_error_string(const char* str) {
+    if (str) {
+        fprintf(stderr, "%s\n", str);
+    }
+}
+
+// console.error() - outputs number to stderr
+void nova_console_error_number(int64_t value) {
+    fprintf(stderr, "%lld\n", (long long)value);
+}
+
+} // extern "C"

@@ -2198,6 +2198,70 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_console_log_string") {
+                            // void @nova_console_log_string(ptr) - outputs string to stdout
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_log_string declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),         // Returns void
+                                {llvm::PointerType::getUnqual(*context)}, // String pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_log_string",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_log_number") {
+                            // void @nova_console_log_number(i64) - outputs number to stdout
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_log_number declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),        // Returns void
+                                {llvm::Type::getInt64Ty(*context)},     // Number (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_log_number",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_error_string") {
+                            // void @nova_console_error_string(ptr) - outputs string to stderr
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_error_string declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),         // Returns void
+                                {llvm::PointerType::getUnqual(*context)}, // String pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_error_string",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_error_number") {
+                            // void @nova_console_error_number(i64) - outputs number to stderr
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_error_number declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),        // Returns void
+                                {llvm::Type::getInt64Ty(*context)},     // Number (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_error_number",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
