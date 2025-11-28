@@ -220,4 +220,16 @@ void nova_console_info_number(int64_t value) {
     printf("%lld\n", (long long)value);
 }
 
+// console.debug() - outputs debug message to stdout
+void nova_console_debug_string(const char* str) {
+    if (str) {
+        printf("%s\n", str);
+    }
+}
+
+// console.debug() - outputs number to stdout
+void nova_console_debug_number(int64_t value) {
+    printf("%lld\n", (long long)value);
+}
+
 } // extern "C"
