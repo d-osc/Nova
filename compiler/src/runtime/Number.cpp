@@ -223,4 +223,66 @@ double nova_number_valueOf(double num) {
     return num;
 }
 
+// Number.parseInt(string, radix) - parses a string and returns an integer
+int64_t nova_number_parseInt(const char* str, int64_t radix) {
+    if (!str) {
+        return 0;  // Return 0 for null string (NaN behavior)
+    }
+
+    // Validate radix range (JavaScript spec: 2-36, 0 or undefined uses 10)
+    if (radix != 0 && (radix < 2 || radix > 36)) {
+        return 0;  // Invalid radix returns NaN (we use 0)
+    }
+
+    // If radix is 0, default to 10
+    if (radix == 0) {
+        radix = 10;
+    }
+
+    // Skip leading whitespace
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') {
+        str++;
+    }
+
+    // Handle sign
+    bool isNegative = false;
+    if (*str == '-') {
+        isNegative = true;
+        str++;
+    } else if (*str == '+') {
+        str++;
+    }
+
+    // Parse the number
+    int64_t result = 0;
+    const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+    while (*str) {
+        // Convert character to lowercase for comparison
+        char c = *str;
+        if (c >= 'A' && c <= 'Z') {
+            c = c - 'A' + 'a';
+        }
+
+        // Find digit value
+        int digitValue = -1;
+        for (int i = 0; i < 36; i++) {
+            if (c == digits[i]) {
+                digitValue = i;
+                break;
+            }
+        }
+
+        // Stop if invalid digit for this radix
+        if (digitValue < 0 || digitValue >= radix) {
+            break;
+        }
+
+        result = result * radix + digitValue;
+        str++;
+    }
+
+    return isNegative ? -result : result;
+}
+
 } // extern "C"

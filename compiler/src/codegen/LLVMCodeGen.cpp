@@ -2133,6 +2133,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_number_parseInt") {
+                            // i64 @nova_number_parseInt(ptr, i64) - parses string to integer
+                            std::cerr << "DEBUG LLVM: Creating external nova_number_parseInt declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),          // Returns i64
+                                {llvm::PointerType::getUnqual(*context),   // String pointer
+                                 llvm::Type::getInt64Ty(*context)},        // Radix (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_number_parseInt",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
