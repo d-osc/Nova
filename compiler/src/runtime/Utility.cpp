@@ -208,4 +208,16 @@ void nova_console_warn_number(int64_t value) {
     fprintf(stderr, "%lld\n", (long long)value);
 }
 
+// console.info() - outputs info message to stdout
+void nova_console_info_string(const char* str) {
+    if (str) {
+        printf("%s\n", str);
+    }
+}
+
+// console.info() - outputs number to stdout
+void nova_console_info_number(int64_t value) {
+    printf("%lld\n", (long long)value);
+}
+
 } // extern "C"

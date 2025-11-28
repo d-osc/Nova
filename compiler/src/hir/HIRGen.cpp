@@ -496,7 +496,8 @@ public:
             if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                 if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                     if (objIdent->name == "console") {
-                        if (propIdent->name == "log" || propIdent->name == "error" || propIdent->name == "warn") {
+                        if (propIdent->name == "log" || propIdent->name == "error" ||
+                            propIdent->name == "warn" || propIdent->name == "info") {
                             std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
 
                             // console methods can have any number of arguments
@@ -520,8 +521,10 @@ public:
                                 runtimeFuncName = isString ? "nova_console_log_string" : "nova_console_log_number";
                             } else if (propIdent->name == "error") {
                                 runtimeFuncName = isString ? "nova_console_error_string" : "nova_console_error_number";
-                            } else { // warn
+                            } else if (propIdent->name == "warn") {
                                 runtimeFuncName = isString ? "nova_console_warn_string" : "nova_console_warn_number";
+                            } else { // info
+                                runtimeFuncName = isString ? "nova_console_info_string" : "nova_console_info_number";
                             }
 
                             // Setup function signature based on argument type
