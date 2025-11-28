@@ -337,4 +337,11 @@ int64_t nova_global_isFinite(double value) {
     return std::isfinite(value) ? 1 : 0;
 }
 
+// Global parseInt(string, radix) - parses string to integer (global version)
+// This is identical to Number.parseInt() in behavior
+int64_t nova_global_parseInt(const char* str, int64_t radix) {
+    // Simply call the Number.parseInt implementation
+    return nova_number_parseInt(str, radix);
+}
+
 } // extern "C"

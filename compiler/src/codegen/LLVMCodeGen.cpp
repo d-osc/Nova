@@ -2198,6 +2198,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_global_parseInt") {
+                            // i64 @nova_global_parseInt(ptr, i64) - parses string to integer
+                            std::cerr << "DEBUG LLVM: Creating external nova_global_parseInt declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),           // Returns i64
+                                {llvm::PointerType::getUnqual(*context),    // String pointer
+                                 llvm::Type::getInt64Ty(*context)},         // Radix (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_global_parseInt",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_console_log_string") {
                             // void @nova_console_log_string(ptr) - outputs string to stdout
                             std::cerr << "DEBUG LLVM: Creating external nova_console_log_string declaration" << std::endl;

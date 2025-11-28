@@ -446,6 +446,57 @@ public:
                 std::vector<HIRValue*> args = {arg};
                 lastValue_ = builder_->createCall(runtimeFunc, args, "isFinite_result");
                 return;
+            } else if (ident->name == "parseInt") {
+                // parseInt() global function - parses string to integer with optional radix
+                std::cerr << "DEBUG HIRGen: Detected global function call: parseInt()" << std::endl;
+                if (node.arguments.size() < 1) {
+                    std::cerr << "ERROR: parseInt() expects at least 1 argument" << std::endl;
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+
+                // Evaluate the string argument
+                node.arguments[0]->accept(*this);
+                auto* strArg = lastValue_;
+
+                // Evaluate the radix argument (default to 10 if not provided)
+                HIRValue* radixArg = nullptr;
+                if (node.arguments.size() >= 2) {
+                    node.arguments[1]->accept(*this);
+                    radixArg = lastValue_;
+                } else {
+                    radixArg = builder_->createIntConstant(10);
+                }
+
+                // Setup function signature
+                std::string runtimeFuncName = "nova_global_parseInt";
+                std::vector<HIRTypePtr> paramTypes;
+                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                // Find or create runtime function
+                HIRFunction* runtimeFunc = nullptr;
+                auto& functions = module_->functions;
+                for (auto& func : functions) {
+                    if (func->name == runtimeFuncName) {
+                        runtimeFunc = func.get();
+                        break;
+                    }
+                }
+
+                if (!runtimeFunc) {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    runtimeFunc = funcPtr.get();
+                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                }
+
+                // Create call to runtime function
+                std::vector<HIRValue*> args = {strArg, radixArg};
+                lastValue_ = builder_->createCall(runtimeFunc, args, "parseInt_result");
+                return;
             } else if (ident->name == "Boolean") {
                 // Boolean() constructor - converts value to boolean (0 or 1)
                 if (node.arguments.size() < 1) {
