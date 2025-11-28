@@ -5,6 +5,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <unordered_map>
+#include <string>
 
 namespace nova {
 namespace runtime {
@@ -238,6 +240,33 @@ void nova_console_clear() {
     // This works on most modern terminals (Linux, macOS, Windows 10+)
     printf("\033[2J\033[H");
     fflush(stdout);
+}
+
+// Timer storage for console.time() / console.timeEnd()
+static std::unordered_map<std::string, std::chrono::high_resolution_clock::time_point> timers;
+
+// console.time(label) - starts a timer with the given label
+void nova_console_time_string(const char* label) {
+    if (!label) label = "default";
+    timers[label] = std::chrono::high_resolution_clock::now();
+}
+
+// console.timeEnd(label) - stops the timer and prints elapsed time
+void nova_console_timeEnd_string(const char* label) {
+    if (!label) label = "default";
+
+    auto it = timers.find(label);
+    if (it == timers.end()) {
+        printf("%s: Timer does not exist\n", label);
+        return;
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - it->second);
+    printf("%s: %.3fms\n", label, duration.count() / 1.0);
+
+    // Remove the timer
+    timers.erase(it);
 }
 
 } // extern "C"

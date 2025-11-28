@@ -145,7 +145,9 @@
 - `console.warn(message)` - Outputs warning message to stderr **[v1.3.22]**
 - `console.info(message)` - Outputs informational message to stdout **[v1.3.23]**
 - `console.debug(message)` - Outputs debug message to stdout **[v1.3.24]**
-- `console.clear()` - Clears the console using ANSI escape codes **[v1.3.33 NEW!]**
+- `console.clear()` - Clears the console using ANSI escape codes **[v1.3.33]**
+- `console.time(label)` - Starts a timer with label for performance measurement **[v1.3.34 NEW!]**
+- `console.timeEnd(label)` - Stops timer and prints elapsed time in milliseconds **[v1.3.34 NEW!]**
 
 ## ✅ Operators & Language Features (Working)
 - `typeof` - Type checking operator
@@ -176,9 +178,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 124+ methods implemented
-- **Latest Version**: v1.3.33
-- **Test Suite**: 269/269 tests passing (100%) ✅
+- **Total Methods**: 126+ methods implemented
+- **Latest Version**: v1.3.34
+- **Test Suite**: 270/270 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
@@ -186,5 +188,5 @@
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
 - **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)
-- **Console Methods**: 6+ (stdout & stderr logging + console control: log, error, warn, info, debug, clear!)
+- **Console Methods**: 8+ (logging + console control + performance timing: log, error, warn, info, debug, clear, time, timeEnd!)
 
