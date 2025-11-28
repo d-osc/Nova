@@ -1914,6 +1914,98 @@ public:
                         return;
                     }
 
+                    // Check if this is Math.min()
+                    if (objIdent->name == "Math" && propIdent->name == "min") {
+                        // Math.min(a, b) - returns the smaller of two values (ES1)
+                        std::cerr << "DEBUG HIRGen: Detected Math.min() call" << std::endl;
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Math.min() expects exactly 2 arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the arguments
+                        node.arguments[0]->accept(*this);
+                        auto* aValue = lastValue_;
+                        node.arguments[1]->accept(*this);
+                        auto* bValue = lastValue_;
+
+                        // Create call to nova_math_min runtime function
+                        std::string runtimeFuncName = "nova_math_min";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {aValue, bValue};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "min_result");
+                        return;
+                    }
+
+                    // Check if this is Math.max()
+                    if (objIdent->name == "Math" && propIdent->name == "max") {
+                        // Math.max(a, b) - returns the larger of two values (ES1)
+                        std::cerr << "DEBUG HIRGen: Detected Math.max() call" << std::endl;
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Math.max() expects exactly 2 arguments" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        // Evaluate the arguments
+                        node.arguments[0]->accept(*this);
+                        auto* aValue = lastValue_;
+                        node.arguments[1]->accept(*this);
+                        auto* bValue = lastValue_;
+
+                        // Create call to nova_math_max runtime function
+                        std::string runtimeFuncName = "nova_math_max";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {aValue, bValue};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "max_result");
+                        return;
+                    }
+
                     // Check if this is Math.sinh()
                     if (objIdent->name == "Math" && propIdent->name == "sinh") {
                         // Math.sinh() - hyperbolic sine function

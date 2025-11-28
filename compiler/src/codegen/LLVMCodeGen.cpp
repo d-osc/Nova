@@ -2115,6 +2115,40 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_math_min") {
+                            // i64 @nova_math_min(i64, i64) - returns the smaller of two values (ES1)
+                            std::cerr << "DEBUG LLVM: Creating external nova_math_min declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),          // Returns i64
+                                {llvm::Type::getInt64Ty(*context),         // First value (a)
+                                 llvm::Type::getInt64Ty(*context)},        // Second value (b)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_math_min",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_math_max") {
+                            // i64 @nova_math_max(i64, i64) - returns the larger of two values (ES1)
+                            std::cerr << "DEBUG LLVM: Creating external nova_math_max declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),          // Returns i64
+                                {llvm::Type::getInt64Ty(*context),         // First value (a)
+                                 llvm::Type::getInt64Ty(*context)},        // Second value (b)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_math_max",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_number_toFixed") {
                             // ptr @nova_number_toFixed(double, i64) - formats number with fixed decimal places
                             std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;

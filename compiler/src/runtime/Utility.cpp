@@ -438,4 +438,14 @@ double nova_performance_now() {
     return static_cast<double>(micros.count()) / 1000.0;
 }
 
+// Math.min(a, b) - returns the smaller of two values (ES1)
+int64_t nova_math_min(int64_t a, int64_t b) {
+    return a < b ? a : b;
+}
+
+// Math.max(a, b) - returns the larger of two values (ES1)
+int64_t nova_math_max(int64_t a, int64_t b) {
+    return a > b ? a : b;
+}
+
 } // extern "C"

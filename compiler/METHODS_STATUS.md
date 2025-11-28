@@ -108,7 +108,9 @@
 - `Math.LOG2E` - Base 2 logarithm of E constant ≈ 1.443 **[v1.3.29]**
 - `Math.LOG10E` - Base 10 logarithm of E constant ≈ 0.434 **[v1.3.30]**
 - `Math.SQRT1_2` - Square root of 1/2 constant ≈ 0.707 **[v1.3.31]**
-- `Math.SQRT2` - Square root of 2 constant ≈ 1.414 **[v1.3.32 NEW!]**
+- `Math.SQRT2` - Square root of 2 constant ≈ 1.414 **[v1.3.32]**
+- `Math.min(a, b)` - Returns the smaller of two values (ES1) **[v1.3.45]**
+- `Math.max(a, b)` - Returns the larger of two values (ES1) **[v1.3.45 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -194,13 +196,13 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 138+ methods implemented
-- **Latest Version**: v1.3.44
-- **Test Suite**: 280/280 tests passing (100%) ✅
+- **Total Methods**: 140+ methods implemented
+- **Latest Version**: v1.3.45
+- **Test Suite**: 282/282 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
-- **Math Methods/Constants**: 39+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + ALL standard constants!)
+- **Math Methods/Constants**: 41+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + ALL standard constants + min/max!)
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 10+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability + equality!)
 - **Date Methods**: 1+ (timestamp support!)
