@@ -219,7 +219,7 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 153+ methods/features implemented
+- **Total Methods**: 160+ methods/features implemented
 - **Latest Version**: v1.3.60
 - **Test Suite**: 298/298 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
