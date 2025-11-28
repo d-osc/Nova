@@ -3437,6 +3437,44 @@ public:
                         lastValue_ = builder_->createCall(runtimeFunc, args, "date_now_result");
                         return;
                     }
+
+                    if (objIdent->name == "performance" && propIdent->name == "now") {
+                        // performance.now() - returns high-resolution timestamp in milliseconds (Web Performance API)
+                        std::cerr << "DEBUG HIRGen: Detected static method call: performance.now" << std::endl;
+                        if (node.arguments.size() != 0) {
+                            std::cerr << "ERROR: performance.now() expects no arguments" << std::endl;
+                            return;
+                        }
+
+                        // Setup function signature (no parameters)
+                        std::string runtimeFuncName = "nova_performance_now";
+                        std::vector<HIRTypePtr> paramTypes; // empty - no params
+
+                        // Return type is F64 (high-resolution time in milliseconds)
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {}; // no arguments
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "performance_now_result");
+                        return;
+                    }
                 }
             }
         }

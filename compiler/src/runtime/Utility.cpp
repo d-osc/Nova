@@ -425,4 +425,17 @@ int64_t nova_date_now() {
     return static_cast<int64_t>(millis.count());
 }
 
+// Static variable to store the start time for performance.now()
+static auto performance_start_time = std::chrono::high_resolution_clock::now();
+
+// performance.now() - returns high-resolution timestamp in milliseconds (Web Performance API)
+// Returns time since process/page start with sub-millisecond precision
+double nova_performance_now() {
+    auto now = std::chrono::high_resolution_clock::now();
+    auto duration = now - performance_start_time;
+    auto micros = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+    // Return milliseconds with microsecond precision
+    return static_cast<double>(micros.count()) / 1000.0;
+}
+
 } // extern "C"

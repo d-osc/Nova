@@ -2099,6 +2099,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_performance_now") {
+                            // double @nova_performance_now() - returns high-resolution timestamp (Web Performance API)
+                            std::cerr << "DEBUG LLVM: Creating external nova_performance_now declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),        // Returns double (high-res milliseconds)
+                                {},                                        // No parameters
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_performance_now",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_number_toFixed") {
                             // ptr @nova_number_toFixed(double, i64) - formats number with fixed decimal places
                             std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;
