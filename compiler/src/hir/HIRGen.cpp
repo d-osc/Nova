@@ -3527,6 +3527,14 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    } else if (methodName == "match") {
+                        // str.match(substring)
+                        // Simplified implementation: returns count of matches
+                        std::cerr << "DEBUG HIRGen: Detected string method call: match" << std::endl;
+                        runtimeFuncName = "nova_string_match";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown string method: " << methodName << std::endl;
                         lastValue_ = nullptr;

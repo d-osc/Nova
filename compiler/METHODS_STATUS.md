@@ -26,6 +26,7 @@
 - `String.prototype.padStart(length, fillString)` - Pad at start
 - `String.prototype.padEnd(length, fillString)` - Pad at end
 - `String.prototype.split(delimiter)` - Split into array **[v0.74.0]**
+- `String.prototype.match(substring)` - Count substring occurrences (simplified) **[v1.3.41 NEW!]**
 - `String.prototype.length` - String length property
 
 ## ✅ Array Methods (Working)
@@ -186,11 +187,11 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 134+ methods implemented
-- **Latest Version**: v1.3.40
-- **Test Suite**: 276/276 tests passing (100%) ✅
+- **Total Methods**: 135+ methods implemented
+- **Latest Version**: v1.3.41
+- **Test Suite**: 277/277 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
+- **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods/Constants**: 39+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + ALL standard constants!)
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)

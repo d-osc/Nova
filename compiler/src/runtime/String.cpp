@@ -770,4 +770,24 @@ void* nova_string_split(const char* str, const char* delimiter) {
     return array;
 }
 
+// String.prototype.match(substring) - counts occurrences of substring
+// Simplified implementation: returns count of matches (not array of matches)
+int64_t nova_string_match(const char* str, const char* search) {
+    if (!str || !search) return 0;
+
+    size_t search_len = std::strlen(search);
+    if (search_len == 0) return 0;
+
+    int64_t count = 0;
+    const char* pos = str;
+
+    // Count all occurrences
+    while ((pos = std::strstr(pos, search)) != nullptr) {
+        count++;
+        pos += search_len;  // Move past this match
+    }
+
+    return count;
+}
+
 }
