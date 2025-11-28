@@ -303,4 +303,33 @@ void nova_console_countReset_string(const char* label) {
     counters[label] = 0;
 }
 
+// console.table(data) - displays array data in tabular format
+void nova_console_table_array(void* array_ptr) {
+    // Cast to ValueArray (arrays in Nova are ValueArray for primitives)
+    auto* array = reinterpret_cast<nova::runtime::ValueArray*>(array_ptr);
+
+    if (!array || array->length == 0) {
+        printf("(empty)\n");
+        return;
+    }
+
+    // Print table header
+    printf("┌─────────┬─────────────────────┐\n");
+    printf("│ (index) │       Values        │\n");
+    printf("├─────────┼─────────────────────┤\n");
+
+    // Print each row
+    for (int64_t i = 0; i < array->length; i++) {
+        printf("│   %3lld   │ ", (long long)i);
+
+        // Display value (ValueArray stores int64 values)
+        printf("%19lld", (long long)array->elements[i]);
+
+        printf(" │\n");
+    }
+
+    // Print table footer
+    printf("└─────────┴─────────────────────┘\n");
+}
+
 } // extern "C"
