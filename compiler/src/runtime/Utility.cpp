@@ -196,4 +196,16 @@ void nova_console_error_number(int64_t value) {
     fprintf(stderr, "%lld\n", (long long)value);
 }
 
+// console.warn() - outputs warning message to stderr
+void nova_console_warn_string(const char* str) {
+    if (str) {
+        fprintf(stderr, "%s\n", str);
+    }
+}
+
+// console.warn() - outputs number to stderr
+void nova_console_warn_number(int64_t value) {
+    fprintf(stderr, "%lld\n", (long long)value);
+}
+
 } // extern "C"
