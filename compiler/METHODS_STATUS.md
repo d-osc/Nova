@@ -120,7 +120,13 @@
 - `Number.parseInt(string, radix)` - Parse string and return integer (static, ES5) **[v1.3.17]**
 - `Number.parseFloat(string)` - Parse string and return floating-point number (static, ES5) **[v1.3.18]**
 - `Number.MAX_SAFE_INTEGER` - Maximum safe integer (2^53-1) (constant, ES2015) **[v1.3.55]**
-- `Number.MIN_SAFE_INTEGER` - Minimum safe integer (-(2^53-1)) (constant, ES2015) **[v1.3.55 NEW!]**
+- `Number.MIN_SAFE_INTEGER` - Minimum safe integer (-(2^53-1)) (constant, ES2015) **[v1.3.55]**
+- `Number.MAX_VALUE` - Largest representable number (1.7976931348623157e+308) (constant) **[v1.3.59]**
+- `Number.MIN_VALUE` - Smallest positive number (5e-324) (constant) **[v1.3.59]**
+- `Number.EPSILON` - Difference between 1 and smallest float > 1 (2^-52) (constant, ES2015) **[v1.3.59]**
+- `Number.POSITIVE_INFINITY` - Positive infinity (constant) **[v1.3.59]**
+- `Number.NEGATIVE_INFINITY` - Negative infinity (constant) **[v1.3.59]**
+- `Number.NaN` - Not-a-Number value (constant) **[v1.3.59 NEW!]**
 - `Number.prototype.toFixed(digits)` - Format number with fixed decimal places **[v1.3.12]**
 - `Number.prototype.toExponential(fractionDigits)` - Format number in exponential notation **[v1.3.13]**
 - `Number.prototype.toPrecision(precision)` - Format number with specified precision **[v1.3.14]**

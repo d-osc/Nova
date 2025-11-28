@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <variant>
 #include <functional>
+#include <limits>
 
 namespace nova::hir {
 
@@ -4744,6 +4745,30 @@ public:
                     } else if (propIdent->name == "MIN_SAFE_INTEGER") {
                         // Number.MIN_SAFE_INTEGER = -(2^53 - 1) = -9007199254740991
                         lastValue_ = builder_->createIntConstant(-9007199254740991LL);
+                        return;
+                    } else if (propIdent->name == "MAX_VALUE") {
+                        // Number.MAX_VALUE = 1.7976931348623157e+308 (largest representable number)
+                        lastValue_ = builder_->createFloatConstant(1.7976931348623157e+308);
+                        return;
+                    } else if (propIdent->name == "MIN_VALUE") {
+                        // Number.MIN_VALUE = 5e-324 (smallest positive number)
+                        lastValue_ = builder_->createFloatConstant(5e-324);
+                        return;
+                    } else if (propIdent->name == "EPSILON") {
+                        // Number.EPSILON = 2^-52 = 2.220446049250313e-16
+                        lastValue_ = builder_->createFloatConstant(2.220446049250313e-16);
+                        return;
+                    } else if (propIdent->name == "POSITIVE_INFINITY") {
+                        // Number.POSITIVE_INFINITY = Infinity
+                        lastValue_ = builder_->createFloatConstant(std::numeric_limits<double>::infinity());
+                        return;
+                    } else if (propIdent->name == "NEGATIVE_INFINITY") {
+                        // Number.NEGATIVE_INFINITY = -Infinity
+                        lastValue_ = builder_->createFloatConstant(-std::numeric_limits<double>::infinity());
+                        return;
+                    } else if (propIdent->name == "NaN") {
+                        // Number.NaN = NaN
+                        lastValue_ = builder_->createFloatConstant(std::numeric_limits<double>::quiet_NaN());
                         return;
                     }
                 }
