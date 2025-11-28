@@ -118,7 +118,9 @@
 - `Number.isInteger(value)` - Check if integer
 - `Number.isSafeInteger(value)` - Check if safe integer
 - `Number.parseInt(string, radix)` - Parse string and return integer (static, ES5) **[v1.3.17]**
-- `Number.parseFloat(string)` - Parse string and return floating-point number (static, ES5) **[v1.3.18 NEW!]**
+- `Number.parseFloat(string)` - Parse string and return floating-point number (static, ES5) **[v1.3.18]**
+- `Number.MAX_SAFE_INTEGER` - Maximum safe integer (2^53-1) (constant, ES2015) **[v1.3.55]**
+- `Number.MIN_SAFE_INTEGER` - Minimum safe integer (-(2^53-1)) (constant, ES2015) **[v1.3.55 NEW!]**
 - `Number.prototype.toFixed(digits)` - Format number with fixed decimal places **[v1.3.12]**
 - `Number.prototype.toExponential(fractionDigits)` - Format number in exponential notation **[v1.3.13]**
 - `Number.prototype.toPrecision(precision)` - Format number with specified precision **[v1.3.14]**
@@ -207,14 +209,14 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 149+ methods implemented
-- **Latest Version**: v1.3.54
-- **Test Suite**: 289/289 tests passing (100%) ✅
+- **Total Methods**: 151+ methods implemented
+- **Latest Version**: v1.3.55
+- **Test Suite**: 290/290 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods/Constants**: 41+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + ALL standard constants + min/max!)
-- **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
+- **Number Methods**: 13+ (complete suite: constants, static methods, formatting, conversion, valueOf!)
 - **Object Methods**: 10+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability + equality!)
 - **Date Methods**: 1+ (timestamp support!)
 - **JSON Methods**: 3+ (stringify for numbers, strings, and booleans!)

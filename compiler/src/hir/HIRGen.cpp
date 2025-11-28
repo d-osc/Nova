@@ -4735,6 +4735,17 @@ public:
                         lastValue_ = builder_->createIntConstant(1);
                         return;
                     }
+                } else if (objIdent->name == "Number") {
+                    // Number constants (ES2015)
+                    if (propIdent->name == "MAX_SAFE_INTEGER") {
+                        // Number.MAX_SAFE_INTEGER = 2^53 - 1 = 9007199254740991
+                        lastValue_ = builder_->createIntConstant(9007199254740991LL);
+                        return;
+                    } else if (propIdent->name == "MIN_SAFE_INTEGER") {
+                        // Number.MIN_SAFE_INTEGER = -(2^53 - 1) = -9007199254740991
+                        lastValue_ = builder_->createIntConstant(-9007199254740991LL);
+                        return;
+                    }
                 }
             }
         }
