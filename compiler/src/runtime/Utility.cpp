@@ -744,4 +744,37 @@ char* nova_encodeURI(const char* str) {
     return result;
 }
 
+// decodeURI() - decodes a full URI (ES3)
+// Note: The decoding logic is the same as decodeURIComponent - both decode %XX sequences
+char* nova_decodeURI(const char* str) {
+    if (!str) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    size_t len = strlen(str);
+    // Output will be at most the same length as input (decoding shrinks)
+    char* result = (char*)malloc(len + 1);
+    char* ptr = result;
+
+    for (size_t i = 0; i < len; i++) {
+        if (str[i] == '%' && i + 2 < len) {
+            int high = hexCharToValue(str[i + 1]);
+            int low = hexCharToValue(str[i + 2]);
+            if (high >= 0 && low >= 0) {
+                *ptr++ = (char)((high << 4) | low);
+                i += 2;  // Skip the two hex digits
+            } else {
+                *ptr++ = str[i];  // Invalid hex, copy as-is
+            }
+        } else {
+            *ptr++ = str[i];
+        }
+    }
+    *ptr = '\0';
+
+    return result;
+}
+
 } // extern "C"

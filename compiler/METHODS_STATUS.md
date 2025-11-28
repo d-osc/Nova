@@ -157,7 +157,8 @@
 - `decodeURIComponent(string)` - Decodes a percent-encoded URI component (global, ES3) **[v1.3.50]**
 - `btoa(string)` - Encodes a string to base64 (global, Web API) **[v1.3.51]**
 - `atob(string)` - Decodes a base64 encoded string (global, Web API) **[v1.3.52]**
-- `encodeURI(string)` - Encodes a full URI, preserving URI-valid characters (global, ES3) **[v1.3.53 NEW!]**
+- `encodeURI(string)` - Encodes a full URI, preserving URI-valid characters (global, ES3) **[v1.3.53]**
+- `decodeURI(string)` - Decodes a full URI (global, ES3) **[v1.3.54 NEW!]**
 
 ## ✅ Console Methods (Working)
 - `console.log(message)` - Outputs message to stdout
@@ -206,9 +207,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 148+ methods implemented
-- **Latest Version**: v1.3.53
-- **Test Suite**: 288/288 tests passing (100%) ✅
+- **Total Methods**: 149+ methods implemented
+- **Latest Version**: v1.3.54
+- **Test Suite**: 289/289 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
@@ -218,6 +219,6 @@
 - **Date Methods**: 1+ (timestamp support!)
 - **JSON Methods**: 3+ (stringify for numbers, strings, and booleans!)
 - **Performance Methods**: 1+ (high-resolution timing!)
-- **Global Functions**: 9+ (NaN & Finite detection, parseInt & parseFloat parsing, URI encoding & decoding, base64 encode & decode!)
+- **Global Functions**: 10+ (NaN & Finite detection, parseInt & parseFloat parsing, full URI encode/decode, component encode/decode, base64!)
 - **Console Methods**: 16+ (logging + console control + performance timing + assertions + counters + tables + grouping + tracing + inspection: log, error, warn, info, debug, clear, time, timeEnd, assert, count, countReset, table, group, groupEnd, trace, dir!)
 
