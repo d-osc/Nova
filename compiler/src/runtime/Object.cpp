@@ -330,4 +330,17 @@ int64_t nova_object_isSealed(void* obj_ptr) {
     return 0;
 }
 
+// Object.is(value1, value2) - determines if two values are the same (ES2015)
+// Returns 1 (true) if values are the same, 0 (false) otherwise
+// Note: For number values, this is equivalent to strict equality (===)
+// Full JavaScript implementation would also handle NaN === NaN (true) and +0 !== -0
+int64_t nova_object_is(int64_t value1, int64_t value2) {
+    // Simple equality comparison for numeric values
+    // In JavaScript, Object.is differs from === in two cases:
+    // 1. Object.is(NaN, NaN) returns true (=== returns false)
+    // 2. Object.is(+0, -0) returns false (=== returns true)
+    // For integer values, simple equality works correctly
+    return value1 == value2 ? 1 : 0;
+}
+
 } // extern "C"

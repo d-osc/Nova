@@ -2066,6 +2066,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_object_is") {
+                            // i64 @nova_object_is(i64, i64) - determines if two values are the same (ES2015)
+                            std::cerr << "DEBUG LLVM: Creating external nova_object_is declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),        // Returns boolean (i64)
+                                {llvm::Type::getInt64Ty(*context),       // value1 (i64)
+                                 llvm::Type::getInt64Ty(*context)},      // value2 (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_object_is",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_number_toFixed") {
                             // ptr @nova_number_toFixed(double, i64) - formats number with fixed decimal places
                             std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;

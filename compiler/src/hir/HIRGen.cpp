@@ -3353,6 +3353,52 @@ public:
                         lastValue_ = builder_->createCall(runtimeFunc, args, "object_isSealed_result");
                         return;
                     }
+
+                    if (objIdent->name == "Object" && propIdent->name == "is") {
+                        // Object.is(value1, value2) - determines if two values are the same (ES2015)
+                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.is" << std::endl;
+                        if (node.arguments.size() != 2) {
+                            std::cerr << "ERROR: Object.is() expects exactly 2 arguments" << std::endl;
+                            return;
+                        }
+
+                        // Evaluate arguments
+                        node.arguments[0]->accept(*this);
+                        auto* value1 = lastValue_;
+                        node.arguments[1]->accept(*this);
+                        auto* value2 = lastValue_;
+
+                        // Setup function signature
+                        std::string runtimeFuncName = "nova_object_is";
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // value1
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // value2
+
+                        // Return type is boolean (i64)
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args = {value1, value2};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "object_is_result");
+                        return;
+                    }
                 }
             }
         }

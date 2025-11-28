@@ -438,8 +438,15 @@ std::unique_ptr<Expr> Parser::parsePostfixExpression() {
     while (true) {
         // Member access: obj.prop
         if (match(TokenType::Dot)) {
-            Token prop = consume(TokenType::Identifier, "Expected property name");
-            
+            // Allow identifiers and keywords as property names (JavaScript behavior)
+            Token prop;
+            if (check(TokenType::Identifier) || peek().isKeyword()) {
+                prop = advance();
+            } else {
+                reportError("Expected property name");
+                prop = Token(TokenType::Invalid, "", getCurrentLocation());
+            }
+
             auto propExpr = std::make_unique<Identifier>(prop.value);
             propExpr->location = prop.location;
             
