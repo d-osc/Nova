@@ -385,4 +385,36 @@ void nova_console_trace_default() {
     // In a full implementation, this would print the call stack
 }
 
+// console.dir(value) - displays value properties in readable format
+// For numbers
+void nova_console_dir_number(int64_t value) {
+    printf("Number: %lld\n", (long long)value);
+}
+
+// For strings
+void nova_console_dir_string(const char* str) {
+    if (str) {
+        printf("String: \"%s\" (length: %zu)\n", str, strlen(str));
+    } else {
+        printf("String: null\n");
+    }
+}
+
+// For arrays
+void nova_console_dir_array(void* array_ptr) {
+    auto* array = reinterpret_cast<nova::runtime::ValueArray*>(array_ptr);
+
+    if (!array) {
+        printf("Array: null\n");
+        return;
+    }
+
+    printf("Array: [");
+    for (int64_t i = 0; i < array->length; i++) {
+        if (i > 0) printf(", ");
+        printf("%lld", (long long)array->elements[i]);
+    }
+    printf("] (length: %lld)\n", (long long)array->length);
+}
+
 } // extern "C"

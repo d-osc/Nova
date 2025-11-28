@@ -931,6 +931,64 @@ public:
                                 lastValue_ = builder_->createCall(runtimeFunc, args, "console_trace_result");
                                 return;
                             }
+                        } else if (propIdent->name == "dir") {
+                            // console.dir(value) - displays value properties
+                            std::cerr << "DEBUG HIRGen: Detected console.dir() call" << std::endl;
+
+                            if (node.arguments.size() < 1) {
+                                // No argument - just return
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+
+                            // Evaluate the argument
+                            node.arguments[0]->accept(*this);
+                            auto* arg = lastValue_;
+
+                            // Determine runtime function based on argument type
+                            std::string runtimeFuncName;
+                            std::vector<HIRTypePtr> paramTypes;
+
+                            bool isString = arg->type && arg->type->kind == HIRType::Kind::String;
+                            bool isPointer = arg->type && arg->type->kind == HIRType::Kind::Pointer;
+
+                            if (isString) {
+                                runtimeFuncName = "nova_console_dir_string";
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            } else if (isPointer) {
+                                // Pointer type (could be array, object, etc.)
+                                runtimeFuncName = "nova_console_dir_array";
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer));
+                            } else {
+                                // Number or other primitive type
+                                runtimeFuncName = "nova_console_dir_number";
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                            }
+
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                            // Find or create runtime function
+                            HIRFunction* runtimeFunc = nullptr;
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == runtimeFuncName) {
+                                    runtimeFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            }
+
+                            // Create call to runtime function
+                            std::vector<HIRValue*> args = {arg};
+                            lastValue_ = builder_->createCall(runtimeFunc, args, "console_dir_result");
+                            return;
                         } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {
