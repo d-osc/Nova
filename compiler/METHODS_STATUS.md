@@ -153,6 +153,7 @@
 - `isFinite(value)` - Tests if value is finite after coercing to number (global) **[v1.3.20]**
 - `parseInt(string, radix)` - Parses string to integer with optional radix (global, ES1) **[v1.3.25]**
 - `parseFloat(string)` - Parses string to floating-point number (global, ES1) **[v1.3.26]**
+- `encodeURIComponent(string)` - Encodes a URI component with percent-encoding (global, ES3) **[v1.3.49 NEW!]**
 
 ## ✅ Console Methods (Working)
 - `console.log(message)` - Outputs message to stdout
@@ -201,9 +202,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 143+ methods implemented
-- **Latest Version**: v1.3.48
-- **Test Suite**: 283/283 tests passing (100%) ✅
+- **Total Methods**: 144+ methods implemented
+- **Latest Version**: v1.3.49
+- **Test Suite**: 284/284 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
@@ -213,6 +214,6 @@
 - **Date Methods**: 1+ (timestamp support!)
 - **JSON Methods**: 3+ (stringify for numbers, strings, and booleans!)
 - **Performance Methods**: 1+ (high-resolution timing!)
-- **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)
+- **Global Functions**: 5+ (NaN & Finite detection, parseInt & parseFloat parsing, URI encoding!)
 - **Console Methods**: 16+ (logging + console control + performance timing + assertions + counters + tables + grouping + tracing + inspection: log, error, warn, info, debug, clear, time, timeEnd, assert, count, countReset, table, group, groupEnd, trace, dir!)
 

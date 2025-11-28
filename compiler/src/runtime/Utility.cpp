@@ -496,4 +496,53 @@ char* nova_json_stringify_bool(int64_t value) {
     }
 }
 
+// encodeURIComponent() - encodes a URI component (ES3)
+// Encodes all characters except: A-Z a-z 0-9 - _ . ! ~ * ' ( )
+char* nova_encodeURIComponent(const char* str) {
+    if (!str) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    // First pass: calculate result length
+    size_t len = strlen(str);
+    size_t resultLen = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)str[i];
+        // Characters that don't need encoding
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '!' ||
+            c == '~' || c == '*' || c == '\'' || c == '(' || c == ')') {
+            resultLen += 1;
+        } else {
+            resultLen += 3;  // %XX format
+        }
+    }
+
+    // Allocate result buffer
+    char* result = (char*)malloc(resultLen + 1);
+    char* ptr = result;
+
+    // Second pass: encode
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)str[i];
+        // Characters that don't need encoding
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '!' ||
+            c == '~' || c == '*' || c == '\'' || c == '(' || c == ')') {
+            *ptr++ = c;
+        } else {
+            // Encode as %XX
+            sprintf(ptr, "%%%02X", c);
+            ptr += 3;
+        }
+    }
+    *ptr = '\0';
+
+    return result;
+}
+
 } // extern "C"
