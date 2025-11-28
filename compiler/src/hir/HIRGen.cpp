@@ -588,7 +588,37 @@ public:
             if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                 if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                     if (objIdent->name == "console") {
-                        if (propIdent->name == "log" || propIdent->name == "error" ||
+                        if (propIdent->name == "clear") {
+                            // console.clear() - clears the console (no arguments)
+                            std::cerr << "DEBUG HIRGen: Detected console.clear() call" << std::endl;
+
+                            std::string runtimeFuncName = "nova_console_clear";
+                            std::vector<HIRTypePtr> paramTypes; // No parameters
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                            // Find or create runtime function
+                            HIRFunction* runtimeFunc = nullptr;
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == runtimeFuncName) {
+                                    runtimeFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            }
+
+                            // Create call to runtime function (no arguments)
+                            std::vector<HIRValue*> args;
+                            lastValue_ = builder_->createCall(runtimeFunc, args, "console_clear_result");
+                            return;
+                        } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {
                             std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;

@@ -232,4 +232,12 @@ void nova_console_debug_number(int64_t value) {
     printf("%lld\n", (long long)value);
 }
 
+// console.clear() - clears the console
+void nova_console_clear() {
+    // Use ANSI escape code to clear screen and reset cursor
+    // This works on most modern terminals (Linux, macOS, Windows 10+)
+    printf("\033[2J\033[H");
+    fflush(stdout);
+}
+
 } // extern "C"

@@ -137,14 +137,15 @@
 - `isNaN(value)` - Tests if value is NaN after coercing to number (global) **[v1.3.19]**
 - `isFinite(value)` - Tests if value is finite after coercing to number (global) **[v1.3.20]**
 - `parseInt(string, radix)` - Parses string to integer with optional radix (global, ES1) **[v1.3.25]**
-- `parseFloat(string)` - Parses string to floating-point number (global, ES1) **[v1.3.26 NEW!]**
+- `parseFloat(string)` - Parses string to floating-point number (global, ES1) **[v1.3.26]**
 
 ## ✅ Console Methods (Working)
 - `console.log(message)` - Outputs message to stdout
 - `console.error(message)` - Outputs error message to stderr **[v1.3.21]**
 - `console.warn(message)` - Outputs warning message to stderr **[v1.3.22]**
 - `console.info(message)` - Outputs informational message to stdout **[v1.3.23]**
-- `console.debug(message)` - Outputs debug message to stdout **[v1.3.24 NEW!]**
+- `console.debug(message)` - Outputs debug message to stdout **[v1.3.24]**
+- `console.clear()` - Clears the console using ANSI escape codes **[v1.3.33 NEW!]**
 
 ## ✅ Operators & Language Features (Working)
 - `typeof` - Type checking operator
@@ -175,9 +176,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 123+ methods implemented
-- **Latest Version**: v1.3.32
-- **Test Suite**: 268/268 tests passing (100%) ✅
+- **Total Methods**: 124+ methods implemented
+- **Latest Version**: v1.3.33
+- **Test Suite**: 269/269 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
@@ -185,5 +186,5 @@
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
 - **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)
-- **Console Methods**: 5+ (stdout & stderr logging: log, error, warn, info, debug!)
+- **Console Methods**: 6+ (stdout & stderr logging + console control: log, error, warn, info, debug, clear!)
 
