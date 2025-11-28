@@ -710,6 +710,51 @@ public:
                             std::vector<HIRValue*> args = {conditionArg, messageArg};
                             lastValue_ = builder_->createCall(runtimeFunc, args, "console_assert_result");
                             return;
+                        } else if (propIdent->name == "count" || propIdent->name == "countReset") {
+                            // console.count(label) / console.countReset(label) - counting operations
+                            std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+
+                            if (node.arguments.size() < 1) {
+                                // No label provided - use default
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+
+                            // Evaluate the label argument
+                            node.arguments[0]->accept(*this);
+                            auto* labelArg = lastValue_;
+
+                            // Determine runtime function name
+                            std::string runtimeFuncName = (propIdent->name == "count") ?
+                                "nova_console_count_string" : "nova_console_countReset_string";
+
+                            // Setup function signature (string parameter)
+                            std::vector<HIRTypePtr> paramTypes;
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                            // Find or create runtime function
+                            HIRFunction* runtimeFunc = nullptr;
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == runtimeFuncName) {
+                                    runtimeFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            }
+
+                            // Create call to runtime function
+                            std::vector<HIRValue*> args = {labelArg};
+                            lastValue_ = builder_->createCall(runtimeFunc, args, "console_count_result");
+                            return;
                         } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {

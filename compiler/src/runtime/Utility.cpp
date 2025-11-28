@@ -281,4 +281,26 @@ void nova_console_assert(int64_t condition, const char* message) {
     }
 }
 
+// Counter storage for console.count() / console.countReset()
+static std::unordered_map<std::string, int64_t> counters;
+
+// console.count(label) - increments and prints counter for label
+void nova_console_count_string(const char* label) {
+    if (!label) label = "default";
+
+    // Increment counter
+    counters[label]++;
+
+    // Print label and count
+    printf("%s: %lld\n", label, (long long)counters[label]);
+}
+
+// console.countReset(label) - resets counter to zero
+void nova_console_countReset_string(const char* label) {
+    if (!label) label = "default";
+
+    // Reset counter to 0
+    counters[label] = 0;
+}
+
 } // extern "C"
