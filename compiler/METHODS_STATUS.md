@@ -190,6 +190,7 @@
 - Template literals
 - Arrow functions (basic support)
 - Classes (basic support)
+- `enum` - Enum declarations with auto-increment and explicit values **[v1.3.56 NEW!]**
 - `console.log()` - Console output
 
 ## ⚠️ Known Limitations
@@ -209,9 +210,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 151+ methods implemented
-- **Latest Version**: v1.3.55
-- **Test Suite**: 290/290 tests passing (100%) ✅
+- **Total Methods**: 152+ methods/features implemented
+- **Latest Version**: v1.3.56
+- **Test Suite**: 292/292 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)

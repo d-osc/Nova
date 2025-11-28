@@ -4747,6 +4747,17 @@ public:
                         return;
                     }
                 }
+
+                // Check for enum access (e.g., Color.Red)
+                auto enumIt = enumTable_.find(objIdent->name);
+                if (enumIt != enumTable_.end()) {
+                    auto memberIt = enumIt->second.find(propIdent->name);
+                    if (memberIt != enumIt->second.end()) {
+                        std::cerr << "DEBUG HIRGen: Enum access " << objIdent->name << "." << propIdent->name << " = " << memberIt->second << std::endl;
+                        lastValue_ = builder_->createIntConstant(memberIt->second);
+                        return;
+                    }
+                }
             }
         }
 
@@ -6511,8 +6522,34 @@ public:
     }
     
     void visit(EnumDecl& node) override {
-        (void)node;
-        // Enum declaration
+        // Enum declaration - store enum values in enumTable_
+        std::cerr << "DEBUG HIRGen: Processing enum declaration: " << node.name << " with " << node.members.size() << " members" << std::endl;
+
+        std::unordered_map<std::string, int64_t> members;
+        int64_t nextValue = 0;
+
+        for (const auto& member : node.members) {
+            int64_t value = nextValue;
+
+            // If member has explicit initializer, evaluate it
+            if (member.initializer) {
+                std::cerr << "DEBUG HIRGen: Member " << member.name << " has initializer" << std::endl;
+                // For now, only support numeric literals as initializers
+                if (auto* numLit = dynamic_cast<NumberLiteral*>(member.initializer.get())) {
+                    value = static_cast<int64_t>(numLit->value);
+                    std::cerr << "DEBUG HIRGen: NumberLiteral value = " << value << std::endl;
+                } else {
+                    std::cerr << "DEBUG HIRGen: Initializer is NOT a NumberLiteral" << std::endl;
+                }
+            }
+
+            members[member.name] = value;
+            nextValue = value + 1;  // Next auto-value continues from here
+
+            std::cerr << "DEBUG HIRGen: Enum member " << node.name << "." << member.name << " = " << value << std::endl;
+        }
+
+        enumTable_[node.name] = members;
     }
     
     void visit(ImportDecl& node) override {
@@ -6542,6 +6579,7 @@ private:
     std::unordered_map<std::string, std::string> functionReferences_;  // Maps variable names to function names
     std::string lastFunctionName_;  // Tracks the last created arrow function name
     std::unordered_map<std::string, const std::vector<ExprPtr>*> functionDefaultValues_;  // Maps function names to default values
+    std::unordered_map<std::string, std::unordered_map<std::string, int64_t>> enumTable_;  // Maps enum name -> member name -> value
 };
 
 // Public API to generate HIR from AST

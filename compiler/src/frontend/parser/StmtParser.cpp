@@ -664,9 +664,9 @@ std::unique_ptr<Stmt> Parser::parseEnumDeclaration() {
         Token memberName = consume(TokenType::Identifier, "Expected enum member name");
         member.name = memberName.value;
         
-        // Initializer
+        // Initializer - use parseAssignmentExpression to not consume comma
         if (match(TokenType::Equal)) {
-            member.initializer = parseExpression();
+            member.initializer = parseAssignmentExpression();
         }
         
         enumDecl->members.push_back(std::move(member));
