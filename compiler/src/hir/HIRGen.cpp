@@ -365,16 +365,45 @@ public:
                 // lastValue_ already contains the result
                 return;
             } else if (ident->name == "isNaN") {
-                // isNaN() global function - for integer type system, always returns false (0)
+                // isNaN() global function - tests if value is NaN after coercing to number
+                std::cerr << "DEBUG HIRGen: Detected global function call: isNaN()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: isNaN() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
-                // Evaluate argument (for side effects)
+
+                // Evaluate the argument
                 node.arguments[0]->accept(*this);
-                // All integers are not NaN
-                lastValue_ = builder_->createIntConstant(0);
+                auto* arg = lastValue_;
+
+                // Setup function signature
+                std::string runtimeFuncName = "nova_global_isNaN";
+                std::vector<HIRTypePtr> paramTypes;
+                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));
+                auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                // Find or create runtime function
+                HIRFunction* runtimeFunc = nullptr;
+                auto& functions = module_->functions;
+                for (auto& func : functions) {
+                    if (func->name == runtimeFuncName) {
+                        runtimeFunc = func.get();
+                        break;
+                    }
+                }
+
+                if (!runtimeFunc) {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    runtimeFunc = funcPtr.get();
+                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                }
+
+                // Create call to runtime function
+                std::vector<HIRValue*> args = {arg};
+                lastValue_ = builder_->createCall(runtimeFunc, args, "isNaN_result");
                 return;
             } else if (ident->name == "isFinite") {
                 // isFinite() global function - for integer type system, always returns true (1)

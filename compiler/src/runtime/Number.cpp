@@ -319,4 +319,12 @@ double nova_number_parseFloat(const char* str) {
     return result;
 }
 
+// Global isNaN(value) - tests if value is NaN (global version, coerces to number)
+// This is different from Number.isNaN() which doesn't coerce
+int64_t nova_global_isNaN(double value) {
+    // Check if the value is NaN using std::isnan
+    // Returns 1 (true) if NaN, 0 (false) otherwise
+    return std::isnan(value) ? 1 : 0;
+}
+
 } // extern "C"

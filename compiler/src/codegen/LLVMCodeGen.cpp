@@ -2166,6 +2166,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_global_isNaN") {
+                            // i64 @nova_global_isNaN(double) - tests if value is NaN
+                            std::cerr << "DEBUG LLVM: Creating external nova_global_isNaN declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),        // Returns i64 (bool as int)
+                                {llvm::Type::getDoubleTy(*context)},     // Value to test (F64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_global_isNaN",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
