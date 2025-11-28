@@ -3782,6 +3782,10 @@ public:
                         // Math.E ≈ 2.71828... -> return 2 for integer (or 3 if you prefer rounding)
                         lastValue_ = builder_->createIntConstant(3);
                         return;
+                    } else if (propIdent->name == "LN2") {
+                        // Math.LN2 ≈ 0.693147... -> return 0 for integer (truncated)
+                        lastValue_ = builder_->createIntConstant(0);
+                        return;
                     }
                 }
             }
