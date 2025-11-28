@@ -130,7 +130,8 @@
 ## ✅ Global Functions (Working)
 - `isNaN(value)` - Tests if value is NaN after coercing to number (global) **[v1.3.19]**
 - `isFinite(value)` - Tests if value is finite after coercing to number (global) **[v1.3.20]**
-- `parseInt(string, radix)` - Parses string to integer with optional radix (global, ES1) **[v1.3.25 NEW!]**
+- `parseInt(string, radix)` - Parses string to integer with optional radix (global, ES1) **[v1.3.25]**
+- `parseFloat(string)` - Parses string to floating-point number (global, ES1) **[v1.3.26 NEW!]**
 
 ## ✅ Console Methods (Working)
 - `console.log(message)` - Outputs message to stdout
@@ -168,15 +169,15 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 116+ methods implemented
-- **Latest Version**: v1.3.25
-- **Test Suite**: 261/261 tests passing (100%) ✅
+- **Total Methods**: 117+ methods implemented
+- **Latest Version**: v1.3.26
+- **Test Suite**: 262/262 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
-- **Global Functions**: 3+ (NaN & Finite detection, parseInt with radix support!)
+- **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)
 - **Console Methods**: 5+ (stdout & stderr logging: log, error, warn, info, debug!)
 

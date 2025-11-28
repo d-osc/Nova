@@ -2215,6 +2215,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_global_parseFloat") {
+                            // double @nova_global_parseFloat(ptr) - parses string to float
+                            std::cerr << "DEBUG LLVM: Creating external nova_global_parseFloat declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),          // Returns double (F64)
+                                {llvm::PointerType::getUnqual(*context)},   // String pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_global_parseFloat",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_console_log_string") {
                             // void @nova_console_log_string(ptr) - outputs string to stdout
                             std::cerr << "DEBUG LLVM: Creating external nova_console_log_string declaration" << std::endl;

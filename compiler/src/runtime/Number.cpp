@@ -344,4 +344,11 @@ int64_t nova_global_parseInt(const char* str, int64_t radix) {
     return nova_number_parseInt(str, radix);
 }
 
+// Global parseFloat(string) - parses string to floating-point number (global version)
+// This is identical to Number.parseFloat() in behavior
+double nova_global_parseFloat(const char* str) {
+    // Simply call the Number.parseFloat implementation
+    return nova_number_parseFloat(str);
+}
+
 } // extern "C"
