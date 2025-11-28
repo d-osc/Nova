@@ -135,6 +135,9 @@
 - `Object.keys(obj)` - Returns array of object's property keys (static, ES2015) **[v1.3.4]**
 - `Object.values(obj)` - Returns array of object's property values (static, ES2017) **[v1.3.3]**
 
+## ✅ Date Methods (Working)
+- `Date.now()` - Returns current timestamp in milliseconds since Unix epoch (static, ES5) **[v1.3.43 NEW!]**
+
 ## ✅ Global Functions (Working)
 - `isNaN(value)` - Tests if value is NaN after coercing to number (global) **[v1.3.19]**
 - `isFinite(value)` - Tests if value is finite after coercing to number (global) **[v1.3.20]**
@@ -157,7 +160,7 @@
 - `console.group(label)` - Starts a new indented group with label **[v1.3.38]**
 - `console.groupEnd()` - Ends the current group **[v1.3.38]**
 - `console.trace(message)` - Prints stack trace with optional message **[v1.3.39]**
-- `console.dir(value)` - Displays value properties in readable format **[v1.3.40 NEW!]**
+- `console.dir(value)` - Displays value properties in readable format **[v1.3.40]**
 
 ## ✅ Operators & Language Features (Working)
 - `typeof` - Type checking operator
@@ -188,15 +191,16 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 136+ methods implemented
-- **Latest Version**: v1.3.42
-- **Test Suite**: 278/278 tests passing (100%) ✅
+- **Total Methods**: 137+ methods implemented
+- **Latest Version**: v1.3.43
+- **Test Suite**: 279/279 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods/Constants**: 39+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + ALL standard constants!)
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 10+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability + equality!)
+- **Date Methods**: 1+ (timestamp support!)
 - **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)
 - **Console Methods**: 16+ (logging + console control + performance timing + assertions + counters + tables + grouping + tracing + inspection: log, error, warn, info, debug, clear, time, timeEnd, assert, count, countReset, table, group, groupEnd, trace, dir!)
 

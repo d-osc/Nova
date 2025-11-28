@@ -417,4 +417,12 @@ void nova_console_dir_array(void* array_ptr) {
     printf("] (length: %lld)\n", (long long)array->length);
 }
 
+// Date.now() - returns current timestamp in milliseconds since Unix epoch (ES5)
+int64_t nova_date_now() {
+    auto now = std::chrono::system_clock::now();
+    auto duration = now.time_since_epoch();
+    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    return static_cast<int64_t>(millis.count());
+}
+
 } // extern "C"
