@@ -693,4 +693,55 @@ char* nova_atob(const char* str) {
     return result;
 }
 
+// Helper function to check if character should NOT be encoded by encodeURI
+static bool isURIUnencoded(unsigned char c) {
+    // Unreserved characters (same as encodeURIComponent)
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) return true;
+    if (c == '-' || c == '_' || c == '.' || c == '!' || c == '~' || c == '*' || c == '\'' || c == '(' || c == ')') return true;
+    // Reserved characters (NOT encoded by encodeURI, but ARE encoded by encodeURIComponent)
+    if (c == ';' || c == ',' || c == '/' || c == '?' || c == ':' || c == '@' || c == '&' || c == '=' || c == '+' || c == '$' || c == '#') return true;
+    return false;
+}
+
+// encodeURI() - encodes a full URI, preserving URI-valid characters (ES3)
+char* nova_encodeURI(const char* str) {
+    if (!str) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    // First pass: calculate the output length
+    size_t len = strlen(str);
+    size_t outLen = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)str[i];
+        if (isURIUnencoded(c)) {
+            outLen++;
+        } else {
+            outLen += 3;  // %XX
+        }
+    }
+
+    // Allocate result
+    char* result = (char*)malloc(outLen + 1);
+    char* ptr = result;
+
+    // Second pass: encode
+    const char* hexChars = "0123456789ABCDEF";
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)str[i];
+        if (isURIUnencoded(c)) {
+            *ptr++ = c;
+        } else {
+            *ptr++ = '%';
+            *ptr++ = hexChars[(c >> 4) & 0x0F];
+            *ptr++ = hexChars[c & 0x0F];
+        }
+    }
+    *ptr = '\0';
+
+    return result;
+}
+
 } // extern "C"
