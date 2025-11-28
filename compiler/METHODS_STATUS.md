@@ -219,13 +219,13 @@
 
 ## 📊 Statistics
 - **Total Methods**: 153+ methods/features implemented
-- **Latest Version**: v1.3.57
-- **Test Suite**: 295/295 tests passing (100%) ✅
+- **Latest Version**: v1.3.59
+- **Test Suite**: 297/297 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods/Constants**: 41+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + ALL standard constants + min/max!)
-- **Number Methods**: 13+ (complete suite: constants, static methods, formatting, conversion, valueOf!)
+- **Number Methods**: 19+ (complete suite: constants, static methods, formatting, conversion, valueOf!)
 - **Object Methods**: 10+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability + equality!)
 - **Date Methods**: 1+ (timestamp support!)
 - **JSON Methods**: 3+ (stringify for numbers, strings, and booleans!)
