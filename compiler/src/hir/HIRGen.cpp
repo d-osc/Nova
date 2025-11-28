@@ -3798,6 +3798,10 @@ public:
                         // Math.LOG10E ≈ 0.434294... -> return 0 for integer (truncated)
                         lastValue_ = builder_->createIntConstant(0);
                         return;
+                    } else if (propIdent->name == "SQRT1_2") {
+                        // Math.SQRT1_2 ≈ 0.707106... -> return 0 for integer (truncated)
+                        lastValue_ = builder_->createIntConstant(0);
+                        return;
                     }
                 }
             }
