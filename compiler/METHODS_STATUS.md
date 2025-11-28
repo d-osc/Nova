@@ -103,7 +103,8 @@
 - `Math.acosh(x)` - Inverse hyperbolic cosine function **[v1.1.1]**
 - `Math.atanh(x)` - Inverse hyperbolic tangent function **[v1.1.2]**
 - `Math.LN2` - Natural logarithm of 2 constant ≈ 0.693 **[v1.3.27]**
-- `Math.LN10` - Natural logarithm of 10 constant ≈ 2.303 **[v1.3.28 NEW!]**
+- `Math.LN10` - Natural logarithm of 10 constant ≈ 2.303 **[v1.3.28]**
+- `Math.LOG2E` - Base 2 logarithm of E constant ≈ 1.443 **[v1.3.29 NEW!]**
 
 ## ✅ Number Methods (Working)
 - `Number.isFinite(value)` - Check if finite
@@ -171,13 +172,13 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 119+ methods implemented
-- **Latest Version**: v1.3.28
-- **Test Suite**: 264/264 tests passing (100%) ✅
+- **Total Methods**: 120+ methods implemented
+- **Latest Version**: v1.3.29
+- **Test Suite**: 265/265 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
-- **Math Methods/Constants**: 35+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + constants!)
+- **Math Methods/Constants**: 36+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + constants!)
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
 - **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)

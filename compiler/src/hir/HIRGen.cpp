@@ -3790,6 +3790,10 @@ public:
                         // Math.LN10 ≈ 2.302585... -> return 2 for integer (truncated)
                         lastValue_ = builder_->createIntConstant(2);
                         return;
+                    } else if (propIdent->name == "LOG2E") {
+                        // Math.LOG2E ≈ 1.442695... -> return 1 for integer (truncated)
+                        lastValue_ = builder_->createIntConstant(1);
+                        return;
                     }
                 }
             }
