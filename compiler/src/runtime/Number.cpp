@@ -327,4 +327,14 @@ int64_t nova_global_isNaN(double value) {
     return std::isnan(value) ? 1 : 0;
 }
 
+// Global isFinite(value) - tests if value is finite (global version, coerces to number)
+// This is different from Number.isFinite() which doesn't coerce
+// A finite number is neither NaN, Infinity, nor -Infinity
+int64_t nova_global_isFinite(double value) {
+    // Check if the value is finite using std::isfinite
+    // Returns 1 (true) if finite, 0 (false) otherwise
+    // isfinite returns true for all values except NaN and infinity
+    return std::isfinite(value) ? 1 : 0;
+}
+
 } // extern "C"

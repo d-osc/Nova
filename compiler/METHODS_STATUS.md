@@ -128,7 +128,8 @@
 - `Object.values(obj)` - Returns array of object's property values (static, ES2017) **[v1.3.3]**
 
 ## ✅ Global Functions (Working)
-- `isNaN(value)` - Tests if value is NaN after coercing to number (global) **[v1.3.19 NEW!]**
+- `isNaN(value)` - Tests if value is NaN after coercing to number (global) **[v1.3.19]**
+- `isFinite(value)` - Tests if value is finite after coercing to number (global) **[v1.3.20 NEW!]**
 
 ## ✅ Operators & Language Features (Working)
 - `typeof` - Type checking operator
@@ -159,14 +160,14 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 110+ methods implemented
-- **Latest Version**: v1.3.19
-- **Test Suite**: 255/255 tests passing (100%) ✅
+- **Total Methods**: 111+ methods implemented
+- **Latest Version**: v1.3.20
+- **Test Suite**: 256/256 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods**: 33+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision!)
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
-- **Global Functions**: 1+ (NaN detection with type coercion!)
+- **Global Functions**: 2+ (NaN & Finite detection with type coercion!)
 
