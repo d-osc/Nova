@@ -661,6 +661,47 @@ public:
                 std::vector<HIRValue*> args = {strArg};
                 lastValue_ = builder_->createCall(runtimeFunc, args, "btoa_result");
                 return;
+            } else if (ident->name == "atob") {
+                // atob() global function - decodes a base64 string (Web API)
+                std::cerr << "DEBUG HIRGen: Detected global function call: atob()" << std::endl;
+                if (node.arguments.size() < 1) {
+                    std::cerr << "ERROR: atob() expects at least 1 argument" << std::endl;
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+
+                // Evaluate the string argument
+                node.arguments[0]->accept(*this);
+                auto* strArg = lastValue_;
+
+                // Setup function signature
+                std::string runtimeFuncName = "nova_atob";
+                std::vector<HIRTypePtr> paramTypes;
+                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                auto returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+
+                // Find or create runtime function
+                HIRFunction* runtimeFunc = nullptr;
+                auto& functions = module_->functions;
+                for (auto& func : functions) {
+                    if (func->name == runtimeFuncName) {
+                        runtimeFunc = func.get();
+                        break;
+                    }
+                }
+
+                if (!runtimeFunc) {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    runtimeFunc = funcPtr.get();
+                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                }
+
+                // Create call to runtime function
+                std::vector<HIRValue*> args = {strArg};
+                lastValue_ = builder_->createCall(runtimeFunc, args, "atob_result");
+                return;
             } else if (ident->name == "Boolean") {
                 // Boolean() constructor - converts value to boolean (0 or 1)
                 if (node.arguments.size() < 1) {

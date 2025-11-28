@@ -634,4 +634,63 @@ char* nova_btoa(const char* str) {
     return result;
 }
 
+// Helper function to decode a base64 character
+static int base64_decode_char(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1; // Invalid character or padding
+}
+
+// atob() - decodes a base64 encoded string (Web API)
+char* nova_atob(const char* str) {
+    if (!str) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    size_t len = strlen(str);
+    if (len == 0) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    // Calculate output length (remove padding from count)
+    size_t padding = 0;
+    if (len >= 1 && str[len - 1] == '=') padding++;
+    if (len >= 2 && str[len - 2] == '=') padding++;
+    size_t outLen = (len / 4) * 3 - padding;
+
+    char* result = (char*)malloc(outLen + 1);
+    char* ptr = result;
+
+    for (size_t i = 0; i < len; i += 4) {
+        // Decode 4 base64 characters to 3 bytes
+        int v0 = base64_decode_char(str[i]);
+        int v1 = (i + 1 < len) ? base64_decode_char(str[i + 1]) : 0;
+        int v2 = (i + 2 < len && str[i + 2] != '=') ? base64_decode_char(str[i + 2]) : 0;
+        int v3 = (i + 3 < len && str[i + 3] != '=') ? base64_decode_char(str[i + 3]) : 0;
+
+        // First byte
+        *ptr++ = (v0 << 2) | (v1 >> 4);
+
+        // Second byte (if not padding)
+        if (i + 2 < len && str[i + 2] != '=') {
+            *ptr++ = ((v1 & 0x0F) << 4) | (v2 >> 2);
+        }
+
+        // Third byte (if not padding)
+        if (i + 3 < len && str[i + 3] != '=') {
+            *ptr++ = ((v2 & 0x03) << 6) | v3;
+        }
+    }
+    *ptr = '\0';
+
+    return result;
+}
+
 } // extern "C"
