@@ -6107,8 +6107,73 @@ public:
     }
     
     void visit(TryStmt& node) override {
-        (void)node;
-        // try-catch-finally
+        // try-catch-finally implementation
+        // For now, implements basic control flow without actual exception handling
+        std::cerr << "DEBUG HIRGen: Processing try-catch-finally statement" << std::endl;
+
+        // Create blocks for try, catch, finally, and end
+        auto tryBlock = currentFunction_->createBasicBlock("try");
+        auto catchBlock = node.handler ? currentFunction_->createBasicBlock("catch") : nullptr;
+        auto finallyBlock = node.finalizer ? currentFunction_->createBasicBlock("finally") : nullptr;
+        auto endBlock = currentFunction_->createBasicBlock("try.end");
+
+        // Jump to try block
+        builder_->createBr(tryBlock.get());
+
+        // Generate try block
+        builder_->setInsertPoint(tryBlock.get());
+        if (node.block) {
+            node.block->accept(*this);
+        }
+
+        // After try block, jump to finally or end
+        if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+            if (finallyBlock) {
+                builder_->createBr(finallyBlock.get());
+            } else {
+                builder_->createBr(endBlock.get());
+            }
+        }
+
+        // Generate catch block (currently skipped - no exception mechanism)
+        // The catch block code is generated but not executed unless we add throw support
+        if (catchBlock) {
+            builder_->setInsertPoint(catchBlock.get());
+
+            // Add catch parameter to symbol table (as undefined/0 for now)
+            if (node.handler && !node.handler->param.empty()) {
+                auto* catchParam = builder_->createIntConstant(0);
+                symbolTable_[node.handler->param] = catchParam;
+            }
+
+            if (node.handler && node.handler->body) {
+                node.handler->body->accept(*this);
+            }
+
+            // After catch, jump to finally or end
+            if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+                if (finallyBlock) {
+                    builder_->createBr(finallyBlock.get());
+                } else {
+                    builder_->createBr(endBlock.get());
+                }
+            }
+        }
+
+        // Generate finally block
+        if (finallyBlock) {
+            builder_->setInsertPoint(finallyBlock.get());
+            if (node.finalizer) {
+                node.finalizer->accept(*this);
+            }
+            // After finally, jump to end
+            if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+                builder_->createBr(endBlock.get());
+            }
+        }
+
+        // Continue at end block
+        builder_->setInsertPoint(endBlock.get());
     }
     
     void visit(SwitchStmt& node) override {
