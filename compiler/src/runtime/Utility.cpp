@@ -545,4 +545,46 @@ char* nova_encodeURIComponent(const char* str) {
     return result;
 }
 
+// Helper function to convert hex character to value
+static int hexCharToValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;  // Invalid hex character
+}
+
+// decodeURIComponent() - decodes a URI component (ES3)
+// Decodes percent-encoded characters back to original
+char* nova_decodeURIComponent(const char* str) {
+    if (!str) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    size_t len = strlen(str);
+    // Result will be at most the same length as input
+    char* result = (char*)malloc(len + 1);
+    char* ptr = result;
+
+    for (size_t i = 0; i < len; i++) {
+        if (str[i] == '%' && i + 2 < len) {
+            int high = hexCharToValue(str[i + 1]);
+            int low = hexCharToValue(str[i + 2]);
+            if (high >= 0 && low >= 0) {
+                *ptr++ = (char)((high << 4) | low);
+                i += 2;  // Skip the two hex digits
+            } else {
+                // Invalid escape sequence, copy as-is
+                *ptr++ = str[i];
+            }
+        } else {
+            *ptr++ = str[i];
+        }
+    }
+    *ptr = '\0';
+
+    return result;
+}
+
 } // extern "C"
