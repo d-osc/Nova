@@ -2165,6 +2165,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_json_stringify_string") {
+                            // ptr @nova_json_stringify_string(ptr) - converts string to JSON string with quotes (ES5)
+                            std::cerr << "DEBUG LLVM: Creating external nova_json_stringify_string declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),    // Returns string pointer
+                                {llvm::PointerType::getUnqual(*context)},  // String value
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_json_stringify_string",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_number_toFixed") {
                             // ptr @nova_number_toFixed(double, i64) - formats number with fixed decimal places
                             std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;

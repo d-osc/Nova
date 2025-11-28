@@ -461,4 +461,26 @@ char* nova_json_stringify_number(int64_t value) {
     return result;
 }
 
+// JSON.stringify(string) - converts a string to a JSON string with quotes (ES5)
+char* nova_json_stringify_string(const char* str) {
+    if (!str) {
+        // Return "null" for null strings
+        char* result = (char*)malloc(5);
+        strcpy(result, "null");
+        return result;
+    }
+
+    // Calculate length: original + 2 quotes + null terminator
+    size_t len = strlen(str);
+    char* result = (char*)malloc(len + 3);
+
+    // Add opening quote, string, and closing quote
+    result[0] = '"';
+    strcpy(result + 1, str);
+    result[len + 1] = '"';
+    result[len + 2] = '\0';
+
+    return result;
+}
+
 } // extern "C"
