@@ -2229,6 +2229,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_btoa") {
+                            // ptr @nova_btoa(ptr) - encodes a string to base64 (Web API)
+                            std::cerr << "DEBUG LLVM: Creating external nova_btoa declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),    // Returns string pointer
+                                {llvm::PointerType::getUnqual(*context)},  // String value
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_btoa",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_number_toFixed") {
                             // ptr @nova_number_toFixed(double, i64) - formats number with fixed decimal places
                             std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;

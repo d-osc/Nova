@@ -587,4 +587,51 @@ char* nova_decodeURIComponent(const char* str) {
     return result;
 }
 
+// Base64 encoding table
+static const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// btoa() - encodes a string to base64 (Web API)
+char* nova_btoa(const char* str) {
+    if (!str) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    size_t len = strlen(str);
+    // Calculate output length: ceil(len / 3) * 4
+    size_t outLen = ((len + 2) / 3) * 4;
+    char* result = (char*)malloc(outLen + 1);
+    char* ptr = result;
+
+    for (size_t i = 0; i < len; i += 3) {
+        // Get up to 3 bytes
+        unsigned char b0 = (unsigned char)str[i];
+        unsigned char b1 = (i + 1 < len) ? (unsigned char)str[i + 1] : 0;
+        unsigned char b2 = (i + 2 < len) ? (unsigned char)str[i + 2] : 0;
+
+        // How many bytes we actually have in this group
+        int remaining = len - i;
+
+        // Encode to 4 base64 characters
+        *ptr++ = base64_chars[b0 >> 2];
+        *ptr++ = base64_chars[((b0 & 0x03) << 4) | (b1 >> 4)];
+
+        if (remaining >= 2) {
+            *ptr++ = base64_chars[((b1 & 0x0F) << 2) | (b2 >> 6)];
+        } else {
+            *ptr++ = '=';
+        }
+
+        if (remaining >= 3) {
+            *ptr++ = base64_chars[b2 & 0x3F];
+        } else {
+            *ptr++ = '=';
+        }
+    }
+    *ptr = '\0';
+
+    return result;
+}
+
 } // extern "C"
