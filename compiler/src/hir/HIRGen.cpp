@@ -797,6 +797,78 @@ public:
                             std::vector<HIRValue*> args = {dataArg};
                             lastValue_ = builder_->createCall(runtimeFunc, args, "console_table_result");
                             return;
+                        } else if (propIdent->name == "group" || propIdent->name == "groupEnd") {
+                            // console.group(label) / console.groupEnd() - group console output
+                            std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+
+                            std::string runtimeFuncName;
+                            std::vector<HIRTypePtr> paramTypes;
+
+                            if (propIdent->name == "group") {
+                                // group takes optional label parameter (string)
+                                if (node.arguments.size() > 0) {
+                                    // Evaluate the label argument
+                                    node.arguments[0]->accept(*this);
+                                    auto* labelArg = lastValue_;
+
+                                    runtimeFuncName = "nova_console_group_string";
+                                    paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+
+                                    // Find or create runtime function
+                                    HIRFunction* runtimeFunc = nullptr;
+                                    auto& functions = module_->functions;
+                                    for (auto& func : functions) {
+                                        if (func->name == runtimeFuncName) {
+                                            runtimeFunc = func.get();
+                                            break;
+                                        }
+                                    }
+
+                                    if (!runtimeFunc) {
+                                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, std::make_shared<HIRType>(HIRType::Kind::Void));
+                                        HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                        funcPtr->linkage = HIRFunction::Linkage::External;
+                                        runtimeFunc = funcPtr.get();
+                                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                    }
+
+                                    std::vector<HIRValue*> args = {labelArg};
+                                    lastValue_ = builder_->createCall(runtimeFunc, args, "console_group_result");
+                                    return;
+                                } else {
+                                    // No label - use default
+                                    runtimeFuncName = "nova_console_group_default";
+                                }
+                            } else {
+                                // groupEnd takes no parameters
+                                runtimeFuncName = "nova_console_groupEnd";
+                            }
+
+                            // Setup function signature for no-argument versions
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                            // Find or create runtime function
+                            HIRFunction* runtimeFunc = nullptr;
+                            auto& functions = module_->functions;
+                            for (auto& func : functions) {
+                                if (func->name == runtimeFuncName) {
+                                    runtimeFunc = func.get();
+                                    break;
+                                }
+                            }
+
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            }
+
+                            // Create call to runtime function
+                            std::vector<HIRValue*> args;
+                            lastValue_ = builder_->createCall(runtimeFunc, args, "console_group_result");
+                            return;
                         } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {

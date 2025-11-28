@@ -332,4 +332,39 @@ void nova_console_table_array(void* array_ptr) {
     printf("└─────────┴─────────────────────┘\n");
 }
 
+// Group indentation tracking for console.group() / console.groupEnd()
+static int group_indent_level = 0;
+
+// Helper to print current indentation
+static void print_indent() {
+    for (int i = 0; i < group_indent_level; i++) {
+        printf("  ");
+    }
+}
+
+// console.group(label) - starts a new indented group with label
+void nova_console_group_string(const char* label) {
+    print_indent();
+    if (label) {
+        printf("▼ %s\n", label);
+    } else {
+        printf("▼ Group\n");
+    }
+    group_indent_level++;
+}
+
+// console.group() - starts a new indented group without label
+void nova_console_group_default() {
+    print_indent();
+    printf("▼ Group\n");
+    group_indent_level++;
+}
+
+// console.groupEnd() - ends the current group (decreases indentation)
+void nova_console_groupEnd() {
+    if (group_indent_level > 0) {
+        group_indent_level--;
+    }
+}
+
 } // extern "C"

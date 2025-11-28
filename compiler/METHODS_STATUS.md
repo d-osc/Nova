@@ -151,7 +151,9 @@
 - `console.assert(condition, message)` - Prints error to stderr if condition is false **[v1.3.35]**
 - `console.count(label)` - Increments and prints counter for label **[v1.3.36]**
 - `console.countReset(label)` - Resets counter to zero **[v1.3.36]**
-- `console.table(data)` - Displays array data in tabular format **[v1.3.37 NEW!]**
+- `console.table(data)` - Displays array data in tabular format **[v1.3.37]**
+- `console.group(label)` - Starts a new indented group with label **[v1.3.38]**
+- `console.groupEnd()` - Ends the current group **[v1.3.38 NEW!]**
 
 ## ✅ Operators & Language Features (Working)
 - `typeof` - Type checking operator
@@ -182,9 +184,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 130+ methods implemented
-- **Latest Version**: v1.3.37
-- **Test Suite**: 273/273 tests passing (100%) ✅
+- **Total Methods**: 132+ methods implemented
+- **Latest Version**: v1.3.38
+- **Test Suite**: 274/274 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 25+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
@@ -192,5 +194,5 @@
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 9+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability!)
 - **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)
-- **Console Methods**: 12+ (logging + console control + performance timing + assertions + counters + tables: log, error, warn, info, debug, clear, time, timeEnd, assert, count, countReset, table!)
+- **Console Methods**: 14+ (logging + console control + performance timing + assertions + counters + tables + grouping: log, error, warn, info, debug, clear, time, timeEnd, assert, count, countReset, table, group, groupEnd!)
 

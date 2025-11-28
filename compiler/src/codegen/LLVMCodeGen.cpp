@@ -2504,6 +2504,54 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_console_group_string") {
+                            // void @nova_console_group_string(ptr) - starts group with label
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_group_string declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),         // Returns void
+                                {llvm::PointerType::getUnqual(*context)}, // String pointer (label)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_group_string",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_group_default") {
+                            // void @nova_console_group_default() - starts group without label
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_group_default declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),         // Returns void
+                                {},                                       // No parameters
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_group_default",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_groupEnd") {
+                            // void @nova_console_groupEnd() - ends current group
+                            std::cerr << "DEBUG LLVM: Creating external nova_console_groupEnd declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),         // Returns void
+                                {},                                       // No parameters
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_groupEnd",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
