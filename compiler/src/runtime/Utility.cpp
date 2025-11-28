@@ -448,4 +448,17 @@ int64_t nova_math_max(int64_t a, int64_t b) {
     return a > b ? a : b;
 }
 
+// JSON.stringify(number) - converts a number to a JSON string (ES5)
+char* nova_json_stringify_number(int64_t value) {
+    // Convert number to string
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+
+    // Allocate and copy result
+    size_t len = strlen(buffer);
+    char* result = (char*)malloc(len + 1);
+    strcpy(result, buffer);
+    return result;
+}
+
 } // extern "C"
