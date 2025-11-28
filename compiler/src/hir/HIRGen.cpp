@@ -3786,6 +3786,10 @@ public:
                         // Math.LN2 ≈ 0.693147... -> return 0 for integer (truncated)
                         lastValue_ = builder_->createIntConstant(0);
                         return;
+                    } else if (propIdent->name == "LN10") {
+                        // Math.LN10 ≈ 2.302585... -> return 2 for integer (truncated)
+                        lastValue_ = builder_->createIntConstant(2);
+                        return;
                     }
                 }
             }
