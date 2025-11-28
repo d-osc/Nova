@@ -7,6 +7,14 @@
 #include <cstdlib>
 #include <unordered_map>
 #include <string>
+#include <csetjmp>
+
+// Global exception handling state
+static thread_local bool g_exception_pending = false;
+static thread_local int64_t g_exception_value = 0;
+static thread_local jmp_buf* g_exception_handler = nullptr;
+static thread_local jmp_buf g_exception_buffer;  // The actual buffer
+static thread_local int g_try_depth = 0;  // Track try nesting
 
 namespace nova {
 namespace runtime {
@@ -775,6 +783,51 @@ char* nova_decodeURI(const char* str) {
     *ptr = '\0';
 
     return result;
+}
+
+// Exception handling functions - polling-based approach
+
+// Begin a try block
+void nova_try_begin() {
+    g_try_depth++;
+    g_exception_pending = false;
+}
+
+// End a try block
+void nova_try_end() {
+    g_try_depth--;
+    if (g_try_depth < 0) {
+        g_try_depth = 0;
+    }
+}
+
+// Throw an exception - sets flag but doesn't longjmp
+// The generated code must check and branch to catch block
+void nova_throw(int64_t value) {
+    g_exception_pending = true;
+    g_exception_value = value;
+    // If no try block is active, it's an uncaught exception
+    if (g_try_depth <= 0) {
+        std::cerr << "Uncaught exception: " << value << std::endl;
+        exit(1);
+    }
+    // Otherwise, the exception will be caught by polling
+}
+
+// Check if exception is pending
+int64_t nova_exception_pending() {
+    return g_exception_pending ? 1 : 0;
+}
+
+// Get exception value
+int64_t nova_get_exception() {
+    return g_exception_value;
+}
+
+// Clear exception
+void nova_clear_exception() {
+    g_exception_pending = false;
+    g_exception_value = 0;
 }
 
 } // extern "C"

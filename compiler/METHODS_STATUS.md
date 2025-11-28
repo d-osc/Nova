@@ -191,7 +191,8 @@
 - Arrow functions (basic support)
 - Classes (basic support)
 - `enum` - Enum declarations with auto-increment and explicit values **[v1.3.56]**
-- `try/catch/finally` - Exception handling control flow **[v1.3.57 NEW!]**
+- `try/catch/finally` - Exception handling control flow **[v1.3.57]**
+- `throw` - Throw exceptions with jump to catch block **[v1.3.58 NEW!]**
 - `console.log()` - Console output
 
 ## ⚠️ Known Limitations

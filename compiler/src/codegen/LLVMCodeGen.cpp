@@ -2293,6 +2293,82 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_throw") {
+                            // void @nova_throw(i64) - throws an exception
+                            std::cerr << "DEBUG LLVM: Creating external nova_throw declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),    // Returns void
+                                {llvm::Type::getInt64Ty(*context)}, // Exception value (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_throw",
+                                module.get()
+                            );
+                        }
+
+
+                        if (!callee && funcName == "nova_try_begin") {
+                            std::cerr << "DEBUG LLVM: Creating external nova_try_begin declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_try_begin",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_try_end") {
+                            std::cerr << "DEBUG LLVM: Creating external nova_try_end declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_try_end",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_get_exception") {
+                            std::cerr << "DEBUG LLVM: Creating external nova_get_exception declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_get_exception",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_clear_exception") {
+                            std::cerr << "DEBUG LLVM: Creating external nova_clear_exception declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_clear_exception",
+                                module.get()
+                            );
+                        }
                         if (!callee && funcName == "nova_number_toFixed") {
                             // ptr @nova_number_toFixed(double, i64) - formats number with fixed decimal places
                             std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;

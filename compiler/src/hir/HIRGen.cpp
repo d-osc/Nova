@@ -6102,8 +6102,46 @@ public:
     }
     
     void visit(ThrowStmt& node) override {
-        // throw statement
+        // throw statement - call nova_throw runtime function
+        std::cerr << "DEBUG HIRGen: Processing throw statement" << std::endl;
+
+        // Evaluate the exception value
         node.argument->accept(*this);
+        auto* exceptionValue = lastValue_;
+
+        // Setup function signature for nova_throw(int64_t)
+        std::string runtimeFuncName = "nova_throw";
+        std::vector<HIRTypePtr> paramTypes;
+        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+        auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+        // Find or create runtime function
+        HIRFunction* runtimeFunc = nullptr;
+        auto& functions = module_->functions;
+        for (auto& func : functions) {
+            if (func->name == runtimeFuncName) {
+                runtimeFunc = func.get();
+                break;
+            }
+        }
+
+        if (!runtimeFunc) {
+            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            runtimeFunc = funcPtr.get();
+            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+        }
+
+        // Create call to nova_throw
+        std::vector<HIRValue*> args = {exceptionValue};
+        builder_->createCall(runtimeFunc, args, "");
+        // If we are inside a try block, jump to the catch block
+        if (currentCatchBlock_) {
+            std::cerr << "DEBUG HIRGen: Throw jumping to catch block" << std::endl;
+            builder_->createBr(currentCatchBlock_);
+        }
+        // If no catch block, nova_throw will handle uncaught exception and exit
     }
     
     void visit(TryStmt& node) override {
@@ -6116,6 +6154,32 @@ public:
         auto catchBlock = node.handler ? currentFunction_->createBasicBlock("catch") : nullptr;
         auto finallyBlock = node.finalizer ? currentFunction_->createBasicBlock("finally") : nullptr;
         auto endBlock = currentFunction_->createBasicBlock("try.end");
+        // Save previous catch block and set new one
+        auto* prevCatchBlock = currentCatchBlock_;
+        currentCatchBlock_ = catchBlock ? catchBlock.get() : nullptr;
+        // Call nova_try_begin() to increment try depth
+        {
+            std::string funcName = "nova_try_begin";
+            HIRFunction* runtimeFunc = nullptr;
+            auto& functions = module_->functions;
+            for (auto& func : functions) {
+                if (func->name == funcName) {
+                    runtimeFunc = func.get();
+                    break;
+                }
+            }
+            if (!runtimeFunc) {
+                std::vector<HIRTypePtr> paramTypes;
+                auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                HIRFunctionPtr funcPtr = module_->createFunction(funcName, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                runtimeFunc = funcPtr.get();
+                std::cerr << "DEBUG HIRGen: Created external function: " << funcName << std::endl;
+            }
+            std::vector<HIRValue*> args;
+            builder_->createCall(runtimeFunc, args, "");
+        }
 
         // Jump to try block
         builder_->createBr(tryBlock.get());
@@ -6135,15 +6199,38 @@ public:
             }
         }
 
-        // Generate catch block (currently skipped - no exception mechanism)
-        // The catch block code is generated but not executed unless we add throw support
+        // Generate catch block
         if (catchBlock) {
             builder_->setInsertPoint(catchBlock.get());
 
-            // Add catch parameter to symbol table (as undefined/0 for now)
+            // Get exception value via nova_get_exception()
+            HIRValue* exceptionValue = nullptr;
+            {
+                std::string funcName = "nova_get_exception";
+                HIRFunction* runtimeFunc = nullptr;
+                auto& functions = module_->functions;
+                for (auto& func : functions) {
+                    if (func->name == funcName) {
+                        runtimeFunc = func.get();
+                        break;
+                    }
+                }
+                if (!runtimeFunc) {
+                    std::vector<HIRTypePtr> paramTypes;
+                    auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(funcName, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    runtimeFunc = funcPtr.get();
+                    std::cerr << "DEBUG HIRGen: Created external function: " << funcName << std::endl;
+                }
+                std::vector<HIRValue*> args;
+                exceptionValue = builder_->createCall(runtimeFunc, args, "exception_value");
+            }
+
+            // Add catch parameter to symbol table
             if (node.handler && !node.handler->param.empty()) {
-                auto* catchParam = builder_->createIntConstant(0);
-                symbolTable_[node.handler->param] = catchParam;
+                symbolTable_[node.handler->param] = exceptionValue;
             }
 
             if (node.handler && node.handler->body) {
@@ -6174,6 +6261,8 @@ public:
 
         // Continue at end block
         builder_->setInsertPoint(endBlock.get());
+        // Restore previous catch block
+        currentCatchBlock_ = prevCatchBlock;
     }
     
     void visit(SwitchStmt& node) override {
@@ -6645,6 +6734,10 @@ private:
     std::string lastFunctionName_;  // Tracks the last created arrow function name
     std::unordered_map<std::string, const std::vector<ExprPtr>*> functionDefaultValues_;  // Maps function names to default values
     std::unordered_map<std::string, std::unordered_map<std::string, int64_t>> enumTable_;  // Maps enum name -> member name -> value
+    // Exception handling support
+    HIRBasicBlock* currentCatchBlock_ = nullptr;  // Current catch block for throw statements
+    HIRBasicBlock* currentFinallyBlock_ = nullptr;  // Current finally block
+    HIRBasicBlock* currentTryEndBlock_ = nullptr;  // End block after try-catch-finally
 };
 
 // Public API to generate HIR from AST
