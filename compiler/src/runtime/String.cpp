@@ -790,4 +790,18 @@ int64_t nova_string_match(const char* str, const char* search) {
     return count;
 }
 
+
+// String.prototype.localeCompare(other) - compare strings
+// Returns: -1 if str < other, 0 if equal, 1 if str > other
+int64_t nova_string_localeCompare(const char* str, const char* other) {
+    if (!str && !other) return 0;
+    if (!str) return -1;
+    if (!other) return 1;
+
+    int result = std::strcmp(str, other);
+    if (result < 0) return -1;
+    if (result > 0) return 1;
+    return 0;
+}
+
 }

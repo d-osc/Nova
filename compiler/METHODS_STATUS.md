@@ -27,6 +27,7 @@
 - `String.prototype.padEnd(length, fillString)` - Pad at end
 - `String.prototype.split(delimiter)` - Split into array **[v0.74.0]**
 - `String.prototype.match(substring)` - Count substring occurrences (simplified) **[v1.3.41]**
+- `String.prototype.localeCompare(other)` - Compare strings, returns -1, 0, or 1 (ES1) **[v1.3.60 NEW!]**
 - `String.prototype.length` - String length property
 
 ## ✅ Array Methods (Working)
@@ -219,10 +220,10 @@
 
 ## 📊 Statistics
 - **Total Methods**: 153+ methods/features implemented
-- **Latest Version**: v1.3.59
-- **Test Suite**: 297/297 tests passing (100%) ✅
+- **Latest Version**: v1.3.60
+- **Test Suite**: 298/298 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
-- **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
+- **String Methods**: 27+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
 - **Math Methods/Constants**: 41+ (trig + inverse trig + hyperbolic + inverse hyperbolic + precision + ALL standard constants + min/max!)
 - **Number Methods**: 19+ (complete suite: constants, static methods, formatting, conversion, valueOf!)

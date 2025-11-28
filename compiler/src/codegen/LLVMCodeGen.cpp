@@ -1277,6 +1277,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_string_localeCompare") {
+                            // i64 @nova_string_localeCompare(ptr, ptr) - compares strings
+                            std::cerr << "DEBUG LLVM: Creating external nova_string_localeCompare declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),  // Returns i64 (-1, 0, 1)
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_string_localeCompare",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_string_charAt") {
                             // ptr @nova_string_charAt(ptr, i64)
                             std::cerr << "DEBUG LLVM: Creating external nova_string_charAt declaration" << std::endl;
