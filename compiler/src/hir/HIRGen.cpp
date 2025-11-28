@@ -2020,8 +2020,9 @@ public:
                         node.arguments[0]->accept(*this);
                         auto* value = lastValue_;
 
-                        // Determine if argument is string or number
+                        // Determine argument type: string, boolean, or number
                         bool isString = value->type && value->type->kind == HIRType::Kind::String;
+                        bool isBool = value->type && value->type->kind == HIRType::Kind::Bool;
 
                         std::string runtimeFuncName;
                         std::vector<HIRTypePtr> paramTypes;
@@ -2031,6 +2032,10 @@ public:
                             runtimeFuncName = "nova_json_stringify_string";
                             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                             std::cerr << "DEBUG HIRGen: JSON.stringify() with string argument" << std::endl;
+                        } else if (isBool) {
+                            runtimeFuncName = "nova_json_stringify_bool";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                            std::cerr << "DEBUG HIRGen: JSON.stringify() with boolean argument" << std::endl;
                         } else {
                             runtimeFuncName = "nova_json_stringify_number";
                             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));

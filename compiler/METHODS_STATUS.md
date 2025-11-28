@@ -142,7 +142,8 @@
 
 ## ✅ JSON Methods (Working)
 - `JSON.stringify(number)` - Converts a number to a JSON string (static, ES5) **[v1.3.46]**
-- `JSON.stringify(string)` - Converts a string to a JSON string with quotes (static, ES5) **[v1.3.47 NEW!]**
+- `JSON.stringify(string)` - Converts a string to a JSON string with quotes (static, ES5) **[v1.3.47]**
+- `JSON.stringify(boolean)` - Converts a boolean to "true" or "false" (static, ES5) **[v1.3.48 NEW!]**
 
 ## ✅ Performance Methods (Working)
 - `performance.now()` - Returns high-resolution timestamp in milliseconds since process start (Web Performance API) **[v1.3.44]**
@@ -200,9 +201,9 @@
 3. **Async**: Promise/async/await not implemented
 
 ## 📊 Statistics
-- **Total Methods**: 142+ methods implemented
-- **Latest Version**: v1.3.47
-- **Test Suite**: 282/282 tests passing (100%) ✅
+- **Total Methods**: 143+ methods implemented
+- **Latest Version**: v1.3.48
+- **Test Suite**: 283/283 tests passing (100%) ✅
 - **Test Runner**: `run_all_tests.py` available
 - **String Methods**: 26+ (includes ES2015, ES2021 & ES2022!)
 - **Array Methods**: 38+ (with 12 callback methods! includes ES2015, ES2019 & ES2023 features!)
@@ -210,7 +211,7 @@
 - **Number Methods**: 11+ (complete suite: static parseInt/parseFloat, formatting, conversion, valueOf!)
 - **Object Methods**: 10+ (ES5, ES2015, ES2017 & ES2022 features - complete introspection + manipulation + immutability + equality!)
 - **Date Methods**: 1+ (timestamp support!)
-- **JSON Methods**: 2+ (stringify for numbers and strings!)
+- **JSON Methods**: 3+ (stringify for numbers, strings, and booleans!)
 - **Performance Methods**: 1+ (high-resolution timing!)
 - **Global Functions**: 4+ (NaN & Finite detection, parseInt & parseFloat parsing!)
 - **Console Methods**: 16+ (logging + console control + performance timing + assertions + counters + tables + grouping + tracing + inspection: log, error, warn, info, debug, clear, time, timeEnd, assert, count, countReset, table, group, groupEnd, trace, dir!)

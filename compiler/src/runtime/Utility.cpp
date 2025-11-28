@@ -483,4 +483,17 @@ char* nova_json_stringify_string(const char* str) {
     return result;
 }
 
+// JSON.stringify(boolean) - converts a boolean to a JSON string (ES5)
+char* nova_json_stringify_bool(int64_t value) {
+    if (value) {
+        char* result = (char*)malloc(5);
+        strcpy(result, "true");
+        return result;
+    } else {
+        char* result = (char*)malloc(6);
+        strcpy(result, "false");
+        return result;
+    }
+}
+
 } // extern "C"
