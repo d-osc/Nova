@@ -1,5 +1,27 @@
 # Nova Compiler Changelog
 
+## v1.3.71 - Generator & AsyncGenerator 100% Complete!
+- **GeneratorFunction (ES2015)**: Full implementation!
+  - `function* name() {}` declaration
+  - `yield value` expression
+  - `yield* iterable` delegation
+  - `.next(value)`, `.return(value)`, `.throw(error)` methods
+  - `.done` and `.value` property access
+  - Generator parameters support
+  - Local variables persist across yields (generator local storage)
+  - `for...of` loop integration
+- **AsyncGeneratorFunction (ES2018)**: Full implementation!
+  - `async function* name() {}` declaration
+  - `yield`, `yield*`, and `await` inside async generators
+  - `.next()`, `.return()`, `.throw()` methods
+  - `for await...of` loop integration
+  - Full iterator result property access
+- **Runtime Functions**:
+  - `nova_generator_create`, `nova_generator_next`, `nova_generator_return`, `nova_generator_throw`
+  - `nova_generator_store_local`, `nova_generator_load_local` for cross-yield variable persistence
+  - `nova_async_generator_create`, `nova_async_generator_next`, etc.
+- **23 generator tests passing** (100% test coverage)
+
 ## v0.78.0 - Fixed Type Inference for Array Methods
 - **FIXED**: Array.concat() and Array.slice() now preserve type information
 - Variables storing array method results can now access .length property

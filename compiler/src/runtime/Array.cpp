@@ -591,6 +591,12 @@ int64_t nova_value_array_at(void* array_ptr, int64_t index) {
     return nova::runtime::value_array_at(array, index);
 }
 
+int64_t nova_value_array_length(void* array_ptr) {
+    if (!array_ptr) return 0;
+    // Read length directly from metadata struct at offset 24
+    return *reinterpret_cast<int64_t*>(static_cast<char*>(array_ptr) + 24);
+}
+
 // Array.with(index, value) - ES2023
 // Returns NEW array with element at index replaced (immutable operation)
 void* nova_value_array_with(void* array_ptr, int64_t index, int64_t value) {
@@ -670,6 +676,19 @@ void* nova_value_array_toReversed(void* array_ptr) {
 
 // Array.toSorted() - ES2023
 // Returns NEW sorted array (immutable operation)
+// Comparator callback type for sort
+typedef int64_t (*SortComparatorFunc)(int64_t, int64_t);
+
+// Global comparator for std::sort wrapper
+static thread_local SortComparatorFunc g_sort_comparator = nullptr;
+
+static bool sort_with_comparator(int64_t a, int64_t b) {
+    if (g_sort_comparator) {
+        return g_sort_comparator(a, b) < 0;
+    }
+    return a < b;  // Default ascending
+}
+
 void* nova_value_array_toSorted(void* array_ptr) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
 
@@ -697,6 +716,40 @@ void* nova_value_array_toSorted(void* array_ptr) {
     return nova::runtime::create_metadata_from_value_array(result);
 }
 
+// Array.toSorted(compareFn) - returns new sorted array with custom comparator (ES2023)
+void* nova_value_array_toSorted_compare(void* array_ptr, SortComparatorFunc compareFn) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array) {
+        return nullptr;
+    }
+
+    // Create a copy of the array
+    nova::runtime::ValueArray* result = new nova::runtime::ValueArray();
+    result->capacity = array->capacity;
+    result->length = array->length;
+    result->elements = static_cast<int64_t*>(malloc(array->capacity * sizeof(int64_t)));
+
+    if (!result->elements) {
+        return nullptr;
+    }
+
+    // Copy all elements
+    std::memcpy(result->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Sort with comparator
+    if (compareFn) {
+        g_sort_comparator = compareFn;
+        std::sort(result->elements, result->elements + result->length, sort_with_comparator);
+        g_sort_comparator = nullptr;
+    } else {
+        std::sort(result->elements, result->elements + result->length);
+    }
+
+    // Create metadata struct for the new array
+    return nova::runtime::create_metadata_from_value_array(result);
+}
+
 // Array.sort() - in-place sorting
 // Sorts the array in ascending numeric order (modifies original)
 void* nova_value_array_sort(void* array_ptr) {
@@ -708,6 +761,30 @@ void* nova_value_array_sort(void* array_ptr) {
 
     // Sort the elements in place (ascending numeric order)
     std::sort(array->elements, array->elements + array->length);
+
+    // Write back to metadata
+    write_back_to_metadata(array_ptr, array);
+
+    // Return array pointer for chaining (like JavaScript)
+    return array_ptr;
+}
+
+// Array.sort(compareFn) - in-place sorting with custom comparator
+void* nova_value_array_sort_compare(void* array_ptr, SortComparatorFunc compareFn) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !array->elements) {
+        return array_ptr;
+    }
+
+    // Sort with comparator
+    if (compareFn) {
+        g_sort_comparator = compareFn;
+        std::sort(array->elements, array->elements + array->length, sort_with_comparator);
+        g_sort_comparator = nullptr;
+    } else {
+        std::sort(array->elements, array->elements + array->length);
+    }
 
     // Write back to metadata
     write_back_to_metadata(array_ptr, array);
@@ -756,6 +833,78 @@ void* nova_value_array_splice(void* array_ptr, int64_t start, int64_t deleteCoun
     write_back_to_metadata(array_ptr, array);
 
     // Return array pointer for chaining (like JavaScript)
+    return array_ptr;
+}
+
+// Array.splice(start, deleteCount, items...) - removes and inserts elements
+// Modifies array by removing deleteCount elements and inserting new ones
+void* nova_value_array_splice_insert(void* array_ptr, int64_t start, int64_t deleteCount,
+                                      int64_t* items, int64_t itemCount) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array) {
+        return array_ptr;
+    }
+
+    // Handle negative start index
+    if (start < 0) {
+        start = array->length + start;
+        if (start < 0) start = 0;
+    }
+
+    // Clamp start to array bounds
+    if (start > array->length) {
+        start = array->length;
+    }
+
+    // Clamp deleteCount
+    if (deleteCount < 0) {
+        deleteCount = 0;
+    }
+    if (start + deleteCount > array->length) {
+        deleteCount = array->length - start;
+    }
+
+    // Calculate new length
+    int64_t newLength = array->length - deleteCount + itemCount;
+
+    // Resize if needed
+    if (newLength > array->capacity) {
+        int64_t newCapacity = newLength * 2;
+        int64_t* newElements = static_cast<int64_t*>(malloc(newCapacity * sizeof(int64_t)));
+        if (array->elements) {
+            std::memcpy(newElements, array->elements, array->length * sizeof(int64_t));
+            free(array->elements);
+        }
+        array->elements = newElements;
+        array->capacity = newCapacity;
+    }
+
+    // Shift elements to make room for insertions (or close gap for deletions)
+    int64_t shift = itemCount - deleteCount;
+    if (shift > 0) {
+        // Moving elements right to make room
+        for (int64_t i = array->length - 1; i >= start + deleteCount; i--) {
+            array->elements[i + shift] = array->elements[i];
+        }
+    } else if (shift < 0) {
+        // Moving elements left to close gap
+        for (int64_t i = start + deleteCount; i < array->length; i++) {
+            array->elements[i + shift] = array->elements[i];
+        }
+    }
+
+    // Insert new items
+    for (int64_t i = 0; i < itemCount; i++) {
+        array->elements[start + i] = items[i];
+    }
+
+    // Update length
+    array->length = newLength;
+
+    // Write back to metadata
+    write_back_to_metadata(array_ptr, array);
+
     return array_ptr;
 }
 
@@ -894,6 +1043,7 @@ const char* nova_value_array_toString(void* array_ptr) {
 }
 
 // Array.flat() - flattens nested arrays one level deep (ES2019)
+// Array.flat() - flattens array by default depth of 1 (ES2019)
 // For now, creates a copy of the array (nested arrays not yet supported)
 // Returns new array
 void* nova_value_array_flat(void* array_ptr) {
@@ -905,6 +1055,29 @@ void* nova_value_array_flat(void* array_ptr) {
     }
 
     // Create new array with same length
+    nova::runtime::ValueArray* result = nova::runtime::create_value_array(array->length);
+    result->length = array->length;
+
+    // Copy elements from original array
+    std::memcpy(result->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Create metadata struct for the new array
+    return nova::runtime::create_metadata_from_value_array(result);
+}
+
+// Array.flat(depth) - flattens array to specified depth (ES2019)
+// depth parameter specifies how deep nested arrays should be flattened
+void* nova_value_array_flat_depth(void* array_ptr, int64_t depth) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || array->length == 0 || depth < 0) {
+        nova::runtime::ValueArray* empty = nova::runtime::create_value_array(0);
+        return nova::runtime::create_metadata_from_value_array(empty);
+    }
+
+    // Create new array with same length
+    // For simple value arrays, depth parameter doesn't change behavior
+    // since there are no nested arrays to flatten
     nova::runtime::ValueArray* result = nova::runtime::create_value_array(array->length);
     result->length = array->length;
 
@@ -945,6 +1118,9 @@ void* nova_value_array_flatMap(void* array_ptr, FlatMapCallbackFunc callback) {
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
+// Callback for Array.from with map function
+typedef int64_t (*ArrayFromMapFunc)(int64_t, int64_t);  // (element, index) -> transformed
+
 // Array.from(arrayLike) - creates new array from array-like object (ES2015)
 // Static method: Array.from(), not array.from()
 // Creates a shallow copy of the input array
@@ -964,6 +1140,36 @@ void* nova_array_from(void* array_ptr) {
 
     // Copy all elements (shallow copy)
     std::memcpy(resultArray->elements, array->elements, array->length * sizeof(int64_t));
+
+    // Return new array
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
+// Array.from(arrayLike, mapFn) - creates new array with map function (ES2015)
+// mapFn receives (element, index) and returns transformed value
+void* nova_array_from_map(void* array_ptr, ArrayFromMapFunc mapFn) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || array->length == 0) {
+        // Return empty array
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        emptyArray->length = 0;
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    // Create new array with same size
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(array->length);
+    resultArray->length = array->length;
+
+    if (mapFn) {
+        // Apply map function to each element
+        for (int64_t i = 0; i < array->length; i++) {
+            resultArray->elements[i] = mapFn(array->elements[i], i);
+        }
+    } else {
+        // No map function, just copy
+        std::memcpy(resultArray->elements, array->elements, array->length * sizeof(int64_t));
+    }
 
     // Return new array
     return nova::runtime::create_metadata_from_value_array(resultArray);

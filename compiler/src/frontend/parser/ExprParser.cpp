@@ -31,35 +31,132 @@ std::unique_ptr<Expr> Parser::parseExpression() {
 }
 
 std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
-    // Check for async arrow function: async (params) => body
-    bool isAsync = false;
+    // Check for async arrow function: async (params) => body or async x => body
     if (check(TokenType::KeywordAsync)) {
         size_t savedPos = current_;
         advance(); // consume 'async'
-        
-        // Check if it's followed by arrow function pattern
-        if (check(TokenType::Identifier) || check(TokenType::LeftParen)) {
-            // Look ahead for =>
-            size_t checkPos = current_;
-            if (check(TokenType::Identifier)) {
-                advance();
+
+        // Case 1: async (params) => body
+        if (check(TokenType::LeftParen)) {
+            advance(); // consume '('
+
+            std::vector<std::string> params;
+            std::vector<TypePtr> paramTypes;
+            bool couldBeArrow = true;
+
+            // Empty params: async () => body
+            if (check(TokenType::RightParen)) {
+                advance(); // consume ')'
+
+                // Check for optional return type
+                TypePtr returnType = nullptr;
+                if (match(TokenType::Colon)) {
+                    returnType = parseTypeAnnotation();
+                }
+
                 if (check(TokenType::Arrow)) {
-                    isAsync = true;
-                    current_ = checkPos; // restore to after 'async'
+                    advance(); // consume '=>'
+                    auto arrow = std::make_unique<ArrowFunctionExpr>();
+                    arrow->location = getCurrentLocation();
+                    arrow->isAsync = true;
+                    arrow->returnType = std::move(returnType);
+
+                    if (check(TokenType::LeftBrace)) {
+                        arrow->body = parseBlockStatement();
+                    } else {
+                        auto expr = parseAssignmentExpression();
+                        auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
+                        arrow->body = std::move(exprStmt);
+                    }
+                    return arrow;
                 } else {
-                    current_ = savedPos; // restore to before 'async'
+                    // Not an arrow function, restore
+                    current_ = savedPos;
                 }
             } else {
-                current_ = savedPos; // will check parenthesized later
-                isAsync = true;
+                // Parse parameter list
+                while (!check(TokenType::RightParen) && !isAtEnd()) {
+                    if (check(TokenType::Identifier)) {
+                        params.push_back(advance().value);
+
+                        // Optional type annotation
+                        TypePtr paramType = nullptr;
+                        if (match(TokenType::Colon)) {
+                            paramType = parseTypeAnnotation();
+                        }
+                        paramTypes.push_back(std::move(paramType));
+
+                        if (check(TokenType::RightParen)) break;
+                        if (!match(TokenType::Comma)) {
+                            couldBeArrow = false;
+                            break;
+                        }
+                    } else {
+                        couldBeArrow = false;
+                        break;
+                    }
+                }
+
+                if (couldBeArrow && match(TokenType::RightParen)) {
+                    // Check for optional return type
+                    TypePtr returnType = nullptr;
+                    if (match(TokenType::Colon)) {
+                        returnType = parseTypeAnnotation();
+                    }
+
+                    if (check(TokenType::Arrow)) {
+                        advance(); // consume '=>'
+                        auto arrow = std::make_unique<ArrowFunctionExpr>();
+                        arrow->location = getCurrentLocation();
+                        arrow->isAsync = true;
+                        arrow->params = std::move(params);
+                        arrow->paramTypes = std::move(paramTypes);
+                        arrow->returnType = std::move(returnType);
+
+                        if (check(TokenType::LeftBrace)) {
+                            arrow->body = parseBlockStatement();
+                        } else {
+                            auto expr = parseAssignmentExpression();
+                            auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
+                            arrow->body = std::move(exprStmt);
+                        }
+                        return arrow;
+                    }
+                }
+                // Not an arrow function, restore
+                current_ = savedPos;
             }
+        }
+        // Case 2: async x => body (single identifier)
+        else if (check(TokenType::Identifier)) {
+            Token id = advance();
+            if (check(TokenType::Arrow)) {
+                advance(); // consume '=>'
+                auto arrow = std::make_unique<ArrowFunctionExpr>();
+                arrow->location = id.location;
+                arrow->isAsync = true;
+                arrow->params.push_back(id.value);
+                arrow->paramTypes.push_back(nullptr);
+
+                if (check(TokenType::LeftBrace)) {
+                    arrow->body = parseBlockStatement();
+                } else {
+                    auto expr = parseAssignmentExpression();
+                    auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
+                    arrow->body = std::move(exprStmt);
+                }
+                return arrow;
+            }
+            // Not an arrow function, restore
+            current_ = savedPos;
         } else {
+            // Not async arrow, restore
             current_ = savedPos;
         }
     }
-    
-    // Check for arrow function: identifier => body
-    if (check(TokenType::Identifier) && !isAsync) {
+
+    // Check for non-async arrow function: identifier => body
+    if (check(TokenType::Identifier)) {
         size_t savedPos = current_;
         Token id = advance();
 
@@ -84,28 +181,6 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
         }
     }
 
-    // Check for async single param: async x => body
-    if (isAsync && check(TokenType::Identifier)) {
-        Token id = advance();
-        if (match(TokenType::Arrow)) {
-            auto arrow = std::make_unique<ArrowFunctionExpr>();
-            arrow->location = id.location;
-            arrow->isAsync = true;
-            arrow->params.push_back(id.value);
-            arrow->paramTypes.push_back(nullptr);  // No type annotation for single param
-
-            if (check(TokenType::LeftBrace)) {
-                arrow->body = parseBlockStatement();
-            } else {
-                auto expr = parseAssignmentExpression();
-                auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
-                arrow->body = std::move(exprStmt);
-            }
-
-            return arrow;
-        }
-    }
-    
     auto expr = parseConditionalExpression();
     
     // Check for assignment operators
@@ -392,25 +467,35 @@ std::unique_ptr<Expr> Parser::parseUnaryExpression() {
         return yieldExpr;
     }
     
+    // await expression
+    if (match(TokenType::KeywordAwait)) {
+        Token op = peek(-1);
+        auto argument = parseUnaryExpression();
+
+        auto awaitExpr = std::make_unique<AwaitExpr>(std::move(argument));
+        awaitExpr->location = op.location;
+
+        return awaitExpr;
+    }
+
     // Prefix operators
-    if (match(TokenType::Plus) || 
+    if (match(TokenType::Plus) ||
         match(TokenType::Minus) ||
         match(TokenType::Exclamation) ||
         match(TokenType::Tilde) ||
         match(TokenType::KeywordTypeof) ||
         match(TokenType::KeywordVoid) ||
-        match(TokenType::KeywordDelete) ||
-        match(TokenType::KeywordAwait)) {
+        match(TokenType::KeywordDelete)) {
         Token op = peek(-1);
         auto argument = parseUnaryExpression();
-        
+
         auto unary = std::make_unique<UnaryExpr>(
             tokenToUnaryOp(op.type),
             std::move(argument),
             true
         );
         unary->location = op.location;
-        
+
         return unary;
     }
     
@@ -436,18 +521,33 @@ std::unique_ptr<Expr> Parser::parsePostfixExpression() {
     auto expr = parsePrimaryExpression();
     
     while (true) {
-        // Member access: obj.prop
+        // Member access: obj.prop or obj.#privateField
         if (match(TokenType::Dot)) {
-            // Allow identifiers and keywords as property names (JavaScript behavior)
+            // Allow identifiers, keywords, and #privateField names (JavaScript behavior)
             Token prop;
-            if (check(TokenType::Identifier) || peek().isKeyword()) {
+            std::string propName;
+            
+            if (match(TokenType::Hash)) {
+                // Private field: #fieldName
+                if (check(TokenType::Identifier)) {
+                    Token fieldName = advance();
+                    propName = "#" + fieldName.value;
+                    prop = Token(TokenType::Identifier, propName, fieldName.location);
+                } else {
+                    reportError("Expected private field name after #");
+                    prop = Token(TokenType::Invalid, "", getCurrentLocation());
+                    propName = "";
+                }
+            } else if (check(TokenType::Identifier) || peek().isKeyword()) {
                 prop = advance();
+                propName = prop.value;
             } else {
                 reportError("Expected property name");
                 prop = Token(TokenType::Invalid, "", getCurrentLocation());
+                propName = "";
             }
 
-            auto propExpr = std::make_unique<Identifier>(prop.value);
+            auto propExpr = std::make_unique<Identifier>(propName);
             propExpr->location = prop.location;
             
             auto member = std::make_unique<MemberExpr>(
@@ -478,18 +578,25 @@ std::unique_ptr<Expr> Parser::parsePostfixExpression() {
         // Function call: func(args)
         else if (match(TokenType::LeftParen)) {
             std::vector<ExprPtr> arguments;
-            
+
             while (!check(TokenType::RightParen) && !isAtEnd()) {
-                arguments.push_back(parseAssignmentExpression());
+                // Check for spread argument: fn(...arr)
+                if (match(TokenType::DotDotDot)) {
+                    auto spread = std::make_unique<SpreadExpr>(parseAssignmentExpression());
+                    spread->location = getCurrentLocation();
+                    arguments.push_back(std::move(spread));
+                } else {
+                    arguments.push_back(parseAssignmentExpression());
+                }
                 if (!check(TokenType::RightParen)) {
                     consume(TokenType::Comma, "Expected ',' between arguments");
                 }
             }
             consume(TokenType::RightParen, "Expected ')' after arguments");
-            
+
             auto call = std::make_unique<CallExpr>(std::move(expr), std::move(arguments));
             call->location = getCurrentLocation();
-            
+
             expr = std::move(call);
         }
         // Optional chaining: obj?.prop
@@ -590,8 +697,9 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
     }
     
     // Literals
-    if (check(TokenType::NumberLiteral) || 
+    if (check(TokenType::NumberLiteral) ||
         check(TokenType::StringLiteral) ||
+        check(TokenType::RegexLiteral) ||
         check(TokenType::TrueLiteral) ||
         check(TokenType::FalseLiteral) ||
         check(TokenType::NullLiteral) ||
@@ -671,21 +779,36 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
             }
         }
 
-        if (couldBeArrow && match(TokenType::RightParen) && check(TokenType::Arrow)) {
-            advance(); // consume '=>'
-            auto arrow = std::make_unique<ArrowFunctionExpr>();
-            arrow->location = getCurrentLocation();
-            arrow->params = std::move(params);
-            arrow->paramTypes = std::move(paramTypes);
-            
-            if (check(TokenType::LeftBrace)) {
-                arrow->body = parseBlockStatement();
-            } else {
-                auto expr = parseAssignmentExpression();
-                auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
-                arrow->body = std::move(exprStmt);
+        if (couldBeArrow && match(TokenType::RightParen)) {
+            // Check for optional return type annotation before =>
+            TypePtr returnType = nullptr;
+            if (match(TokenType::Colon)) {
+                returnType = parseTypeAnnotation();
             }
-            return arrow;
+
+            if (check(TokenType::Arrow)) {
+                advance(); // consume '=>'
+                auto arrow = std::make_unique<ArrowFunctionExpr>();
+                arrow->location = getCurrentLocation();
+                arrow->params = std::move(params);
+                arrow->paramTypes = std::move(paramTypes);
+                arrow->returnType = std::move(returnType);
+
+                if (check(TokenType::LeftBrace)) {
+                    arrow->body = parseBlockStatement();
+                } else {
+                    auto expr = parseAssignmentExpression();
+                    auto exprStmt = std::make_unique<ExprStmt>(std::move(expr));
+                    arrow->body = std::move(exprStmt);
+                }
+                return arrow;
+            } else {
+                // Not arrow function, parse as grouped expression
+                current_ = savedPos;
+                auto expr = parseExpression();
+                consume(TokenType::RightParen, "Expected ')' after expression");
+                return expr;
+            }
         } else {
             // Not arrow function, parse as grouped expression
             current_ = savedPos;
@@ -696,10 +819,15 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
     }
     
     // Arrow function or function expression
-    if (check(TokenType::KeywordFunction)) {
+    if (match(TokenType::KeywordFunction)) {
         return parseFunctionExpression();
     }
-    
+
+    // Class expression: let C = class { ... }
+    if (match(TokenType::KeywordClass)) {
+        return parseClassExpression();
+    }
+
     // Template literal
     if (check(TokenType::TemplateLiteral)) {
         return parseTemplateLiteral();
@@ -804,6 +932,26 @@ std::unique_ptr<Expr> Parser::parseLiteral() {
             auto strLit = std::make_unique<StringLiteral>(lit.value);
             strLit->location = lit.location;
             return strLit;
+        }
+        case TokenType::RegexLiteral: {
+            // Parse regex literal: /pattern/flags
+            std::string value = lit.value;
+            // Remove leading /
+            if (value.length() > 0 && value[0] == '/') {
+                value = value.substr(1);
+            }
+            // Find the last / to separate pattern from flags
+            size_t lastSlash = value.rfind('/');
+            std::string pattern, flags;
+            if (lastSlash != std::string::npos) {
+                pattern = value.substr(0, lastSlash);
+                flags = value.substr(lastSlash + 1);
+            } else {
+                pattern = value;
+            }
+            auto regexLit = std::make_unique<RegexLiteralExpr>(pattern, flags);
+            regexLit->location = lit.location;
+            return regexLit;
         }
         case TokenType::TrueLiteral: {
             auto boolLit = std::make_unique<BooleanLiteral>(true);
@@ -1022,77 +1170,101 @@ std::unique_ptr<Expr> Parser::parseArrowFunction() {
 std::unique_ptr<Expr> Parser::parseClassExpression() {
     auto classExpr = std::make_unique<ClassExpr>();
     classExpr->location = getCurrentLocation();
-    
+
     // Optional name
     if (check(TokenType::Identifier)) {
         classExpr->name = advance().value;
     }
-    
+
     // Extends clause
     if (match(TokenType::KeywordExtends)) {
         Token parent = consume(TokenType::Identifier, "Expected parent class name");
         classExpr->superclass = parent.value;
     }
-    
+
     consume(TokenType::LeftBrace, "Expected '{' before class body");
-    
+
     // Parse class members
     while (!check(TokenType::RightBrace) && !isAtEnd()) {
-        // Static methods
+        // Static members
         bool isStatic = match(TokenType::KeywordStatic);
-        
+
         // Async methods
         bool isAsync = match(TokenType::KeywordAsync);
-        
+
         // Getter/Setter
         bool isGetter = match(TokenType::KeywordGet);
         bool isSetter = match(TokenType::KeywordSet);
-        
-        // Method name
-        Token name = consume(TokenType::Identifier, "Expected method name");
-        
-        ClassExpr::Method method;
-        method.name = name.value;
-        method.isStatic = isStatic;
-        method.isAsync = isAsync;
-        
-        if (isGetter) {
-            method.kind = ClassExpr::Method::Kind::Get;
-        } else if (isSetter) {
-            method.kind = ClassExpr::Method::Kind::Set;
-        } else if (name.value == "constructor") {
-            method.kind = ClassExpr::Method::Kind::Constructor;
-        } else {
-            method.kind = ClassExpr::Method::Kind::Method;
-        }
-        
-        // Parse parameters
-        consume(TokenType::LeftParen, "Expected '(' after method name");
-        
-        while (!check(TokenType::RightParen) && !isAtEnd()) {
-            Token param = consume(TokenType::Identifier, "Expected parameter name");
-            method.params.push_back(param.value);
-            
+
+        // Member name
+        Token name = consume(TokenType::Identifier, "Expected class member name");
+
+        // Check if it's a method (has parentheses) or property
+        if (check(TokenType::LeftParen)) {
+            // Method
+            ClassExpr::Method method;
+            method.name = name.value;
+            method.isStatic = isStatic;
+            method.isAsync = isAsync;
+
+            if (isGetter) {
+                method.kind = ClassExpr::Method::Kind::Get;
+            } else if (isSetter) {
+                method.kind = ClassExpr::Method::Kind::Set;
+            } else if (name.value == "constructor") {
+                method.kind = ClassExpr::Method::Kind::Constructor;
+            } else {
+                method.kind = ClassExpr::Method::Kind::Method;
+            }
+
+            // Parse parameters
+            consume(TokenType::LeftParen, "Expected '(' after method name");
+
+            while (!check(TokenType::RightParen) && !isAtEnd()) {
+                Token param = consume(TokenType::Identifier, "Expected parameter name");
+                method.params.push_back(param.value);
+
+                if (match(TokenType::Colon)) {
+                    parseTypeAnnotation();
+                }
+
+                if (!check(TokenType::RightParen)) {
+                    consume(TokenType::Comma, "Expected ',' between parameters");
+                }
+            }
+
+            consume(TokenType::RightParen, "Expected ')' after parameters");
+
+            // Return type
             if (match(TokenType::Colon)) {
-                parseTypeAnnotation();
+                method.returnType = parseTypeAnnotation();
             }
-            
-            if (!check(TokenType::RightParen)) {
-                consume(TokenType::Comma, "Expected ',' between parameters");
+
+            // Method body
+            method.body = parseBlockStatement();
+
+            classExpr->methods.push_back(std::move(method));
+        } else {
+            // Property
+            ClassExpr::Property prop;
+            prop.name = name.value;
+            prop.isStatic = isStatic;
+
+            // Type annotation
+            if (match(TokenType::Colon)) {
+                prop.type = parseTypeAnnotation();
             }
+
+            // Optional initializer
+            if (match(TokenType::Equal)) {
+                prop.initializer = parseAssignmentExpression();
+            }
+
+            // Optional semicolon
+            match(TokenType::Semicolon);
+
+            classExpr->properties.push_back(std::move(prop));
         }
-        
-        consume(TokenType::RightParen, "Expected ')' after parameters");
-        
-        // Return type
-        if (match(TokenType::Colon)) {
-            method.returnType = parseTypeAnnotation();
-        }
-        
-        // Method body
-        method.body = parseBlockStatement();
-        
-        classExpr->methods.push_back(std::move(method));
     }
     
     consume(TokenType::RightBrace, "Expected '}' after class body");

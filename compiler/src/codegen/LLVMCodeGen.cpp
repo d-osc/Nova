@@ -255,12 +255,11 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
     
     if (optLevel >= 2) {
         std::cerr << "DEBUG LLVM: Adding intermediate optimization passes (optLevel >= 2)" << std::endl;
-        // Intermediate optimizations that don't affect loop body operations
+        // Intermediate optimizations - removed second InstructionCombiningPass as it causes
+        // incorrect optimizations with generator pointer handling
         FPM->add(llvm::createDeadCodeEliminationPass());
-        FPM->add(llvm::createInstructionCombiningPass());
         FPM->add(llvm::createCFGSimplificationPass());
-        // We're now allowing DeadCodeEliminationPass since it doesn't affect loop body operations
-        std::cerr << "DEBUG LLVM: Added DeadCodeEliminationPass and other intermediate optimizations" << std::endl;
+        std::cerr << "DEBUG LLVM: Added DeadCodeEliminationPass and CFGSimplificationPass" << std::endl;
     }
     
     if (optLevel >= 3) {
@@ -3581,6 +3580,93 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 module.get()
                             );
                         }
+
+                        // Generator functions (ES2015)
+                        if (!callee && funcName == "nova_generator_create") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && (funcName == "nova_generator_next" || funcName == "nova_generator_return" || funcName == "nova_generator_throw")) {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_generator_yield") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_generator_set_state") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_generator_get_state") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_generator_complete") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_generator_store_local") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_generator_load_local") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_iterator_result_value") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_iterator_result_done") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        // AsyncGenerator functions (ES2018)
+                        if (!callee && funcName == "nova_async_generator_create") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && (funcName == "nova_async_generator_next" || funcName == "nova_async_generator_return" || funcName == "nova_async_generator_throw")) {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
                     }
                 }
             }
@@ -3627,6 +3713,33 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                             argValue = callbackFunc;  // Use function pointer instead of string
                                         } else {
                                             std::cerr << "DEBUG LLVM: WARNING - Function not found: " << funcName << std::endl;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Special handling for generator/async generator create: convert string to function pointer
+                    if ((calleeName == "nova_generator_create" || calleeName == "nova_async_generator_create") && argIdx == 0) {
+                        // First argument should be a function pointer, but comes as string constant
+                        if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
+                            std::cerr << "DEBUG LLVM: Detected string constant for generator function" << std::endl;
+
+                            // Try to extract the function name from the string constant
+                            if (globalStr->hasInitializer()) {
+                                if (auto* constData = llvm::dyn_cast<llvm::ConstantDataArray>(globalStr->getInitializer())) {
+                                    if (constData->isCString()) {
+                                        std::string funcName = constData->getAsCString().str();
+                                        std::cerr << "DEBUG LLVM: Extracted generator function name: " << funcName << std::endl;
+
+                                        // Look up the actual function
+                                        llvm::Function* genFunc = module->getFunction(funcName);
+                                        if (genFunc) {
+                                            std::cerr << "DEBUG LLVM: Found generator function, using function pointer" << std::endl;
+                                            argValue = genFunc;  // Use function pointer instead of string
+                                        } else {
+                                            std::cerr << "DEBUG LLVM: WARNING - Generator function not found: " << funcName << std::endl;
                                         }
                                     }
                                 }

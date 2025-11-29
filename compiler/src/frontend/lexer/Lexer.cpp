@@ -84,7 +84,8 @@ void Lexer::initializeKeywords() {
         {"asserts", TokenType::KeywordAsserts},
         {"enum", TokenType::KeywordEnum},
         {"unique", TokenType::KeywordUnique},
-        
+        {"using", TokenType::KeywordUsing},
+
         // Literals
         {"true", TokenType::TrueLiteral},
         {"false", TokenType::FalseLiteral},
@@ -93,48 +94,145 @@ void Lexer::initializeKeywords() {
     };
 }
 
+// Helper to check if last token type allows regex to follow
+bool canPrecedeRegex(TokenType type) {
+    switch (type) {
+        case TokenType::Invalid:  // Start of file
+        case TokenType::LeftParen:
+        case TokenType::LeftBracket:
+        case TokenType::LeftBrace:
+        case TokenType::Comma:
+        case TokenType::Semicolon:
+        case TokenType::Colon:
+        case TokenType::Question:
+        case TokenType::Plus:
+        case TokenType::Minus:
+        case TokenType::Star:
+        case TokenType::Slash:
+        case TokenType::Percent:
+        case TokenType::StarStar:
+        case TokenType::Less:
+        case TokenType::Greater:
+        case TokenType::LessEqual:
+        case TokenType::GreaterEqual:
+        case TokenType::EqualEqual:
+        case TokenType::ExclamationEqual:
+        case TokenType::EqualEqualEqual:
+        case TokenType::ExclamationEqualEqual:
+        case TokenType::Ampersand:
+        case TokenType::Pipe:
+        case TokenType::Caret:
+        case TokenType::AmpersandAmpersand:
+        case TokenType::PipePipe:
+        case TokenType::Equal:
+        case TokenType::PlusEqual:
+        case TokenType::MinusEqual:
+        case TokenType::StarEqual:
+        case TokenType::SlashEqual:
+        case TokenType::PercentEqual:
+        case TokenType::LessLess:
+        case TokenType::GreaterGreater:
+        case TokenType::GreaterGreaterGreater:
+        case TokenType::Arrow:
+        case TokenType::KeywordReturn:
+        case TokenType::KeywordThrow:
+        case TokenType::KeywordCase:
+        case TokenType::KeywordNew:
+        case TokenType::KeywordIn:
+        case TokenType::KeywordOf:
+        case TokenType::KeywordTypeof:
+        case TokenType::KeywordDelete:
+        case TokenType::KeywordVoid:
+        case TokenType::KeywordYield:
+        case TokenType::KeywordAwait:
+        case TokenType::KeywordIf:
+        case TokenType::KeywordElse:
+        case TokenType::KeywordWhile:
+        case TokenType::KeywordDo:
+        case TokenType::KeywordFor:
+        case TokenType::KeywordSwitch:
+        case TokenType::KeywordWith:
+        case TokenType::KeywordExport:
+        case TokenType::KeywordDefault:
+        case TokenType::Exclamation:
+        case TokenType::Tilde:
+        case TokenType::QuestionQuestion:
+            return true;
+        default:
+            return false;
+    }
+}
+
 Token Lexer::nextToken() {
     skipWhitespace();
-    
+
     if (position_ >= source_.length()) {
-        return Token(TokenType::EndOfFile, "", currentLocation());
+        Token token(TokenType::EndOfFile, "", currentLocation());
+        lastTokenType_ = token.type;
+        return token;
     }
-    
+
     char current = currentChar();
-    
+
     // Comments
     if (current == '/' && peekChar() == '/') {
         skipLineComment();
         return nextToken();
     }
-    
+
     if (current == '/' && peekChar() == '*') {
         skipBlockComment();
         return nextToken();
     }
-    
+
+    // Check for regex literal (context-dependent)
+    // A '/' starts a regex if the last token allows an expression to start
+    if (current == '/' && peekChar() != '=' && canPrecedeRegex(lastTokenType_)) {
+        Token token = lexRegex();
+        lastTokenType_ = token.type;
+        return token;
+    }
+
     // Numbers
     if (isDigit(current)) {
-        return lexNumber();
+        Token token = lexNumber();
+        lastTokenType_ = token.type;
+        return token;
     }
-    
+
     // Strings
     if (current == '"' || current == '\'') {
-        return lexString(current);
+        Token token = lexString(current);
+        lastTokenType_ = token.type;
+        return token;
     }
-    
+
     // Template literals
     if (current == '`') {
-        return lexTemplateLiteral();
+        Token token = lexTemplateLiteral();
+        lastTokenType_ = token.type;
+        return token;
     }
-    
+
     // Identifiers and keywords
     if (isIdentifierStart(current)) {
-        return lexIdentifierOrKeyword();
+        Token token = lexIdentifierOrKeyword();
+        lastTokenType_ = token.type;
+        return token;
     }
-    
+
     // Operators and punctuation
-    return lexOperator();
+    Token token = lexOperator();
+    lastTokenType_ = token.type;
+    return token;
+}
+
+Token Lexer::tryLexRegex() {
+    // If current char is '/', try to lex as regex regardless of context
+    if (position_ < source_.length() && currentChar() == '/') {
+        return lexRegex();
+    }
+    return Token(TokenType::Invalid, "", currentLocation());
 }
 
 void Lexer::skipWhitespace() {

@@ -82,7 +82,8 @@ enum class TokenType {
     KeywordAsserts,
     KeywordUnique,
     KeywordImplements,
-    
+    KeywordUsing,
+
     // Operators
     Plus,              // +
     Minus,             // -

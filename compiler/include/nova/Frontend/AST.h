@@ -69,6 +69,14 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+class RegexLiteralExpr : public Expr {
+public:
+    std::string pattern;
+    std::string flags;
+    RegexLiteralExpr(const std::string& p, const std::string& f) : pattern(p), flags(f) {}
+    void accept(ASTVisitor& visitor) override;
+};
+
 class BooleanLiteral : public Expr {
 public:
     bool value;
@@ -205,11 +213,12 @@ class FunctionExpr : public Expr {
 public:
     std::string name;  // optional for named function expressions
     std::vector<std::string> params;
+    std::string restParam;  // Rest parameter name (empty if none)
     StmtPtr body;
     bool isAsync = false;
     bool isGenerator = false;
     TypePtr returnType;
-    
+
     FunctionExpr() = default;
     void accept(ASTVisitor& visitor) override;
 };
@@ -218,6 +227,7 @@ class ArrowFunctionExpr : public Expr {
 public:
     std::vector<std::string> params;
     std::vector<TypePtr> paramTypes;  // Type annotations for parameters
+    std::string restParam;  // Rest parameter name (empty if none)
     StmtPtr body;  // Always a block statement or expression statement
     bool isAsync = false;
     TypePtr returnType;
@@ -228,6 +238,13 @@ public:
 
 class ClassExpr : public Expr {
 public:
+    struct Property {
+        std::string name;
+        TypePtr type;
+        ExprPtr initializer;
+        bool isStatic = false;
+    };
+
     struct Method {
         std::string name;
         std::vector<std::string> params;
@@ -237,11 +254,12 @@ public:
         bool isAsync = false;
         TypePtr returnType;
     };
-    
+
     std::string name;  // optional
     std::string superclass;
+    std::vector<Property> properties;
     std::vector<Method> methods;
-    
+
     ClassExpr() = default;
     void accept(ASTVisitor& visitor) override;
 };
@@ -553,7 +571,8 @@ public:
     enum class Kind { Var, Let, Const };
     
     struct Declarator {
-        std::string name;
+        std::string name;                    // Simple variable name (empty if using pattern)
+        std::unique_ptr<Pattern> pattern;    // Destructuring pattern (null for simple vars)
         ExprPtr init;
         TypePtr type;
     };
@@ -563,6 +582,19 @@ public:
     
     VarDeclStmt(Kind k, std::vector<Declarator> decls)
         : kind(k), declarations(std::move(decls)) {}
+    void accept(ASTVisitor& visitor) override;
+};
+
+// ES2024 Explicit Resource Management: using declaration
+class UsingStmt : public Stmt {
+public:
+    bool isAwait;  // true for 'await using', false for 'using'
+    std::string name;
+    ExprPtr init;
+    TypePtr type;
+
+    UsingStmt(bool await, const std::string& n, ExprPtr i, TypePtr t = nullptr)
+        : isAwait(await), name(n), init(i), type(t) {}
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -766,6 +798,8 @@ public:
     std::vector<std::string> params;
     std::vector<TypePtr> paramTypes;  // Type annotations for parameters
     std::vector<ExprPtr> defaultValues;  // Default values for parameters (nullptr if no default)
+    std::string restParam;  // Rest parameter name (empty if none), e.g., "args" in function(...args)
+    TypePtr restParamType;  // Type of rest parameter
     StmtPtr body;
     bool isAsync = false;
     bool isGenerator = false;
@@ -913,6 +947,7 @@ public:
     // Expressions
     virtual void visit(NumberLiteral& node) = 0;
     virtual void visit(StringLiteral& node) = 0;
+    virtual void visit(RegexLiteralExpr& node) = 0;
     virtual void visit(BooleanLiteral& node) = 0;
     virtual void visit(NullLiteral& node) = 0;
     virtual void visit(UndefinedLiteral& node) = 0;
@@ -966,6 +1001,7 @@ public:
     virtual void visit(BlockStmt& node) = 0;
     virtual void visit(ExprStmt& node) = 0;
     virtual void visit(VarDeclStmt& node) = 0;
+    virtual void visit(UsingStmt& node) = 0;
     virtual void visit(DeclStmt& node) = 0;
     virtual void visit(IfStmt& node) = 0;
     virtual void visit(WhileStmt& node) = 0;

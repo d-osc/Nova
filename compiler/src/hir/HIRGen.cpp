@@ -3,6 +3,7 @@
 #include "nova/Frontend/AST.h"
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <functional>
 #include <limits>
@@ -30,7 +31,40 @@ public:
     void visit(StringLiteral& node) override {
         lastValue_ = builder_->createStringConstant(node.value);
     }
-    
+
+    void visit(RegexLiteralExpr& node) override {
+        // Create a call to nova_regex_create(pattern, flags) runtime function
+        auto patternConst = builder_->createStringConstant(node.pattern);
+        auto flagsConst = builder_->createStringConstant(node.flags);
+
+        // Create call to runtime function to create regex object
+        std::vector<HIRValue*> args = { patternConst, flagsConst };
+
+        // Get or create the nova_regex_create function
+        HIRFunction* regexCreateFunc = nullptr;
+        auto& functions = module_->functions;
+        for (auto& func : functions) {
+            if (func->name == "nova_regex_create") {
+                regexCreateFunc = func.get();
+                break;
+            }
+        }
+        if (!regexCreateFunc) {
+            // Declare the function
+            std::vector<HIRTypePtr> paramTypes;
+            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Any);  // Returns regex handle
+
+            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_regex_create", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            regexCreateFunc = funcPtr.get();
+        }
+
+        lastValue_ = builder_->createCall(regexCreateFunc, args, "regex");
+    }
+
     void visit(BooleanLiteral& node) override {
         lastValue_ = builder_->createBoolConstant(node.value);
     }
@@ -47,11 +81,41 @@ public:
         lastValue_ = builder_->createNullConstant(undefType.get());
     }
     
-    void visit(Identifier& node) override {
-        // Look up variable in symbol table
-        auto it = symbolTable_.find(node.name);
+    // Helper to look up variable in current scope and parent scopes (for closures)
+    HIRValue* lookupVariable(const std::string& name) {
+        // Check current scope first
+        auto it = symbolTable_.find(name);
         if (it != symbolTable_.end()) {
-            auto value = it->second;
+            return it->second;
+        }
+        // Check parent scopes (for closure support)
+        for (auto scopeIt = scopeStack_.rbegin(); scopeIt != scopeStack_.rend(); ++scopeIt) {
+            auto varIt = scopeIt->find(name);
+            if (varIt != scopeIt->end()) {
+                return varIt->second;
+            }
+        }
+        return nullptr;
+    }
+
+    void visit(Identifier& node) override {
+        // Inside generators, check if this variable is stored in generator local slots
+        // and load from there to ensure cross-yield persistence
+        if (currentGeneratorPtr_ && generatorLoadLocalFunc_) {
+            auto slotIt = generatorVarSlots_.find(node.name);
+            if (slotIt != generatorVarSlots_.end()) {
+                // Load from generator local storage
+                auto* genPtr = builder_->createLoad(currentGeneratorPtr_);
+                auto* slotConst = builder_->createIntConstant(slotIt->second);
+                std::vector<HIRValue*> loadArgs = {genPtr, slotConst};
+                lastValue_ = builder_->createCall(generatorLoadLocalFunc_, loadArgs, node.name);
+                return;
+            }
+        }
+
+        // Look up variable in symbol table and parent scopes
+        HIRValue* value = lookupVariable(node.name);
+        if (value) {
             // Check if this is an alloca (memory location)
             // Try to cast to HIRInstruction to check the opcode
             try {
@@ -3111,6 +3175,108 @@ public:
                         lastValue_ = builder_->createCall(runtimeFunc, args, "array_of_result");
                         return;
                     }
+
+                    // TypedArray.from() static methods
+                    static std::unordered_set<std::string> typedArrayTypes = {
+                        "Int8Array", "Uint8Array", "Uint8ClampedArray",
+                        "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+                        "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"
+                    };
+
+                    if (typedArrayTypes.count(objIdent->name) && propIdent->name == "from") {
+                        std::cerr << "DEBUG HIRGen: Detected static method call: " << objIdent->name << ".from" << std::endl;
+
+                        if (node.arguments.size() != 1) {
+                            std::cerr << "ERROR: " << objIdent->name << ".from() expects 1 argument" << std::endl;
+                            lastValue_ = nullptr;
+                            return;
+                        }
+
+                        node.arguments[0]->accept(*this);
+                        auto* arrayArg = lastValue_;
+
+                        // Determine runtime function name based on type
+                        std::string runtimeFuncName;
+                        if (objIdent->name == "Int8Array") runtimeFuncName = "nova_int8array_from";
+                        else if (objIdent->name == "Uint8Array" || objIdent->name == "Uint8ClampedArray") runtimeFuncName = "nova_uint8array_from";
+                        else if (objIdent->name == "Int16Array") runtimeFuncName = "nova_int16array_from";
+                        else if (objIdent->name == "Uint16Array") runtimeFuncName = "nova_uint16array_from";
+                        else if (objIdent->name == "Int32Array") runtimeFuncName = "nova_int32array_from";
+                        else if (objIdent->name == "Uint32Array") runtimeFuncName = "nova_uint32array_from";
+                        else if (objIdent->name == "Float32Array") runtimeFuncName = "nova_float32array_from";
+                        else if (objIdent->name == "Float64Array") runtimeFuncName = "nova_float64array_from";
+                        else runtimeFuncName = "nova_int32array_from";  // default
+
+                        std::vector<HIRTypePtr> paramTypes = {std::make_shared<HIRType>(HIRType::Kind::Pointer)};
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto existingFunc = module_->getFunction(runtimeFuncName);
+                        if (existingFunc) {
+                            runtimeFunc = existingFunc.get();
+                        } else {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                        }
+
+                        std::vector<HIRValue*> args = {arrayArg};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "typedarray_from_result");
+                        lastTypedArrayType_ = objIdent->name;
+                        return;
+                    }
+
+                    if (typedArrayTypes.count(objIdent->name) && propIdent->name == "of") {
+                        std::cerr << "DEBUG HIRGen: Detected static method call: " << objIdent->name << ".of" << std::endl;
+
+                        std::vector<HIRValue*> elementValues;
+                        for (auto& arg : node.arguments) {
+                            arg->accept(*this);
+                            elementValues.push_back(lastValue_);
+                        }
+
+                        // Determine runtime function name
+                        std::string runtimeFuncName;
+                        if (objIdent->name == "Int32Array") runtimeFuncName = "nova_int32array_of";
+                        else if (objIdent->name == "Uint8Array" || objIdent->name == "Uint8ClampedArray") runtimeFuncName = "nova_uint8array_of";
+                        else if (objIdent->name == "Float64Array") runtimeFuncName = "nova_float64array_of";
+                        else runtimeFuncName = "nova_int32array_of";  // default
+
+                        // Parameters: count + up to 8 values
+                        std::vector<HIRTypePtr> paramTypes;
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // count
+                        for (int i = 0; i < 8; i++) {
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        }
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto existingFunc = module_->getFunction(runtimeFuncName);
+                        if (existingFunc) {
+                            runtimeFunc = existingFunc.get();
+                        } else {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                        }
+
+                        // Build args: count + elements (padded to 8)
+                        std::vector<HIRValue*> args;
+                        args.push_back(builder_->createIntConstant(elementValues.size()));
+                        for (size_t i = 0; i < 8; i++) {
+                            if (i < elementValues.size()) {
+                                args.push_back(elementValues[i]);
+                            } else {
+                                args.push_back(builder_->createIntConstant(0));
+                            }
+                        }
+
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "typedarray_of_result");
+                        lastTypedArrayType_ = objIdent->name;
+                        return;
+                    }
                 }
             }
         }
@@ -3798,6 +3964,73 @@ public:
                         return;
                     }
 
+                    // Promise static methods (ES2015)
+                    if (objIdent->name == "Promise" && propIdent->name == "resolve") {
+                        // Promise.resolve(value) - creates a resolved promise
+                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.resolve" << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        std::vector<HIRTypePtr> paramTypes = {intType};
+                        auto existingFunc = module_->getFunction("nova_promise_resolve");
+                        HIRFunction* func = nullptr;
+                        if (existingFunc) {
+                            func = existingFunc.get();
+                        } else {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("nova_promise_resolve", funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            func = funcPtr.get();
+                        }
+
+                        std::vector<HIRValue*> args;
+                        if (node.arguments.size() > 0) {
+                            node.arguments[0]->accept(*this);
+                            args.push_back(lastValue_);
+                        } else {
+                            args.push_back(builder_->createIntConstant(0));
+                        }
+
+                        lastValue_ = builder_->createCall(func, args, "promise_resolve");
+                        lastValue_->type = ptrType;
+                        lastWasPromise_ = true;
+                        return;
+                    }
+
+                    if (objIdent->name == "Promise" && propIdent->name == "reject") {
+                        // Promise.reject(reason) - creates a rejected promise
+                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.reject" << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        std::vector<HIRTypePtr> paramTypes = {intType};
+                        auto existingFunc = module_->getFunction("nova_promise_reject");
+                        HIRFunction* func = nullptr;
+                        if (existingFunc) {
+                            func = existingFunc.get();
+                        } else {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("nova_promise_reject", funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            func = funcPtr.get();
+                        }
+
+                        std::vector<HIRValue*> args;
+                        if (node.arguments.size() > 0) {
+                            node.arguments[0]->accept(*this);
+                            args.push_back(lastValue_);
+                        } else {
+                            args.push_back(builder_->createIntConstant(0));
+                        }
+
+                        lastValue_ = builder_->createCall(func, args, "promise_reject");
+                        lastValue_->type = ptrType;
+                        lastWasPromise_ = true;
+                        return;
+                    }
+
                     if (objIdent->name == "Date" && propIdent->name == "now") {
                         // Date.now() - returns current timestamp in milliseconds since Unix epoch (ES5)
                         std::cerr << "DEBUG HIRGen: Detected static method call: Date.now" << std::endl;
@@ -3872,6 +4105,44 @@ public:
                         std::vector<HIRValue*> args = {}; // no arguments
                         lastValue_ = builder_->createCall(runtimeFunc, args, "performance_now_result");
                         return;
+                    }
+                }
+            }
+        }
+
+        // Check if this is a STATIC class method call: ClassName.method(...)
+        // Must check BEFORE string/number methods to avoid evaluating class names as objects
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    // Check if object identifier is a known class name
+                    if (classNames_.find(objIdent->name) != classNames_.end()) {
+                        std::string className = objIdent->name;
+                        std::string methodName = propIdent->name;
+                        std::string mangledName = className + "_" + methodName;
+                        
+                        // Check if this is a static method
+                        if (staticMethods_.find(mangledName) != staticMethods_.end()) {
+                            std::cerr << "DEBUG HIRGen: Static method call: " << mangledName << std::endl;
+                            
+                            // Generate arguments (NO 'this' for static methods)
+                            std::vector<HIRValue*> args;
+                            for (auto& arg : node.arguments) {
+                                arg->accept(*this);
+                                args.push_back(lastValue_);
+                            }
+                            
+                            // Lookup the static method function
+                            auto func = module_->getFunction(mangledName);
+                            if (func) {
+                                lastValue_ = builder_->createCall(func.get(), args, "static_method_call");
+                                return;
+                            } else {
+                                std::cerr << "ERROR HIRGen: Static method not found: " << mangledName << std::endl;
+                                lastValue_ = builder_->createIntConstant(0);
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -4063,6 +4334,13 @@ public:
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    } else if (methodName == "search") {
+                        // str.search(regex) - find first match index
+                        std::cerr << "DEBUG HIRGen: Detected string method call: search" << std::endl;
+                        runtimeFuncName = "nova_string_search";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));  // regex object
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
                     } else {
                         std::cerr << "DEBUG HIRGen: Unknown string method: " << methodName << std::endl;
                         lastValue_ = nullptr;
@@ -4186,6 +4464,879 @@ public:
                     // Create call to runtime function
                     lastValue_ = builder_->createCall(runtimeFunc, args, "num_method");
                     return;
+                }
+
+                // Check if object is a TypedArray
+                if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                    auto typeIt = typedArrayTypes_.find(objIdent->name);
+                    if (typeIt != typedArrayTypes_.end()) {
+                        std::cerr << "DEBUG HIRGen: Detected TypedArray method call: " << methodName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        std::string runtimeFuncName;
+                        std::vector<HIRTypePtr> paramTypes;
+                        HIRTypePtr returnType = intType;
+                        bool hasReturnValue = false;
+                        int expectedArgs = 0;
+
+                        if (methodName == "slice") {
+                            runtimeFuncName = "nova_typedarray_slice";
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 2;
+                        } else if (methodName == "subarray") {
+                            runtimeFuncName = "nova_typedarray_subarray";
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 2;
+                        } else if (methodName == "fill") {
+                            runtimeFuncName = "nova_typedarray_fill";
+                            paramTypes = {ptrType, intType, intType, intType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 1;  // value is required, start/end are optional
+                        } else if (methodName == "copyWithin") {
+                            runtimeFuncName = "nova_typedarray_copyWithin";
+                            paramTypes = {ptrType, intType, intType, intType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 3;
+                        } else if (methodName == "reverse") {
+                            runtimeFuncName = "nova_typedarray_reverse";
+                            paramTypes = {ptrType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                        } else if (methodName == "indexOf") {
+                            runtimeFuncName = "nova_typedarray_indexOf";
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = intType;
+                            hasReturnValue = true;
+                            expectedArgs = 1;  // searchElement is required, fromIndex is optional
+                        } else if (methodName == "includes") {
+                            runtimeFuncName = "nova_typedarray_includes";
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = intType;
+                            hasReturnValue = true;
+                            expectedArgs = 1;  // searchElement is required, fromIndex is optional
+                        } else if (methodName == "set") {
+                            runtimeFuncName = "nova_typedarray_set_array";
+                            paramTypes = {ptrType, ptrType, intType};
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                            hasReturnValue = false;
+                            expectedArgs = 2;
+                        } else if (methodName == "at") {
+                            runtimeFuncName = "nova_typedarray_at";
+                            paramTypes = {ptrType, intType};
+                            returnType = intType;
+                            hasReturnValue = true;
+                            expectedArgs = 1;
+                        } else if (methodName == "lastIndexOf") {
+                            runtimeFuncName = "nova_typedarray_lastIndexOf";
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = intType;
+                            hasReturnValue = true;
+                            expectedArgs = 2;  // searchElement required, fromIndex optional
+                        } else if (methodName == "sort") {
+                            runtimeFuncName = "nova_typedarray_sort";
+                            paramTypes = {ptrType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                        } else if (methodName == "toSorted") {
+                            runtimeFuncName = "nova_typedarray_toSorted";
+                            paramTypes = {ptrType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                        } else if (methodName == "toReversed") {
+                            runtimeFuncName = "nova_typedarray_toReversed";
+                            paramTypes = {ptrType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                        } else if (methodName == "join") {
+                            runtimeFuncName = "nova_typedarray_join";
+                            paramTypes = {ptrType, std::make_shared<HIRType>(HIRType::Kind::String)};
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                            hasReturnValue = true;
+                            expectedArgs = 1;
+                        } else if (methodName == "keys") {
+                            runtimeFuncName = "nova_typedarray_keys";
+                            paramTypes = {ptrType};
+                            // Return proper array type so .length works
+                            auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto arrayType = std::make_shared<HIRArrayType>(elementType, 0);
+                            returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                            lastWasRuntimeArray_ = true;  // Mark for runtime array tracking
+                        } else if (methodName == "values") {
+                            runtimeFuncName = "nova_typedarray_values";
+                            paramTypes = {ptrType};
+                            // Return proper array type so .length works
+                            auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto arrayType = std::make_shared<HIRArrayType>(elementType, 0);
+                            returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                            lastWasRuntimeArray_ = true;  // Mark for runtime array tracking
+                        } else if (methodName == "entries") {
+                            runtimeFuncName = "nova_typedarray_entries";
+                            paramTypes = {ptrType};
+                            // Return proper array type so .length works (array of pairs)
+                            auto elementType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto arrayType = std::make_shared<HIRArrayType>(elementType, 0);
+                            returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                            lastWasRuntimeArray_ = true;  // Mark for runtime array tracking
+                        } else if (methodName == "toString") {
+                            runtimeFuncName = "nova_typedarray_toString";
+                            paramTypes = {ptrType};
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                            hasReturnValue = true;
+                            expectedArgs = 0;
+                        } else if (methodName == "with") {
+                            // TypedArray.prototype.with(index, value) - ES2023
+                            // Use type-specific functions based on the array type
+                            std::string typedArrayType = typeIt->second;
+                            if (typedArrayType == "Int8Array") runtimeFuncName = "nova_int8array_with";
+                            else if (typedArrayType == "Uint8Array") runtimeFuncName = "nova_uint8array_with";
+                            else if (typedArrayType == "Uint8ClampedArray") runtimeFuncName = "nova_uint8clampedarray_with";
+                            else if (typedArrayType == "Int16Array") runtimeFuncName = "nova_int16array_with";
+                            else if (typedArrayType == "Uint16Array") runtimeFuncName = "nova_uint16array_with";
+                            else if (typedArrayType == "Int32Array") runtimeFuncName = "nova_int32array_with";
+                            else if (typedArrayType == "Uint32Array") runtimeFuncName = "nova_uint32array_with";
+                            else if (typedArrayType == "Float32Array") runtimeFuncName = "nova_float32array_with";
+                            else if (typedArrayType == "Float64Array") runtimeFuncName = "nova_float64array_with";
+                            else if (typedArrayType == "BigInt64Array") runtimeFuncName = "nova_bigint64array_with";
+                            else if (typedArrayType == "BigUint64Array") runtimeFuncName = "nova_biguint64array_with";
+                            else runtimeFuncName = "nova_int32array_with";  // Default
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = ptrType;
+                            hasReturnValue = true;
+                            expectedArgs = 2;
+                        }
+                        // TypedArray callback methods - handle separately
+                        else if (methodName == "map" || methodName == "filter" ||
+                                 methodName == "forEach" || methodName == "some" ||
+                                 methodName == "every" || methodName == "find" ||
+                                 methodName == "findIndex" || methodName == "findLast" ||
+                                 methodName == "findLastIndex" || methodName == "reduce" ||
+                                 methodName == "reduceRight") {
+                            std::cerr << "DEBUG HIRGen: Detected TypedArray callback method: " << methodName << std::endl;
+
+                            // Determine function signature based on method
+                            std::string funcName = "nova_typedarray_" + methodName;
+                            std::vector<HIRTypePtr> callbackParamTypes = {ptrType, ptrType};  // array, callback
+                            HIRTypePtr callbackReturnType = intType;
+                            bool callbackHasReturn = true;
+                            bool isReduceMethod = false;
+
+                            if (methodName == "map" || methodName == "filter") {
+                                callbackReturnType = ptrType;  // returns new TypedArray
+                            } else if (methodName == "forEach") {
+                                callbackReturnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                                callbackHasReturn = false;
+                            } else if (methodName == "reduce" || methodName == "reduceRight") {
+                                callbackParamTypes.push_back(intType);  // initial value
+                                isReduceMethod = true;
+                            }
+
+                            // Create or get function
+                            auto existingFunc = module_->getFunction(funcName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(callbackParamTypes, callbackReturnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(funcName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            // Evaluate object
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            // Prepare arguments
+                            std::vector<HIRValue*> args = {objectVal};
+
+                            // Process callback argument (first argument)
+                            if (node.arguments.size() > 0) {
+                                std::string savedFuncName = lastFunctionName_;
+                                lastFunctionName_ = "";
+
+                                node.arguments[0]->accept(*this);
+
+                                if (!lastFunctionName_.empty()) {
+                                    // Arrow function callback
+                                    std::cerr << "DEBUG HIRGen: TypedArray callback function: " << lastFunctionName_ << std::endl;
+                                    HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
+                                    args.push_back(funcNameValue);
+                                    lastFunctionName_ = "";
+                                } else {
+                                    args.push_back(lastValue_);
+                                }
+                            }
+
+                            // For reduce methods, add initial value
+                            if (isReduceMethod && node.arguments.size() > 1) {
+                                node.arguments[1]->accept(*this);
+                                args.push_back(lastValue_);
+                            } else if (isReduceMethod) {
+                                args.push_back(builder_->createIntConstant(0));  // default initial value
+                            }
+
+                            lastValue_ = builder_->createCall(func, args, "typedarray_callback_method");
+                            if (callbackHasReturn) {
+                                lastValue_->type = callbackReturnType;
+                            }
+
+                            // For map/filter, register result as TypedArray
+                            if (methodName == "map" || methodName == "filter") {
+                                lastTypedArrayType_ = typedArrayTypes_[objIdent->name];
+                            }
+                            return;
+                        }
+
+                        if (!runtimeFuncName.empty()) {
+                            // Get or create function
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            // Evaluate object
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            // Prepare arguments
+                            std::vector<HIRValue*> args = {objectVal};
+
+                            // Add method arguments with defaults
+                            for (size_t i = 0; i < node.arguments.size() && i < static_cast<size_t>(expectedArgs); ++i) {
+                                node.arguments[i]->accept(*this);
+                                args.push_back(lastValue_);
+                            }
+                            // Fill remaining args with defaults
+                            // args[0] = object, args[1+] = method arguments
+                            while (args.size() < paramTypes.size()) {
+                                if (methodName == "fill") {
+                                    if (args.size() == 2) {
+                                        args.push_back(builder_->createIntConstant(0));  // start default = 0
+                                    } else if (args.size() == 3) {
+                                        args.push_back(builder_->createIntConstant(0x7FFFFFFFFFFFFFFF)); // end default = MAX (will be clamped to length)
+                                    } else {
+                                        args.push_back(builder_->createIntConstant(0));
+                                    }
+                                } else if (methodName == "indexOf" || methodName == "includes") {
+                                    if (args.size() == 2) {
+                                        args.push_back(builder_->createIntConstant(0));  // fromIndex default = 0
+                                    } else {
+                                        args.push_back(builder_->createIntConstant(0));
+                                    }
+                                } else if (methodName == "lastIndexOf") {
+                                    if (args.size() == 2) {
+                                        args.push_back(builder_->createIntConstant(0x7FFFFFFFFFFFFFFF));  // fromIndex default = MAX
+                                    } else {
+                                        args.push_back(builder_->createIntConstant(0));
+                                    }
+                                } else if (methodName == "join") {
+                                    if (args.size() == 1) {
+                                        // Default separator is ","
+                                        auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
+                                        auto comma = builder_->createStringConstant(",");
+                                        args.push_back(comma);
+                                    } else {
+                                        args.push_back(builder_->createStringConstant(","));
+                                    }
+                                } else if (methodName == "set") {
+                                    if (args.size() == 2) {
+                                        args.push_back(builder_->createIntConstant(0));  // offset default = 0
+                                    } else {
+                                        args.push_back(builder_->createIntConstant(0));
+                                    }
+                                } else if (methodName == "slice" || methodName == "subarray") {
+                                    if (args.size() == 1) {
+                                        args.push_back(builder_->createIntConstant(0));  // begin default = 0
+                                    } else if (args.size() == 2) {
+                                        args.push_back(builder_->createIntConstant(0x7FFFFFFFFFFFFFFF)); // end default = MAX (clamped to length)
+                                    } else {
+                                        args.push_back(builder_->createIntConstant(0));
+                                    }
+                                } else if (methodName == "copyWithin") {
+                                    if (args.size() == 2) {
+                                        args.push_back(builder_->createIntConstant(0));  // start default
+                                    } else if (args.size() == 3) {
+                                        args.push_back(builder_->createIntConstant(0x7FFFFFFFFFFFFFFF)); // end default = MAX
+                                    } else {
+                                        args.push_back(builder_->createIntConstant(0));
+                                    }
+                                } else {
+                                    args.push_back(builder_->createIntConstant(0));
+                                }
+                            }
+
+                            lastValue_ = builder_->createCall(func, args, "typedarray_method");
+                            if (hasReturnValue) {
+                                lastValue_->type = returnType;
+                            }
+
+                            // For methods that return a new TypedArray, register the type for the result
+                            if (methodName == "slice" || methodName == "subarray" ||
+                                methodName == "toSorted" || methodName == "toReversed" ||
+                                methodName == "with") {
+                                lastTypedArrayType_ = typedArrayTypes_[objIdent->name];
+                                std::cerr << "DEBUG HIRGen: TypedArray method " << methodName
+                                          << " returns type: " << lastTypedArrayType_ << std::endl;
+                            }
+                            return;
+                        }
+                    }
+
+                    // Check if this is a DataView method call
+                    if (dataViewVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: Detected DataView method call: " << methodName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto floatType = std::make_shared<HIRType>(HIRType::Kind::F64);
+
+                        std::string runtimeFuncName;
+                        std::vector<HIRTypePtr> paramTypes;
+                        HIRTypePtr returnType = intType;
+                        int expectedArgs = 0;
+                        bool isGetter = true;  // getters vs setters have different arg counts
+
+                        // DataView getter methods
+                        if (methodName == "getInt8" || methodName == "getUint8") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType};
+                            returnType = intType;
+                            expectedArgs = 1;
+                        } else if (methodName == "getInt16" || methodName == "getUint16" ||
+                                   methodName == "getInt32" || methodName == "getUint32") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = intType;
+                            expectedArgs = 2;  // byteOffset, littleEndian (optional)
+                        } else if (methodName == "getFloat32" || methodName == "getFloat64") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = floatType;
+                            expectedArgs = 2;
+                        }
+                        // DataView setter methods
+                        else if (methodName == "setInt8" || methodName == "setUint8") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                            expectedArgs = 2;  // byteOffset, value
+                            isGetter = false;
+                        } else if (methodName == "setInt16" || methodName == "setUint16" ||
+                                   methodName == "setInt32" || methodName == "setUint32") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType, intType, intType};
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                            expectedArgs = 3;  // byteOffset, value, littleEndian (optional)
+                            isGetter = false;
+                        } else if (methodName == "setFloat32" || methodName == "setFloat64") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType, floatType, intType};
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                            expectedArgs = 3;
+                            isGetter = false;
+                        }
+                        // DataView BigInt methods
+                        else if (methodName == "getBigInt64" || methodName == "getBigUint64") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType, intType};
+                            returnType = intType;
+                            expectedArgs = 2;  // byteOffset, littleEndian (optional)
+                        } else if (methodName == "setBigInt64" || methodName == "setBigUint64") {
+                            runtimeFuncName = "nova_dataview_" + methodName;
+                            paramTypes = {ptrType, intType, intType, intType};
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                            expectedArgs = 3;  // byteOffset, value, littleEndian (optional)
+                            isGetter = false;
+                        }
+
+                        if (!runtimeFuncName.empty()) {
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            // Evaluate object
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            std::vector<HIRValue*> args = {objectVal};
+
+                            // Add method arguments
+                            for (size_t i = 0; i < node.arguments.size() && i < static_cast<size_t>(expectedArgs); ++i) {
+                                node.arguments[i]->accept(*this);
+                                args.push_back(lastValue_);
+                            }
+
+                            // Fill defaults - littleEndian defaults to false (0)
+                            while (args.size() < paramTypes.size()) {
+                                args.push_back(builder_->createIntConstant(0));
+                            }
+
+                            lastValue_ = builder_->createCall(func, args, "dataview_method");
+                            if (returnType->kind != HIRType::Kind::Void) {
+                                lastValue_->type = returnType;
+                            }
+                            return;
+                        }
+                    }
+
+                    // Check if this is a DisposableStack method call
+                    if (disposableStackVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: Detected DisposableStack method call: " << methodName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                        std::string runtimeFuncName;
+                        std::vector<HIRTypePtr> paramTypes;
+                        HIRTypePtr returnType = voidType;
+                        int expectedArgs = 0;
+
+                        if (methodName == "use") {
+                            // use(value, disposeFunc) - adds resource, returns value
+                            runtimeFuncName = "nova_disposablestack_use";
+                            paramTypes = {ptrType, ptrType, ptrType};
+                            returnType = ptrType;
+                            expectedArgs = 2;
+                        } else if (methodName == "adopt") {
+                            // adopt(value, onDispose) - adds value with custom callback
+                            runtimeFuncName = "nova_disposablestack_adopt";
+                            paramTypes = {ptrType, ptrType, ptrType};
+                            returnType = ptrType;
+                            expectedArgs = 2;
+                        } else if (methodName == "defer") {
+                            // defer(onDispose) - adds callback to be called
+                            runtimeFuncName = "nova_disposablestack_defer";
+                            paramTypes = {ptrType, ptrType};
+                            returnType = voidType;
+                            expectedArgs = 1;
+                        } else if (methodName == "dispose") {
+                            // dispose() - disposes all resources
+                            runtimeFuncName = "nova_disposablestack_dispose";
+                            paramTypes = {ptrType};
+                            returnType = voidType;
+                            expectedArgs = 0;
+                        } else if (methodName == "move") {
+                            // move() - transfers ownership to new stack
+                            runtimeFuncName = "nova_disposablestack_move";
+                            paramTypes = {ptrType};
+                            returnType = ptrType;
+                            expectedArgs = 0;
+                        }
+
+                        if (!runtimeFuncName.empty()) {
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            // Evaluate object
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            std::vector<HIRValue*> args = {objectVal};
+
+                            // Special handling for callback methods (defer, use, adopt)
+                            bool hasCallback = (methodName == "defer" || methodName == "use" || methodName == "adopt");
+
+                            if (hasCallback && node.arguments.size() > 0) {
+                                // For use/adopt, first argument is the value
+                                if (methodName == "use" || methodName == "adopt") {
+                                    node.arguments[0]->accept(*this);
+                                    args.push_back(lastValue_);
+                                }
+
+                                // Get callback argument index (0 for defer, 1 for use/adopt)
+                                size_t callbackIdx = (methodName == "defer") ? 0 : 1;
+
+                                if (node.arguments.size() > callbackIdx) {
+                                    std::string savedFuncName = lastFunctionName_;
+                                    lastFunctionName_ = "";
+
+                                    node.arguments[callbackIdx]->accept(*this);
+
+                                    if (!lastFunctionName_.empty()) {
+                                        // Arrow function or function expression - pass name as string
+                                        std::cerr << "DEBUG HIRGen: DisposableStack callback function: " << lastFunctionName_ << std::endl;
+                                        HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
+                                        args.push_back(funcNameValue);
+                                        lastFunctionName_ = "";
+                                    } else {
+                                        // Named function reference
+                                        args.push_back(lastValue_);
+                                    }
+                                }
+                            } else {
+                                // Non-callback methods (dispose, move)
+                                for (size_t i = 0; i < node.arguments.size() && i < static_cast<size_t>(expectedArgs); ++i) {
+                                    node.arguments[i]->accept(*this);
+                                    args.push_back(lastValue_);
+                                }
+                            }
+
+                            lastValue_ = builder_->createCall(func, args, "disposablestack_method");
+                            if (returnType->kind != HIRType::Kind::Void) {
+                                lastValue_->type = returnType;
+                            }
+
+                            // For move(), track that the result is also a DisposableStack
+                            if (methodName == "move") {
+                                lastWasDisposableStack_ = true;
+                                std::cerr << "DEBUG HIRGen: DisposableStack.move() returns a new DisposableStack" << std::endl;
+                            }
+                            return;
+                        }
+                    }
+
+                    // Check if this is an AsyncDisposableStack method call
+                    if (asyncDisposableStackVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: Detected AsyncDisposableStack method call: " << methodName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                        std::string runtimeFuncName;
+                        std::vector<HIRTypePtr> paramTypes;
+                        HIRTypePtr returnType = voidType;
+                        int expectedArgs = 0;
+
+                        if (methodName == "use") {
+                            runtimeFuncName = "nova_asyncdisposablestack_use";
+                            paramTypes = {ptrType, ptrType, ptrType};
+                            returnType = ptrType;
+                            expectedArgs = 2;
+                        } else if (methodName == "adopt") {
+                            runtimeFuncName = "nova_asyncdisposablestack_adopt";
+                            paramTypes = {ptrType, ptrType, ptrType};
+                            returnType = ptrType;
+                            expectedArgs = 2;
+                        } else if (methodName == "defer") {
+                            runtimeFuncName = "nova_asyncdisposablestack_defer";
+                            paramTypes = {ptrType, ptrType};
+                            returnType = voidType;
+                            expectedArgs = 1;
+                        } else if (methodName == "disposeAsync") {
+                            runtimeFuncName = "nova_asyncdisposablestack_disposeAsync";
+                            paramTypes = {ptrType};
+                            returnType = voidType;
+                            expectedArgs = 0;
+                        } else if (methodName == "move") {
+                            runtimeFuncName = "nova_asyncdisposablestack_move";
+                            paramTypes = {ptrType};
+                            returnType = ptrType;
+                            expectedArgs = 0;
+                        }
+
+                        if (!runtimeFuncName.empty()) {
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            std::vector<HIRValue*> args = {objectVal};
+
+                            // Special handling for callback methods (defer, use, adopt)
+                            bool hasCallback = (methodName == "defer" || methodName == "use" || methodName == "adopt");
+
+                            if (hasCallback && node.arguments.size() > 0) {
+                                // For use/adopt, first argument is the value
+                                if (methodName == "use" || methodName == "adopt") {
+                                    node.arguments[0]->accept(*this);
+                                    args.push_back(lastValue_);
+                                }
+
+                                // Get callback argument index (0 for defer, 1 for use/adopt)
+                                size_t callbackIdx = (methodName == "defer") ? 0 : 1;
+
+                                if (node.arguments.size() > callbackIdx) {
+                                    std::string savedFuncName = lastFunctionName_;
+                                    lastFunctionName_ = "";
+
+                                    node.arguments[callbackIdx]->accept(*this);
+
+                                    if (!lastFunctionName_.empty()) {
+                                        std::cerr << "DEBUG HIRGen: AsyncDisposableStack callback function: " << lastFunctionName_ << std::endl;
+                                        HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
+                                        args.push_back(funcNameValue);
+                                        lastFunctionName_ = "";
+                                    } else {
+                                        args.push_back(lastValue_);
+                                    }
+                                }
+                            } else {
+                                for (size_t i = 0; i < node.arguments.size() && i < static_cast<size_t>(expectedArgs); ++i) {
+                                    node.arguments[i]->accept(*this);
+                                    args.push_back(lastValue_);
+                                }
+                            }
+
+                            lastValue_ = builder_->createCall(func, args, "asyncdisposablestack_method");
+                            if (returnType->kind != HIRType::Kind::Void) {
+                                lastValue_->type = returnType;
+                            }
+
+                            // For move(), track that the result is also an AsyncDisposableStack
+                            if (methodName == "move") {
+                                lastWasAsyncDisposableStack_ = true;
+                                std::cerr << "DEBUG HIRGen: AsyncDisposableStack.move() returns a new AsyncDisposableStack" << std::endl;
+                            }
+                            return;
+                        }
+                    }
+
+                    // Check if this is a Promise method call
+                    if (promiseVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: Detected Promise method call: " << methodName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                        std::string runtimeFuncName;
+                        std::vector<HIRTypePtr> paramTypes;
+                        HIRTypePtr returnType = ptrType;  // Most Promise methods return Promise
+
+                        if (methodName == "then") {
+                            // then(onFulfilled) - returns new Promise
+                            runtimeFuncName = "nova_promise_then";
+                            paramTypes = {ptrType, ptrType};
+                            returnType = ptrType;
+                        } else if (methodName == "catch") {
+                            // catch(onRejected) - returns new Promise
+                            runtimeFuncName = "nova_promise_catch";
+                            paramTypes = {ptrType, ptrType};
+                            returnType = ptrType;
+                        } else if (methodName == "finally") {
+                            // finally(onFinally) - returns new Promise
+                            runtimeFuncName = "nova_promise_finally";
+                            paramTypes = {ptrType, ptrType};
+                            returnType = ptrType;
+                        }
+
+                        if (!runtimeFuncName.empty()) {
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            // Evaluate object (the promise)
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            std::vector<HIRValue*> args = {objectVal};
+
+                            // Handle callback argument
+                            if (node.arguments.size() > 0) {
+                                std::string savedFuncName = lastFunctionName_;
+                                lastFunctionName_ = "";
+
+                                node.arguments[0]->accept(*this);
+
+                                if (!lastFunctionName_.empty()) {
+                                    // Arrow function or function expression - pass name as string
+                                    std::cerr << "DEBUG HIRGen: Promise callback function: " << lastFunctionName_ << std::endl;
+                                    HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
+                                    args.push_back(funcNameValue);
+                                    lastFunctionName_ = "";
+                                } else {
+                                    args.push_back(lastValue_);
+                                }
+                            } else {
+                                // No callback provided, pass null (as integer 0)
+                                auto nullVal = builder_->createIntConstant(0);
+                                args.push_back(nullVal);
+                            }
+
+                            lastValue_ = builder_->createCall(func, args, "promise_method");
+                            lastValue_->type = returnType;
+
+                            // then/catch/finally return a new Promise
+                            lastWasPromise_ = true;
+                            std::cerr << "DEBUG HIRGen: Promise." << methodName << "() returns a new Promise" << std::endl;
+                            return;
+                        }
+                    }
+
+                    // Check if this is an AsyncGenerator method call (next, return, throw)
+                    if (asyncGeneratorVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: Detected AsyncGenerator method call: " << methodName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        std::string runtimeFuncName;
+                        std::vector<HIRTypePtr> paramTypes;
+                        HIRTypePtr returnType = ptrType;  // Methods return Promise<IteratorResult>*
+
+                        if (methodName == "next") {
+                            // next(value?) - returns Promise<IteratorResult>
+                            runtimeFuncName = "nova_async_generator_next";
+                            paramTypes = {ptrType, intType};
+                            returnType = ptrType;
+                        } else if (methodName == "return") {
+                            // return(value) - returns Promise<IteratorResult>
+                            runtimeFuncName = "nova_async_generator_return";
+                            paramTypes = {ptrType, intType};
+                            returnType = ptrType;
+                        } else if (methodName == "throw") {
+                            // throw(error) - returns Promise<IteratorResult>
+                            runtimeFuncName = "nova_async_generator_throw";
+                            paramTypes = {ptrType, intType};
+                            returnType = ptrType;
+                        }
+
+                        if (!runtimeFuncName.empty()) {
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            // Evaluate object (the async generator)
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            // Get argument value (default to 0)
+                            HIRValue* argVal = builder_->createIntConstant(0);
+                            if (node.arguments.size() > 0) {
+                                node.arguments[0]->accept(*this);
+                                argVal = lastValue_;
+                            }
+
+                            std::vector<HIRValue*> args = {objectVal, argVal};
+                            lastValue_ = builder_->createCall(func, args);
+                            lastValue_->type = returnType;
+
+                            // Mark that this returns an IteratorResult (for synchronous compilation)
+                            // Also mark as Promise for future full async support
+                            lastWasIteratorResult_ = true;
+                            lastWasPromise_ = true;
+
+                            std::cerr << "DEBUG HIRGen: AsyncGenerator." << methodName << "() called" << std::endl;
+                            return;
+                        }
+                    }
+
+                    // Check if this is a Generator method call (next, return, throw)
+                    if (generatorVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: Detected Generator method call: " << methodName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        std::string runtimeFuncName;
+                        std::vector<HIRTypePtr> paramTypes;
+                        HIRTypePtr returnType = ptrType;  // Methods return IteratorResult*
+
+                        if (methodName == "next") {
+                            // next(value?) - returns IteratorResult
+                            runtimeFuncName = "nova_generator_next";
+                            paramTypes = {ptrType, intType};
+                            returnType = ptrType;
+                        } else if (methodName == "return") {
+                            // return(value) - returns IteratorResult
+                            runtimeFuncName = "nova_generator_return";
+                            paramTypes = {ptrType, intType};
+                            returnType = ptrType;
+                        } else if (methodName == "throw") {
+                            // throw(error) - returns IteratorResult
+                            runtimeFuncName = "nova_generator_throw";
+                            paramTypes = {ptrType, intType};
+                            returnType = ptrType;
+                        }
+
+                        if (!runtimeFuncName.empty()) {
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            // Evaluate object (the generator)
+                            memberExpr->object->accept(*this);
+                            auto objectVal = lastValue_;
+
+                            // Get argument value (default to 0)
+                            HIRValue* argVal = builder_->createIntConstant(0);
+                            if (node.arguments.size() > 0) {
+                                node.arguments[0]->accept(*this);
+                                argVal = lastValue_;
+                            }
+
+                            std::vector<HIRValue*> args = {objectVal, argVal};
+                            lastValue_ = builder_->createCall(func, args);
+                            lastValue_->type = returnType;
+
+                            // Mark that this returns an IteratorResult
+                            lastWasIteratorResult_ = true;
+
+                            std::cerr << "DEBUG HIRGen: Generator." << methodName << "() called" << std::endl;
+                            return;
+                        }
+                    }
                 }
 
                 // Check if object is an array type
@@ -4590,10 +5741,69 @@ public:
                     }
                     return;
                 }
+
+                // Check if object is a regex type (Any type from regex literal)
+                // Handle regex methods: test(), exec()
+                bool isRegexMethod = object && object->type &&
+                                    object->type->kind == hir::HIRType::Kind::Any;
+
+                if (isRegexMethod && (methodName == "test" || methodName == "exec")) {
+                    std::cerr << "DEBUG HIRGen: Detected regex method call: " << methodName << std::endl;
+
+                    // Generate arguments
+                    std::vector<HIRValue*> args;
+                    args.push_back(object);  // First argument is the regex object
+                    for (auto& arg : node.arguments) {
+                        arg->accept(*this);
+                        args.push_back(lastValue_);
+                    }
+
+                    // Create or get runtime function based on method name
+                    std::string runtimeFuncName;
+                    std::vector<HIRTypePtr> paramTypes;
+                    HIRTypePtr returnType;
+
+                    if (methodName == "test") {
+                        // regex.test(str) - returns boolean (1 if match, 0 if not)
+                        runtimeFuncName = "nova_regex_test";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));    // regex object
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String)); // string to test
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);             // returns int64 (0 or 1)
+                    } else if (methodName == "exec") {
+                        // regex.exec(str) - returns match string or null
+                        runtimeFuncName = "nova_regex_exec";
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));    // regex object
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String)); // string to match
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);          // returns string (match result)
+                    }
+
+                    // Check if function already exists
+                    HIRFunction* runtimeFunc = nullptr;
+                    auto& funcs = module_->functions;
+                    for (auto& func : funcs) {
+                        if (func->name == runtimeFuncName) {
+                            runtimeFunc = func.get();
+                            break;
+                        }
+                    }
+
+                    // Create function if it doesn't exist
+                    if (!runtimeFunc) {
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                        HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        runtimeFunc = funcPtr.get();
+                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    }
+
+                    // Create call to runtime function
+                    lastValue_ = builder_->createCall(runtimeFunc, args, "regex_method");
+                    return;
+                }
             }
         }
 
-        // Check if this is a class method call: obj.method(...)
+        // Check if this is an instance class method call: obj.method(...)
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             // Get the object
             memberExpr->object->accept(*this);
@@ -4698,6 +5908,127 @@ public:
                 }
             }
 
+            // Check if this is an async generator function call (ES2018)
+            if (asyncGeneratorFuncs_.count(id->name) > 0) {
+                std::cerr << "DEBUG HIRGen: Detected async generator function call: " << id->name << std::endl;
+
+                // Create async generator object with nova_async_generator_create(funcPtr, initialState)
+                auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                HIRTypePtr returnType = ptrType;
+
+                std::string runtimeFuncName = "nova_async_generator_create";
+                auto existingFunc = module_->getFunction(runtimeFuncName);
+                HIRFunction* createFunc = nullptr;
+                if (existingFunc) {
+                    createFunc = existingFunc.get();
+                } else {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    createFunc = funcPtr.get();
+                }
+
+                // Get function pointer for the generator body
+                auto genFunc = module_->getFunction(id->name);
+                HIRValue* funcPtrVal = nullptr;
+                if (genFunc) {
+                    funcPtrVal = builder_->createStringConstant(id->name);
+                } else {
+                    funcPtrVal = builder_->createIntConstant(0);
+                }
+
+                // Initial state = 0
+                HIRValue* initialState = builder_->createIntConstant(0);
+
+                std::vector<HIRValue*> createArgs = {funcPtrVal, initialState};
+                lastValue_ = builder_->createCall(createFunc, createArgs);
+                lastValue_->type = ptrType;
+
+                // Mark for variable tracking
+                lastWasAsyncGenerator_ = true;
+                lastWasGenerator_ = false;  // Not a regular generator
+
+                std::cerr << "DEBUG HIRGen: Created async generator object for " << id->name << std::endl;
+                return;
+            }
+
+            // Check if this is a generator function call (ES2015)
+            if (generatorFuncs_.count(id->name) > 0) {
+                std::cerr << "DEBUG HIRGen: Detected generator function call: " << id->name << std::endl;
+
+                // Create generator object with nova_generator_create(funcPtr, initialState)
+                auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                HIRTypePtr returnType = ptrType;
+
+                std::string runtimeFuncName = "nova_generator_create";
+                auto existingFunc = module_->getFunction(runtimeFuncName);
+                HIRFunction* createFunc = nullptr;
+                if (existingFunc) {
+                    createFunc = existingFunc.get();
+                } else {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    createFunc = funcPtr.get();
+                }
+
+                // Get function pointer for the generator body
+                auto genFunc = module_->getFunction(id->name);
+                HIRValue* funcPtrVal = nullptr;
+                if (genFunc) {
+                    // Create a string constant for the function name that will be resolved at runtime
+                    funcPtrVal = builder_->createStringConstant(id->name);
+                } else {
+                    funcPtrVal = builder_->createIntConstant(0);
+                }
+
+                // Initial state = 0
+                HIRValue* initialState = builder_->createIntConstant(0);
+
+                std::vector<HIRValue*> createArgs = {funcPtrVal, initialState};
+                auto* genPtr = builder_->createCall(createFunc, createArgs);
+                genPtr->type = ptrType;
+
+                // Store function arguments in generator local slots
+                // Arguments go in slots starting from index 100 (to avoid collision with body locals)
+                if (!args.empty()) {
+                    // Get or create nova_generator_store_local function
+                    std::string storeLocalFuncName = "nova_generator_store_local";
+                    auto existingStoreLocal = module_->getFunction(storeLocalFuncName);
+                    HIRFunction* storeLocalFunc = nullptr;
+                    if (existingStoreLocal) {
+                        storeLocalFunc = existingStoreLocal.get();
+                    } else {
+                        std::vector<HIRTypePtr> storeLocalParamTypes = {ptrType, intType, intType};
+                        HIRFunctionType* funcType = new HIRFunctionType(storeLocalParamTypes, voidType);
+                        HIRFunctionPtr funcPtr = module_->createFunction(storeLocalFuncName, funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        storeLocalFunc = funcPtr.get();
+                    }
+
+                    // Store each argument at slot 100+i
+                    for (size_t i = 0; i < args.size(); ++i) {
+                        auto* slotIndex = builder_->createIntConstant(100 + static_cast<int>(i));
+                        std::vector<HIRValue*> storeArgs = {genPtr, slotIndex, args[i]};
+                        builder_->createCall(storeLocalFunc, storeArgs);
+                        std::cerr << "DEBUG HIRGen: Stored generator arg " << i << " at slot " << (100 + i) << std::endl;
+                    }
+                }
+
+                lastValue_ = genPtr;
+
+                // Mark for variable tracking
+                lastWasGenerator_ = true;
+
+                std::cerr << "DEBUG HIRGen: Created generator object for " << id->name << std::endl;
+                return;
+            }
+
             // Direct function call
             auto func = module_->getFunction(id->name);
             if (func) {
@@ -4791,6 +6122,20 @@ public:
                         return;
                     }
                 }
+
+                // Check for static property access (e.g., Config.version)
+                auto staticClassIt = classStaticProps_.find(objIdent->name);
+                if (staticClassIt != classStaticProps_.end()) {
+                    if (staticClassIt->second.find(propIdent->name) != staticClassIt->second.end()) {
+                        std::string propKey = objIdent->name + "_" + propIdent->name;
+                        auto valueIt = staticPropertyValues_.find(propKey);
+                        if (valueIt != staticPropertyValues_.end()) {
+                            std::cerr << "DEBUG HIRGen: Static property access " << propKey << " = " << valueIt->second << std::endl;
+                            lastValue_ = builder_->createIntConstant(valueIt->second);
+                            return;
+                        }
+                    }
+                }
             }
         }
 
@@ -4803,12 +6148,293 @@ public:
             node.property->accept(*this);
             auto index = lastValue_;
 
-            // Create GetElement instruction for array indexing
+            // Check if this is runtime array element access (from keys(), values(), entries())
+            if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                if (runtimeArrayVars_.count(objIdent->name) > 0) {
+                    std::cerr << "DEBUG HIRGen: Runtime array element access on " << objIdent->name << std::endl;
+
+                    auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                    // Use nova_value_array_at for runtime arrays
+                    std::string runtimeFunc = "nova_value_array_at";
+                    auto existingFunc = module_->getFunction(runtimeFunc);
+                    HIRFunction* func = nullptr;
+                    if (existingFunc) {
+                        func = existingFunc.get();
+                    } else {
+                        std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                        HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        func = funcPtr.get();
+                    }
+
+                    std::vector<HIRValue*> args = {object, index};
+                    lastValue_ = builder_->createCall(func, args, "runtime_elem");
+                    lastValue_->type = intType;
+                    return;
+                }
+            }
+
+            // Check if this is TypedArray element access
+            if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                auto typeIt = typedArrayTypes_.find(objIdent->name);
+                if (typeIt != typedArrayTypes_.end()) {
+                    std::string typedArrayType = typeIt->second;
+                    std::cerr << "DEBUG HIRGen: TypedArray element access on " << objIdent->name
+                              << " (type: " << typedArrayType << ")" << std::endl;
+
+                    // Determine runtime function name
+                    std::string runtimeFunc;
+                    if (typedArrayType == "Int8Array") runtimeFunc = "nova_int8array_get";
+                    else if (typedArrayType == "Uint8Array") runtimeFunc = "nova_uint8array_get";
+                    else if (typedArrayType == "Uint8ClampedArray") runtimeFunc = "nova_uint8clampedarray_get";
+                    else if (typedArrayType == "Int16Array") runtimeFunc = "nova_int16array_get";
+                    else if (typedArrayType == "Uint16Array") runtimeFunc = "nova_uint16array_get";
+                    else if (typedArrayType == "Int32Array") runtimeFunc = "nova_int32array_get";
+                    else if (typedArrayType == "Uint32Array") runtimeFunc = "nova_uint32array_get";
+                    else if (typedArrayType == "Float32Array") runtimeFunc = "nova_float32array_get";
+                    else if (typedArrayType == "Float64Array") runtimeFunc = "nova_float64array_get";
+                    else if (typedArrayType == "BigInt64Array") runtimeFunc = "nova_bigint64array_get";
+                    else if (typedArrayType == "BigUint64Array") runtimeFunc = "nova_biguint64array_get";
+
+                    if (!runtimeFunc.empty()) {
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        // Determine return type (float for Float32/Float64, i64 otherwise)
+                        HIRTypePtr returnType;
+                        if (typedArrayType == "Float32Array" || typedArrayType == "Float64Array") {
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
+                        } else {
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        }
+
+                        std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                        auto existingFunc = module_->getFunction(runtimeFunc);
+                        HIRFunction* func = nullptr;
+                        if (existingFunc) {
+                            func = existingFunc.get();
+                        } else {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            func = funcPtr.get();
+                        }
+
+                        std::vector<HIRValue*> args = {object, index};
+                        lastValue_ = builder_->createCall(func, args, "typed_elem");
+                        lastValue_->type = returnType;
+                        return;
+                    }
+                }
+            }
+
+            // Create GetElement instruction for regular array indexing
             lastValue_ = builder_->createGetElement(object, index, "elem");
         } else {
             // Regular member: obj.property (struct field access)
             if (auto propExpr = dynamic_cast<Identifier*>(node.property.get())) {
                 std::string propertyName = propExpr->name;
+
+                // Check if this is TypedArray property access
+                if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                    auto typeIt = typedArrayTypes_.find(objIdent->name);
+                    if (typeIt != typedArrayTypes_.end()) {
+                        std::cerr << "DEBUG HIRGen: TypedArray property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        std::string runtimeFunc;
+                        HIRTypePtr returnType = intType;
+
+                        if (propertyName == "length") {
+                            runtimeFunc = "nova_typedarray_length";
+                        } else if (propertyName == "byteLength") {
+                            runtimeFunc = "nova_typedarray_byteLength";
+                        } else if (propertyName == "byteOffset") {
+                            runtimeFunc = "nova_typedarray_byteOffset";
+                        } else if (propertyName == "buffer") {
+                            runtimeFunc = "nova_typedarray_buffer";
+                            returnType = ptrType;
+                        } else if (propertyName == "BYTES_PER_ELEMENT") {
+                            runtimeFunc = "nova_typedarray_BYTES_PER_ELEMENT";
+                        }
+
+                        if (!runtimeFunc.empty()) {
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction(runtimeFunc);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "typedarray_prop");
+                            lastValue_->type = returnType;
+                            return;
+                        }
+                    }
+
+                    // Check if this is runtime array property access (from keys(), values(), entries())
+                    if (runtimeArrayVars_.count(objIdent->name) > 0 && propertyName == "length") {
+                        std::cerr << "DEBUG HIRGen: Runtime array length access on " << objIdent->name << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        std::string runtimeFunc = "nova_value_array_length";
+                        auto existingFunc = module_->getFunction(runtimeFunc);
+                        HIRFunction* func = nullptr;
+                        if (existingFunc) {
+                            func = existingFunc.get();
+                        } else {
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            func = funcPtr.get();
+                        }
+
+                        std::vector<HIRValue*> args = {object};
+                        lastValue_ = builder_->createCall(func, args, "runtime_array_len");
+                        lastValue_->type = intType;
+                        return;
+                    }
+
+                    // Check if this is ArrayBuffer property access
+                    if (arrayBufferVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: ArrayBuffer property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        if (propertyName == "byteLength") {
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_arraybuffer_byteLength");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_arraybuffer_byteLength", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "arraybuffer_byteLength");
+                            lastValue_->type = intType;
+                            return;
+                        }
+                    }
+
+                    // Check if this is DisposableStack property access
+                    if (disposableStackVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: DisposableStack property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        if (propertyName == "disposed") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_disposablestack_get_disposed");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_disposablestack_get_disposed", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "disposed");
+                            lastValue_->type = intType;
+                            return;
+                        }
+                    }
+
+                    // Check if this is AsyncDisposableStack property access
+                    if (asyncDisposableStackVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: AsyncDisposableStack property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        if (propertyName == "disposed") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_asyncdisposablestack_get_disposed");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_asyncdisposablestack_get_disposed", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "disposed");
+                            lastValue_->type = intType;
+                            return;
+                        }
+                    }
+
+                    // Check if this is IteratorResult property access (.value or .done)
+                    if (iteratorResultVars_.count(objIdent->name) > 0) {
+                        std::cerr << "DEBUG HIRGen: IteratorResult property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto boolType = std::make_shared<HIRType>(HIRType::Kind::Bool);
+
+                        if (propertyName == "value") {
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_iterator_result_value");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_iterator_result_value", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "iter_value");
+                            lastValue_->type = intType;
+                            return;
+                        } else if (propertyName == "done") {
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_iterator_result_done");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, boolType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_iterator_result_done", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "iter_done");
+                            lastValue_->type = intType;  // Use i64 for bool compatibility
+                            return;
+                        }
+                    }
+                }
 
                 // Try to get the struct type from the object
                 uint32_t fieldIndex = 0;
@@ -4827,19 +6453,29 @@ public:
                     std::cerr << "DEBUG HIRGen: Object type kind=" << static_cast<int>(object->type->kind) << std::endl;
                     std::cerr << "DEBUG HIRGen: Object type ptr=" << object->type.get() << std::endl;
 
-                    // Try to cast to HIRPointerType
-                    hir::HIRPointerType* ptrTypeCast = dynamic_cast<hir::HIRPointerType*>(object->type.get());
-                    std::cerr << "DEBUG HIRGen: dynamic_cast result=" << ptrTypeCast << std::endl;
-
-                    // Check if it's a pointer to struct
-                    if (auto ptrType = ptrTypeCast) {
-                        std::cerr << "DEBUG HIRGen: Object is a pointer type" << std::endl;
-                        if (ptrType->pointeeType) {
-                            std::cerr << "DEBUG HIRGen: Pointee type kind=" << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
-                        }
-                        structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
+                    // First check if object is directly a struct type
+                    if (object->type->kind == hir::HIRType::Kind::Struct) {
+                        structType = dynamic_cast<hir::HIRStructType*>(object->type.get());
                         if (structType) {
-                            std::cerr << "DEBUG HIRGen: Pointee is a struct with " << structType->fields.size() << " fields" << std::endl;
+                            std::cerr << "DEBUG HIRGen: Object is directly a struct with " << structType->fields.size() << " fields" << std::endl;
+                        }
+                    }
+                    // Otherwise try pointer to struct
+                    else {
+                        // Try to cast to HIRPointerType
+                        hir::HIRPointerType* ptrTypeCast = dynamic_cast<hir::HIRPointerType*>(object->type.get());
+                        std::cerr << "DEBUG HIRGen: dynamic_cast result=" << ptrTypeCast << std::endl;
+
+                        // Check if it's a pointer to struct
+                        if (auto ptrType = ptrTypeCast) {
+                            std::cerr << "DEBUG HIRGen: Object is a pointer type" << std::endl;
+                            if (ptrType->pointeeType) {
+                                std::cerr << "DEBUG HIRGen: Pointee type kind=" << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
+                            }
+                            structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
+                            if (structType) {
+                                std::cerr << "DEBUG HIRGen: Pointee is a struct with " << structType->fields.size() << " fields" << std::endl;
+                            }
                         }
                     }
                 }
@@ -4852,6 +6488,26 @@ public:
                             found = true;
                             std::cerr << "  DEBUG: Found field '" << propertyName << "' at index " << fieldIndex << std::endl;
                             break;
+                        }
+                    }
+                }
+
+                // Check if this property has a getter
+                if (structType) {
+                    std::string className = structType->name;
+                    auto getterClassIt = classGetters_.find(className);
+                    if (getterClassIt != classGetters_.end()) {
+                        if (getterClassIt->second.find(propertyName) != getterClassIt->second.end()) {
+                            // This property has a getter - call the getter function
+                            std::string getterName = className + "_get_" + propertyName;
+                            std::cerr << "DEBUG HIRGen: Calling getter " << getterName << std::endl;
+                            
+                            auto getterFunc = module_->getFunction(getterName);
+                            if (getterFunc) {
+                                std::vector<HIRValue*> args = { object };
+                                lastValue_ = builder_->createCall(getterFunc.get(), args, "getter_result");
+                                return;
+                            }
                         }
                     }
                 }
@@ -5049,8 +6705,91 @@ public:
     }
     
     void visit(FunctionExpr& node) override {
-        (void)node;
-        // Anonymous function expression
+        // Function expression: let f = function(a, b) { return a + b; }
+
+        // Helper to convert AST Type::Kind to HIR HIRType::Kind
+        auto convertTypeKind = [](Type::Kind astKind) -> HIRType::Kind {
+            switch (astKind) {
+                case Type::Kind::Void: return HIRType::Kind::Void;
+                case Type::Kind::Number: return HIRType::Kind::I64;
+                case Type::Kind::String: return HIRType::Kind::String;
+                case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::Any: return HIRType::Kind::Any;
+                default: return HIRType::Kind::Any;
+            }
+        };
+
+        // Create function type with parameter types
+        std::vector<HIRTypePtr> paramTypes;
+        for (size_t i = 0; i < node.params.size(); ++i) {
+            // FunctionExpr doesn't have paramTypes in AST, use Any for now
+            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));
+        }
+
+        // Return type
+        HIRType::Kind retTypeKind = HIRType::Kind::Any;
+        if (node.returnType) {
+            retTypeKind = convertTypeKind(node.returnType->kind);
+        }
+        auto retType = std::make_shared<HIRType>(retTypeKind);
+
+        auto funcType = new HIRFunctionType(paramTypes, retType);
+
+        // Generate unique name for function expression
+        static int funcExprCounter = 0;
+        std::string funcName = node.name.empty() ?
+            "__func_" + std::to_string(funcExprCounter++) : node.name;
+
+        // Create function
+        auto func = module_->createFunction(funcName, funcType);
+        func->isAsync = node.isAsync;
+        func->isGenerator = node.isGenerator;
+
+        // Save current function context
+        HIRFunction* savedFunction = currentFunction_;
+        currentFunction_ = func.get();
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Save current builder
+        auto savedBuilder = std::move(builder_);
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // Save current symbol table and push to scope stack for closure support
+        auto savedSymbolTable = symbolTable_;
+        scopeStack_.push_back(savedSymbolTable);
+
+        // Clear symbol table for the new function scope
+        symbolTable_.clear();
+
+        // Add parameters to symbol table
+        for (size_t i = 0; i < node.params.size(); ++i) {
+            symbolTable_[node.params[i]] = func->parameters[i];
+        }
+
+        // Generate function body
+        if (node.body) {
+            node.body->accept(*this);
+
+            // Add implicit return if needed
+            if (!entryBlock->hasTerminator()) {
+                builder_->createReturn(nullptr);
+            }
+        }
+
+        // Restore context
+        scopeStack_.pop_back();
+        symbolTable_ = savedSymbolTable;
+        builder_ = std::move(savedBuilder);
+        currentFunction_ = savedFunction;
+
+        // Store the function name so it can be associated with a variable
+        lastFunctionName_ = funcName;
+
+        // Return a placeholder value representing the function reference
+        lastValue_ = builder_->createIntConstant(0);
     }
     
     void visit(ArrowFunctionExpr& node) override {
@@ -5108,8 +6847,12 @@ public:
         builder_ = std::make_unique<HIRBuilder>(module_, func.get());
         builder_->setInsertPoint(entryBlock.get());
 
-        // Save current symbol table
+        // Save current symbol table and push to scope stack for closure support
         auto savedSymbolTable = symbolTable_;
+        scopeStack_.push_back(savedSymbolTable);  // Push for closure access
+
+        // Clear symbol table for the new function scope
+        symbolTable_.clear();
 
         // Add parameters to symbol table
         for (size_t i = 0; i < node.params.size(); ++i) {
@@ -5136,6 +6879,7 @@ public:
         }
 
         // Restore context
+        scopeStack_.pop_back();  // Pop closure scope
         symbolTable_ = savedSymbolTable;
         builder_ = std::move(savedBuilder);
         currentFunction_ = savedFunction;
@@ -5153,8 +6897,209 @@ public:
     }
     
     void visit(ClassExpr& node) override {
-        (void)node;
-        // Class expression
+        // Class expression: let C = class { value: number; constructor(v) { this.value = v; } }
+
+        // Generate unique class name if not provided
+        static int classExprCounter = 0;
+        std::string className = node.name.empty() ?
+            "__class_" + std::to_string(classExprCounter++) : node.name;
+
+        std::cerr << "DEBUG HIRGen: Processing class expression: " << className << std::endl;
+
+        // Register class name for static method call detection
+        classNames_.insert(className);
+
+        // Helper to convert AST Type::Kind to HIR HIRType::Kind
+        auto convertTypeKind = [](Type::Kind astKind) -> HIRType::Kind {
+            switch (astKind) {
+                case Type::Kind::Void: return HIRType::Kind::Void;
+                case Type::Kind::Number: return HIRType::Kind::I64;
+                case Type::Kind::String: return HIRType::Kind::String;
+                case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::Any: return HIRType::Kind::Any;
+                default: return HIRType::Kind::Any;
+            }
+        };
+
+        // 1. Create struct type for class data (instance properties)
+        std::vector<hir::HIRStructType::Field> fields;
+        for (const auto& prop : node.properties) {
+            if (!prop.isStatic) {
+                hir::HIRType::Kind typeKind = hir::HIRType::Kind::I64;
+                if (prop.type) {
+                    typeKind = convertTypeKind(prop.type->kind);
+                }
+                auto fieldType = std::make_shared<hir::HIRType>(typeKind);
+                fields.push_back({prop.name, fieldType, true});
+            }
+        }
+
+        auto structType = module_->createStructType(className);
+        structType->fields = fields;
+
+        // 2. Find constructor and generate constructor function
+        ClassExpr::Method* constructor = nullptr;
+        for (auto& method : node.methods) {
+            if (method.kind == ClassExpr::Method::Kind::Constructor) {
+                constructor = &method;
+                break;
+            }
+        }
+
+        if (constructor) {
+            // Generate constructor function similar to ClassDecl
+            std::string funcName = className + "_constructor";
+
+            std::vector<hir::HIRTypePtr> paramTypes;
+            for (size_t i = 0; i < constructor->params.size(); ++i) {
+                paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64));
+            }
+
+            auto returnType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any);
+            auto funcType = new HIRFunctionType(paramTypes, returnType);
+            auto func = module_->createFunction(funcName, funcType);
+
+            // Save context
+            HIRFunction* savedFunction = currentFunction_;
+            hir::HIRStructType* savedClassStructType = currentClassStructType_;
+            currentFunction_ = func.get();
+            currentClassStructType_ = structType;
+
+            auto entryBlock = func->createBasicBlock("entry");
+
+            auto savedBuilder = std::move(builder_);
+            builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+            builder_->setInsertPoint(entryBlock.get());
+
+            // Add parameters to symbol table
+            auto savedSymbolTable = symbolTable_;
+            symbolTable_.clear();
+            for (size_t i = 0; i < constructor->params.size(); ++i) {
+                symbolTable_[constructor->params[i]] = func->parameters[i];
+            }
+
+            // Allocate memory for class instance
+            size_t instanceSize = fields.size() * 8;
+            auto sizeValue = builder_->createIntConstant(instanceSize);
+
+            // Get or create malloc
+            HIRFunction* mallocFunc = nullptr;
+            for (auto& f : module_->functions) {
+                if (f->name == "malloc") {
+                    mallocFunc = f.get();
+                    break;
+                }
+            }
+            if (!mallocFunc) {
+                std::vector<hir::HIRTypePtr> mallocParams;
+                mallocParams.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64));
+                auto mallocRetType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any);
+                auto mallocType = new HIRFunctionType(mallocParams, mallocRetType);
+                auto mallocFuncPtr = module_->createFunction("malloc", mallocType);
+                mallocFuncPtr->linkage = HIRFunction::Linkage::External;
+                mallocFunc = mallocFuncPtr.get();
+            }
+
+            std::vector<HIRValue*> mallocArgs = {sizeValue};
+            auto instancePtr = builder_->createCall(mallocFunc, mallocArgs, "instance");
+            instancePtr->type = std::make_shared<hir::HIRPointerType>(
+                std::shared_ptr<hir::HIRStructType>(structType, [](hir::HIRStructType*){}), true);
+
+            symbolTable_["this"] = instancePtr;
+
+            // Set currentThis_ for ThisExpr visitor
+            HIRValue* savedThis = currentThis_;
+            currentThis_ = instancePtr;
+
+            // Generate constructor body
+            if (constructor->body) {
+                constructor->body->accept(*this);
+            }
+
+            builder_->createReturn(instancePtr);
+
+            // Restore currentThis_
+            currentThis_ = savedThis;
+
+            // Restore context
+            symbolTable_ = savedSymbolTable;
+            builder_ = std::move(savedBuilder);
+            currentFunction_ = savedFunction;
+            currentClassStructType_ = savedClassStructType;
+        } else {
+            // Generate default constructor
+            generateDefaultConstructor(className, structType);
+        }
+
+        // 3. Generate method functions
+        for (const auto& method : node.methods) {
+            if (method.kind == ClassExpr::Method::Kind::Method) {
+                // Generate method function
+                std::string methodFuncName = className + "_" + method.name;
+
+                std::vector<hir::HIRTypePtr> paramTypes;
+                paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any)); // this
+                for (size_t i = 0; i < method.params.size(); ++i) {
+                    paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any));
+                }
+
+                hir::HIRType::Kind retTypeKind = hir::HIRType::Kind::Any;
+                if (method.returnType) {
+                    retTypeKind = convertTypeKind(method.returnType->kind);
+                }
+                auto returnType = std::make_shared<hir::HIRType>(retTypeKind);
+
+                auto funcType = new HIRFunctionType(paramTypes, returnType);
+                auto func = module_->createFunction(methodFuncName, funcType);
+
+                HIRFunction* savedFunction = currentFunction_;
+                hir::HIRStructType* savedClassStructType = currentClassStructType_;
+                currentFunction_ = func.get();
+                currentClassStructType_ = structType;
+
+                auto entryBlock = func->createBasicBlock("entry");
+
+                auto savedBuilder = std::move(builder_);
+                builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+                builder_->setInsertPoint(entryBlock.get());
+
+                auto savedSymbolTable = symbolTable_;
+                symbolTable_.clear();
+
+                symbolTable_["this"] = func->parameters[0];
+                for (size_t i = 0; i < method.params.size(); ++i) {
+                    symbolTable_[method.params[i]] = func->parameters[i + 1];
+                }
+
+                // Set currentThis_ for ThisExpr visitor
+                HIRValue* savedThis = currentThis_;
+                currentThis_ = func->parameters[0];
+
+                if (method.body) {
+                    method.body->accept(*this);
+                }
+
+                // Restore currentThis_
+                currentThis_ = savedThis;
+
+                if (!entryBlock->hasTerminator()) {
+                    builder_->createReturn(nullptr);
+                }
+
+                symbolTable_ = savedSymbolTable;
+                builder_ = std::move(savedBuilder);
+                currentFunction_ = savedFunction;
+                currentClassStructType_ = savedClassStructType;
+            }
+        }
+
+        // Store class name for variable assignment tracking
+        lastClassName_ = className;
+
+        // Return placeholder value (class is registered by name)
+        lastValue_ = builder_->createIntConstant(0);
+
+        std::cerr << "DEBUG HIRGen: Completed class expression: " << className << std::endl;
     }
     
     void visit(NewExpr& node) override {
@@ -5171,8 +7116,415 @@ public:
             return;
         }
 
+        // Handle AggregateError separately - it has different signature: (errors, message)
+        if (className == "AggregateError") {
+            std::cerr << "  DEBUG: Handling AggregateError" << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            // JavaScript API: new AggregateError(errors, message)
+            // Runtime API: nova_aggregate_error_create(message, errors, count)
+            HIRValue* errorsArg = nullptr;
+            HIRValue* messageArg = nullptr;
+            int64_t errorCount = 0;
+
+            // First argument is errors array
+            if (node.arguments.size() >= 1) {
+                node.arguments[0]->accept(*this);
+                errorsArg = lastValue_;
+
+                // Try to get array length if it's an array literal
+                if (auto* arrLit = dynamic_cast<ArrayExpr*>(node.arguments[0].get())) {
+                    errorCount = static_cast<int64_t>(arrLit->elements.size());
+                }
+            }
+
+            // Second argument is message
+            if (node.arguments.size() >= 2) {
+                node.arguments[1]->accept(*this);
+                messageArg = lastValue_;
+            }
+
+            // Create function type: ptr @nova_aggregate_error_create(ptr, ptr, i64)
+            std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, intType};
+
+            auto existingFunc = module_->getFunction("nova_aggregate_error_create");
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_aggregate_error_create", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+                std::cerr << "  DEBUG: Created external function: nova_aggregate_error_create" << std::endl;
+            }
+
+            // Prepare arguments in runtime order: (message, errors, count)
+            std::vector<HIRValue*> args;
+            args.push_back(messageArg ? messageArg : builder_->createStringConstant(""));
+            args.push_back(errorsArg ? errorsArg : builder_->createIntConstant(0));
+            args.push_back(builder_->createIntConstant(errorCount));
+
+            lastValue_ = builder_->createCall(func, args, "aggregate_error");
+            lastValue_->type = ptrType;
+            std::cerr << "  DEBUG: Created AggregateError with " << errorCount << " errors" << std::endl;
+            return;
+        }
+
+        // Handle ArrayBuffer constructor
+        if (className == "ArrayBuffer") {
+            std::cerr << "  DEBUG: Handling ArrayBuffer constructor" << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            // Get length argument
+            HIRValue* lengthArg = nullptr;
+            if (!node.arguments.empty()) {
+                node.arguments[0]->accept(*this);
+                lengthArg = lastValue_;
+            } else {
+                lengthArg = builder_->createIntConstant(0);
+            }
+
+            std::vector<HIRTypePtr> paramTypes = {intType};
+            auto existingFunc = module_->getFunction("nova_arraybuffer_create");
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_arraybuffer_create", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {lengthArg};
+            lastValue_ = builder_->createCall(func, args, "arraybuffer");
+            lastValue_->type = ptrType;
+            lastWasArrayBuffer_ = true;  // Track for variable declaration
+            return;
+        }
+
+        // Handle TypedArray constructors
+        if (className == "Int8Array" || className == "Uint8Array" || className == "Uint8ClampedArray" ||
+            className == "Int16Array" || className == "Uint16Array" ||
+            className == "Int32Array" || className == "Uint32Array" ||
+            className == "Float32Array" || className == "Float64Array" ||
+            className == "BigInt64Array" || className == "BigUint64Array") {
+
+            std::cerr << "  DEBUG: Handling TypedArray constructor: " << className << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            // Check if first argument is an ArrayBuffer
+            bool isFromBuffer = false;
+            if (!node.arguments.empty()) {
+                if (auto* argIdent = dynamic_cast<Identifier*>(node.arguments[0].get())) {
+                    if (arrayBufferVars_.count(argIdent->name) > 0) {
+                        isFromBuffer = true;
+                        std::cerr << "    DEBUG: Creating TypedArray from ArrayBuffer: " << argIdent->name << std::endl;
+                    }
+                }
+            }
+
+            if (isFromBuffer) {
+                // Create TypedArray from ArrayBuffer
+                std::string runtimeFunc;
+                if (className == "Int8Array") runtimeFunc = "nova_int8array_from_buffer";
+                else if (className == "Uint8Array") runtimeFunc = "nova_uint8array_from_buffer";
+                else if (className == "Uint8ClampedArray") runtimeFunc = "nova_uint8clampedarray_from_buffer";
+                else if (className == "Int16Array") runtimeFunc = "nova_int16array_from_buffer";
+                else if (className == "Uint16Array") runtimeFunc = "nova_uint16array_from_buffer";
+                else if (className == "Int32Array") runtimeFunc = "nova_int32array_from_buffer";
+                else if (className == "Uint32Array") runtimeFunc = "nova_uint32array_from_buffer";
+                else if (className == "Float32Array") runtimeFunc = "nova_float32array_from_buffer";
+                else if (className == "Float64Array") runtimeFunc = "nova_float64array_from_buffer";
+                else if (className == "BigInt64Array") runtimeFunc = "nova_bigint64array_from_buffer";
+                else if (className == "BigUint64Array") runtimeFunc = "nova_biguint64array_from_buffer";
+
+                // Get arguments: buffer, byteOffset (optional), length (optional)
+                HIRValue* bufferArg = nullptr;
+                HIRValue* offsetArg = nullptr;
+                HIRValue* lengthArg = nullptr;
+
+                node.arguments[0]->accept(*this);
+                bufferArg = lastValue_;
+
+                if (node.arguments.size() >= 2) {
+                    node.arguments[1]->accept(*this);
+                    offsetArg = lastValue_;
+                } else {
+                    offsetArg = builder_->createIntConstant(0);
+                }
+
+                if (node.arguments.size() >= 3) {
+                    node.arguments[2]->accept(*this);
+                    lengthArg = lastValue_;
+                } else {
+                    lengthArg = builder_->createIntConstant(-1);  // -1 means use remaining buffer
+                }
+
+                std::vector<HIRTypePtr> paramTypes = {ptrType, intType, intType};
+                auto existingFunc = module_->getFunction(runtimeFunc);
+                HIRFunction* func = nullptr;
+                if (existingFunc) {
+                    func = existingFunc.get();
+                } else {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    func = funcPtr.get();
+                }
+
+                std::vector<HIRValue*> args = {bufferArg, offsetArg, lengthArg};
+                lastValue_ = builder_->createCall(func, args, "typedarray");
+                lastValue_->type = ptrType;
+                lastTypedArrayType_ = className;  // Track for element access
+                return;
+            }
+
+            // Create TypedArray with length
+            std::string runtimeFunc;
+            if (className == "Int8Array") runtimeFunc = "nova_int8array_create";
+            else if (className == "Uint8Array") runtimeFunc = "nova_uint8array_create";
+            else if (className == "Uint8ClampedArray") runtimeFunc = "nova_uint8clampedarray_create";
+            else if (className == "Int16Array") runtimeFunc = "nova_int16array_create";
+            else if (className == "Uint16Array") runtimeFunc = "nova_uint16array_create";
+            else if (className == "Int32Array") runtimeFunc = "nova_int32array_create";
+            else if (className == "Uint32Array") runtimeFunc = "nova_uint32array_create";
+            else if (className == "Float32Array") runtimeFunc = "nova_float32array_create";
+            else if (className == "Float64Array") runtimeFunc = "nova_float64array_create";
+            else if (className == "BigInt64Array") runtimeFunc = "nova_bigint64array_create";
+            else if (className == "BigUint64Array") runtimeFunc = "nova_biguint64array_create";
+
+            // Get length argument
+            HIRValue* lengthArg = nullptr;
+            if (!node.arguments.empty()) {
+                node.arguments[0]->accept(*this);
+                lengthArg = lastValue_;
+            } else {
+                lengthArg = builder_->createIntConstant(0);
+            }
+
+            std::vector<HIRTypePtr> paramTypes = {intType};
+            auto existingFunc = module_->getFunction(runtimeFunc);
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {lengthArg};
+            lastValue_ = builder_->createCall(func, args, "typedarray");
+            lastValue_->type = ptrType;
+            lastTypedArrayType_ = className;  // Track for element access
+            return;
+        }
+
+        // Handle DataView constructor
+        if (className == "DataView") {
+            std::cerr << "  DEBUG: Handling DataView constructor" << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            // Get arguments: buffer, byteOffset (optional), byteLength (optional)
+            HIRValue* bufferArg = nullptr;
+            HIRValue* offsetArg = nullptr;
+            HIRValue* lengthArg = nullptr;
+
+            if (node.arguments.size() >= 1) {
+                node.arguments[0]->accept(*this);
+                bufferArg = lastValue_;
+            }
+            if (node.arguments.size() >= 2) {
+                node.arguments[1]->accept(*this);
+                offsetArg = lastValue_;
+            } else {
+                offsetArg = builder_->createIntConstant(0);
+            }
+            if (node.arguments.size() >= 3) {
+                node.arguments[2]->accept(*this);
+                lengthArg = lastValue_;
+            } else {
+                lengthArg = builder_->createIntConstant(-1);  // -1 means use remaining buffer
+            }
+
+            std::vector<HIRTypePtr> paramTypes = {ptrType, intType, intType};
+            auto existingFunc = module_->getFunction("nova_dataview_create");
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_dataview_create", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {bufferArg, offsetArg, lengthArg};
+            lastValue_ = builder_->createCall(func, args, "dataview");
+            lastValue_->type = ptrType;
+            lastWasDataView_ = true;  // Track for method calls
+            return;
+        }
+
+        // Handle DisposableStack constructor (ES2024)
+        if (className == "DisposableStack") {
+            std::cerr << "  DEBUG: Handling DisposableStack constructor" << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+            // DisposableStack takes no arguments
+            std::vector<HIRTypePtr> paramTypes = {};
+            auto existingFunc = module_->getFunction("nova_disposablestack_create");
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_disposablestack_create", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {};
+            lastValue_ = builder_->createCall(func, args, "disposablestack");
+            lastValue_->type = ptrType;
+            lastWasDisposableStack_ = true;  // Track for variable declaration
+            return;
+        }
+
+        // Handle AsyncDisposableStack constructor (ES2024)
+        if (className == "AsyncDisposableStack") {
+            std::cerr << "  DEBUG: Handling AsyncDisposableStack constructor" << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+            // AsyncDisposableStack takes no arguments
+            std::vector<HIRTypePtr> paramTypes = {};
+            auto existingFunc = module_->getFunction("nova_asyncdisposablestack_create");
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_asyncdisposablestack_create", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {};
+            lastValue_ = builder_->createCall(func, args, "asyncdisposablestack");
+            lastValue_->type = ptrType;
+            lastWasAsyncDisposableStack_ = true;  // Track for variable declaration
+            return;
+        }
+
+        // Handle Promise constructor (ES2015)
+        if (className == "Promise") {
+            std::cerr << "  DEBUG: Handling Promise constructor" << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+            // Promise takes an executor function: (resolve, reject) => void
+            // For now, create a pending promise
+            std::vector<HIRTypePtr> paramTypes = {};
+            auto existingFunc = module_->getFunction("nova_promise_create");
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_promise_create", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {};
+            lastValue_ = builder_->createCall(func, args, "promise");
+            lastValue_->type = ptrType;
+            lastWasPromise_ = true;  // Track for method calls
+            return;
+        }
+
+        // Handle other builtin Error types
+        if (className == "Error" || className == "TypeError" || className == "RangeError" ||
+            className == "ReferenceError" || className == "SyntaxError" || className == "URIError" ||
+            className == "InternalError" || className == "EvalError") {
+
+            std::cerr << "  DEBUG: Handling builtin error type: " << className << std::endl;
+
+            // Get message argument if provided
+            HIRValue* messageArg = nullptr;
+            if (!node.arguments.empty()) {
+                node.arguments[0]->accept(*this);
+                messageArg = lastValue_;
+            }
+
+            // Determine runtime function name
+            std::string runtimeFunc;
+            if (className == "Error") runtimeFunc = "nova_error_create";
+            else if (className == "TypeError") runtimeFunc = "nova_type_error_create";
+            else if (className == "RangeError") runtimeFunc = "nova_range_error_create";
+            else if (className == "ReferenceError") runtimeFunc = "nova_reference_error_create";
+            else if (className == "SyntaxError") runtimeFunc = "nova_syntax_error_create";
+            else if (className == "URIError") runtimeFunc = "nova_uri_error_create";
+            else if (className == "InternalError") runtimeFunc = "nova_internal_error_create";
+            else if (className == "EvalError") runtimeFunc = "nova_eval_error_create";
+
+            // Create external function reference
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            std::vector<HIRTypePtr> paramTypes;
+            paramTypes.push_back(ptrType);  // const char* message
+
+            // Check if function already exists
+            auto existingFunc = module_->getFunction(runtimeFunc);
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+                std::cerr << "  DEBUG: Created external function: " << runtimeFunc << std::endl;
+            }
+
+            // Prepare arguments
+            std::vector<HIRValue*> args;
+            if (messageArg) {
+                args.push_back(messageArg);
+            } else {
+                // Pass empty string if no message
+                args.push_back(builder_->createStringConstant(""));
+            }
+
+            lastValue_ = builder_->createCall(func, args, "error_obj");
+            lastValue_->type = ptrType;
+            std::cerr << "  DEBUG: Created " << className << " via " << runtimeFunc << std::endl;
+            return;
+        }
+
+        // Check if this is a class expression reference
+        std::string actualClassName = className;
+        auto classRefIt = classReferences_.find(className);
+        if (classRefIt != classReferences_.end()) {
+            actualClassName = classRefIt->second;
+            std::cerr << "  DEBUG: Resolved class reference: " << className
+                      << " -> " << actualClassName << std::endl;
+        }
+
         // Constructor function name: ClassName_constructor
-        std::string constructorName = className + "_constructor";
+        std::string constructorName = actualClassName + "_constructor";
 
         // Evaluate arguments
         std::vector<HIRValue*> args;
@@ -5197,9 +7549,9 @@ public:
         for (auto* type : module_->types) {
             if (type->kind == hir::HIRType::Kind::Struct) {
                 auto* candidateStruct = static_cast<hir::HIRStructType*>(type);
-                if (candidateStruct->name == className) {
+                if (candidateStruct->name == actualClassName) {
                     structType = candidateStruct;
-                    std::cerr << "  DEBUG: Found struct type for class: " << className << std::endl;
+                    std::cerr << "  DEBUG: Found struct type for class: " << actualClassName << std::endl;
                     break;
                 }
             }
@@ -5210,7 +7562,7 @@ public:
             lastValue_->type = std::make_shared<hir::HIRStructType>(*structType);
             std::cerr << "  DEBUG: Attached struct type to new instance" << std::endl;
         } else {
-            std::cerr << "  WARNING: Could not find struct type for class: " << className << std::endl;
+            std::cerr << "  WARNING: Could not find struct type for class: " << actualClassName << std::endl;
         }
     }
     
@@ -5233,8 +7585,15 @@ public:
     }
     
     void visit(SpreadExpr& node) override {
-        (void)node;
-        // Spread operator
+        // Spread operator: ...expr
+        // Evaluate the argument - the array/iterable to spread
+        if (node.argument) {
+            node.argument->accept(*this);
+            // lastValue_ now contains the array to spread
+            // For function calls, the caller will need to unpack this
+            // For now, we just pass the array value through
+            std::cerr << "NOTE: Spread expression evaluated (full unpacking requires runtime support)" << std::endl;
+        }
     }
     
     void visit(TemplateLiteralExpr& node) override {
@@ -5286,12 +7645,267 @@ public:
     }
     
     void visit(YieldExpr& node) override {
-        // yield expression
+        // Check if this is yield* (delegation)
+        if (node.isDelegate) {
+            generateYieldDelegate(node);
+            return;
+        }
+
+        // Regular yield expression - set state, call nova_generator_yield(genPtr, value), then RETURN to suspend
+        HIRValue* yieldValue = nullptr;
         if (node.argument) {
             node.argument->accept(*this);
+            yieldValue = lastValue_;
+        } else {
+            yieldValue = builder_->createIntConstant(0);
+        }
+
+        // Get the current generator pointer
+        if (currentGeneratorPtr_) {
+            // Load genPtr from the stored location
+            auto* genPtr = builder_->createLoad(currentGeneratorPtr_);
+
+            // Get or create nova_generator_yield function
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+            std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+
+            std::string runtimeFuncName = "nova_generator_yield";
+            auto existingFunc = module_->getFunction(runtimeFuncName);
+            HIRFunction* yieldFunc = nullptr;
+            if (existingFunc) {
+                yieldFunc = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, voidType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                yieldFunc = funcPtr.get();
+            }
+
+            // Increment yield state counter - this yield will be state N+1
+            yieldStateCounter_++;
+            int thisYieldState = yieldStateCounter_;
+            std::cerr << "DEBUG HIRGen: Yield #" << thisYieldState << " in generator" << std::endl;
+
+            // Set state BEFORE yielding so next() knows where to resume
+            if (currentSetStateFunc_) {
+                auto* stateConst = builder_->createIntConstant(thisYieldState);
+                std::vector<HIRValue*> setStateArgs = {genPtr, stateConst};
+                builder_->createCall(currentSetStateFunc_, setStateArgs);
+            }
+
+            // Call yield function to store the yielded value
+            std::vector<HIRValue*> args = {genPtr, yieldValue};
+            builder_->createCall(yieldFunc, args);
+
+            // RETURN to suspend execution!
+            builder_->createReturn(nullptr);
+
+            // Create resume block for code after this yield
+            auto* resumeBlock = currentFunction_->createBasicBlock(
+                "resume_" + std::to_string(thisYieldState)).get();
+
+            // Add to resume blocks vector (indexed by state-1)
+            yieldResumeBlocks_.push_back(resumeBlock);
+
+            // Continue code generation in the resume block
+            builder_->setInsertPoint(resumeBlock);
+
+            // For yield expressions that return a value (like let x = yield 5),
+            // the value comes from gen.next(value) - load from generator input
+            // For now, just use 0
+            lastValue_ = builder_->createIntConstant(0);
+        } else {
+            // Fallback: yield without generator context
+            lastValue_ = yieldValue;
         }
     }
     
+
+    void generateYieldDelegate(YieldExpr& node) {
+        // yield* delegation - iterate inner generator and yield each value
+        // Uses generator local storage to persist inner iterator across suspensions
+        std::cerr << "DEBUG HIRGen: Processing yield* delegation" << std::endl;
+
+        if (!currentGeneratorPtr_) {
+            if (node.argument) {
+                node.argument->accept(*this);
+            }
+            lastValue_ = builder_->createIntConstant(0);
+            return;
+        }
+
+        // Evaluate the inner iterable (generator)
+        node.argument->accept(*this);
+        HIRValue* innerIterator = lastValue_;
+
+        // Get outer generator pointer
+        auto* outerGenPtr = builder_->createLoad(currentGeneratorPtr_);
+
+        // Create types
+        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+        // Get or create nova_generator_store_local function
+        std::vector<HIRTypePtr> storeLocalParamTypes = {ptrType, intType, intType};
+        HIRFunction* storeLocalFunc = nullptr;
+        auto existingStoreLocal = module_->getFunction("nova_generator_store_local");
+        if (existingStoreLocal) {
+            storeLocalFunc = existingStoreLocal.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(storeLocalParamTypes, voidType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_store_local", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            storeLocalFunc = funcPtr.get();
+        }
+
+        // Get or create nova_generator_load_local function
+        std::vector<HIRTypePtr> loadLocalParamTypes = {ptrType, intType};
+        HIRFunction* loadLocalFunc = nullptr;
+        auto existingLoadLocal = module_->getFunction("nova_generator_load_local");
+        if (existingLoadLocal) {
+            loadLocalFunc = existingLoadLocal.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(loadLocalParamTypes, intType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_load_local", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            loadLocalFunc = funcPtr.get();
+        }
+
+        // Store inner iterator in generator local storage slot 0
+        auto* zero = builder_->createIntConstant(0);
+        std::vector<HIRValue*> storeArgs = {outerGenPtr, zero, innerIterator};
+        builder_->createCall(storeLocalFunc, storeArgs);
+
+        // Create blocks for delegation loop
+        auto* loopHeaderBlock = currentFunction_->createBasicBlock("yield_delegate_header").get();
+        auto* loopBodyBlock = currentFunction_->createBasicBlock("yield_delegate_body").get();
+        auto* loopExitBlock = currentFunction_->createBasicBlock("yield_delegate_exit").get();
+
+        // Jump to loop header
+        builder_->createBr(loopHeaderBlock);
+        builder_->setInsertPoint(loopHeaderBlock);
+
+        // Load inner iterator from generator local storage
+        auto* outerGenPtrInLoop = builder_->createLoad(currentGeneratorPtr_);
+        std::vector<HIRValue*> loadArgs = {outerGenPtrInLoop, zero};
+        auto* innerIter = builder_->createCall(loadLocalFunc, loadArgs);
+
+        // Get or create nova_generator_next function
+        std::vector<HIRTypePtr> nextParamTypes = {ptrType, intType};
+        HIRFunction* nextFunc = nullptr;
+        auto existingNextFunc = module_->getFunction("nova_generator_next");
+        if (existingNextFunc) {
+            nextFunc = existingNextFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(nextParamTypes, ptrType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_next", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            nextFunc = funcPtr.get();
+        }
+
+        // Get or create nova_iterator_result_done function
+        std::vector<HIRTypePtr> doneParamTypes = {ptrType};
+        HIRFunction* doneFunc = nullptr;
+        auto existingDoneFunc = module_->getFunction("nova_iterator_result_done");
+        if (existingDoneFunc) {
+            doneFunc = existingDoneFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(doneParamTypes, intType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_iterator_result_done", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            doneFunc = funcPtr.get();
+        }
+
+        // Get or create nova_iterator_result_value function
+        HIRFunction* valueFunc = nullptr;
+        auto existingValueFunc = module_->getFunction("nova_iterator_result_value");
+        if (existingValueFunc) {
+            valueFunc = existingValueFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(doneParamTypes, intType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_iterator_result_value", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            valueFunc = funcPtr.get();
+        }
+
+        // Call inner.next(0)
+        std::vector<HIRValue*> nextArgs = {innerIter, zero};
+        auto* result = builder_->createCall(nextFunc, nextArgs);
+
+        // Check if done
+        std::vector<HIRValue*> doneArgs = {result};
+        auto* doneVal = builder_->createCall(doneFunc, doneArgs);
+        auto* doneCondition = builder_->createNe(doneVal, zero);
+
+        // Store result in generator local storage slot 1 for body access
+        auto* one = builder_->createIntConstant(1);
+        std::vector<HIRValue*> storeResultArgs = {outerGenPtrInLoop, one, result};
+        builder_->createCall(storeLocalFunc, storeResultArgs);
+
+        // If done, exit loop; otherwise, process value
+        builder_->createCondBr(doneCondition, loopExitBlock, loopBodyBlock);
+
+        // Loop body: get value and yield it
+        builder_->setInsertPoint(loopBodyBlock);
+
+        // Load result from generator local storage slot 1
+        auto* outerGenPtrInBody = builder_->createLoad(currentGeneratorPtr_);
+        std::vector<HIRValue*> loadResultArgs = {outerGenPtrInBody, one};
+        auto* storedResult = builder_->createCall(loadLocalFunc, loadResultArgs);
+
+        std::vector<HIRValue*> valueArgs = {storedResult};
+        auto* yieldValue = builder_->createCall(valueFunc, valueArgs);
+
+        // Get or create nova_generator_yield function
+        std::vector<HIRTypePtr> yieldParamTypes = {ptrType, intType};
+        HIRFunction* yieldFunc = nullptr;
+        auto existingYieldFunc = module_->getFunction("nova_generator_yield");
+        if (existingYieldFunc) {
+            yieldFunc = existingYieldFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(yieldParamTypes, voidType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_yield", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            yieldFunc = funcPtr.get();
+        }
+
+        // Increment yield state counter - this yield* will be a single state
+        yieldStateCounter_++;
+        int thisYieldState = yieldStateCounter_;
+        std::cerr << "DEBUG HIRGen: Yield* delegation state #" << thisYieldState << std::endl;
+
+        // Set state BEFORE yielding
+        if (currentSetStateFunc_) {
+            auto* stateConst = builder_->createIntConstant(thisYieldState);
+            std::vector<HIRValue*> setStateArgs = {outerGenPtrInBody, stateConst};
+            builder_->createCall(currentSetStateFunc_, setStateArgs);
+        }
+
+        // Call yield function to store the yielded value
+        std::vector<HIRValue*> yieldArgs = {outerGenPtrInBody, yieldValue};
+        builder_->createCall(yieldFunc, yieldArgs);
+
+        // RETURN to suspend execution
+        builder_->createReturn(nullptr);
+
+        // Create resume block that branches BACK to loop header
+        auto* resumeBlock = currentFunction_->createBasicBlock(
+            "yield_delegate_resume_" + std::to_string(thisYieldState)).get();
+        yieldResumeBlocks_.push_back(resumeBlock);
+
+        // Resume block branches back to loop header to continue iteration
+        builder_->setInsertPoint(resumeBlock);
+        builder_->createBr(loopHeaderBlock);
+
+        // Continue code generation after yield* in the exit block
+        builder_->setInsertPoint(loopExitBlock);
+
+        // The result of yield* is the final return value of the inner generator
+        lastValue_ = builder_->createIntConstant(0);
+    }
     void visit(AsExpr& node) override {
         // Type assertion - just evaluate expression
         node.expression->accept(*this);
@@ -5438,10 +8052,10 @@ public:
 
         // Store to left side
         if (auto* id = dynamic_cast<Identifier*>(node.left.get())) {
-            // Simple variable assignment
-            auto it = symbolTable_.find(id->name);
-            if (it != symbolTable_.end()) {
-                builder_->createStore(value, it->second);
+            // Simple variable assignment - check current scope and parent scopes (for closures)
+            HIRValue* target = lookupVariable(id->name);
+            if (target) {
+                builder_->createStore(value, target);
             }
         } else if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.left.get())) {
             // Get the object/array
@@ -5453,7 +8067,62 @@ public:
                 memberExpr->property->accept(*this);
                 auto index = lastValue_;
 
-                // Use SetElement to store value directly to the array element
+                // Check if this is TypedArray element assignment
+                if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                    auto typeIt = typedArrayTypes_.find(objIdent->name);
+                    if (typeIt != typedArrayTypes_.end()) {
+                        std::string typedArrayType = typeIt->second;
+                        std::cerr << "DEBUG HIRGen: TypedArray element assignment on " << objIdent->name
+                                  << " (type: " << typedArrayType << ")" << std::endl;
+
+                        // Determine runtime function name
+                        std::string runtimeFunc;
+                        if (typedArrayType == "Int8Array") runtimeFunc = "nova_int8array_set";
+                        else if (typedArrayType == "Uint8Array") runtimeFunc = "nova_uint8array_set";
+                        else if (typedArrayType == "Uint8ClampedArray") runtimeFunc = "nova_uint8clampedarray_set";
+                        else if (typedArrayType == "Int16Array") runtimeFunc = "nova_int16array_set";
+                        else if (typedArrayType == "Uint16Array") runtimeFunc = "nova_uint16array_set";
+                        else if (typedArrayType == "Int32Array") runtimeFunc = "nova_int32array_set";
+                        else if (typedArrayType == "Uint32Array") runtimeFunc = "nova_uint32array_set";
+                        else if (typedArrayType == "Float32Array") runtimeFunc = "nova_float32array_set";
+                        else if (typedArrayType == "Float64Array") runtimeFunc = "nova_float64array_set";
+                        else if (typedArrayType == "BigInt64Array") runtimeFunc = "nova_bigint64array_set";
+                        else if (typedArrayType == "BigUint64Array") runtimeFunc = "nova_biguint64array_set";
+
+                        if (!runtimeFunc.empty()) {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                            // Determine value type (double for Float32/Float64, i64 otherwise)
+                            HIRTypePtr valueType;
+                            if (typedArrayType == "Float32Array" || typedArrayType == "Float64Array") {
+                                valueType = std::make_shared<HIRType>(HIRType::Kind::F64);
+                            } else {
+                                valueType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            }
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType, intType, valueType};
+                            auto existingFunc = module_->getFunction(runtimeFunc);
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, voidType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object, index, value};
+                            builder_->createCall(func, args, "");
+                            lastValue_ = value;
+                            return;
+                        }
+                    }
+                }
+
+                // Use SetElement to store value directly to regular array element
                 builder_->createSetElement(object, index, value);
             } else if (auto propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                 // Object property assignment: obj.x = value or this.x = value
@@ -5470,8 +8139,12 @@ public:
                     structType = currentClassStructType_;
                     std::cerr << "  DEBUG: Using currentClassStructType_ for 'this' property assignment" << std::endl;
                 } else if (object && object->type) {
-                    // Try to get struct type from object type
-                    if (auto ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get())) {
+                    // First check if object is directly a struct type
+                    if (object->type->kind == hir::HIRType::Kind::Struct) {
+                        structType = dynamic_cast<hir::HIRStructType*>(object->type.get());
+                    }
+                    // Otherwise try pointer to struct
+                    else if (auto ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get())) {
                         structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
                     }
                 }
@@ -5484,6 +8157,27 @@ public:
                             found = true;
                             std::cerr << "  DEBUG: Found field '" << propertyName << "' at index " << fieldIndex << std::endl;
                             break;
+                        }
+                    }
+                }
+
+                // Check if this property has a setter
+                if (structType) {
+                    std::string className = structType->name;
+                    auto setterClassIt = classSetters_.find(className);
+                    if (setterClassIt != classSetters_.end()) {
+                        if (setterClassIt->second.find(propertyName) != setterClassIt->second.end()) {
+                            // This property has a setter - call the setter function
+                            std::string setterName = className + "_set_" + propertyName;
+                            std::cerr << "DEBUG HIRGen: Calling setter " << setterName << std::endl;
+                            
+                            auto setterFunc = module_->getFunction(setterName);
+                            if (setterFunc) {
+                                std::vector<HIRValue*> args = { object, value };
+                                builder_->createCall(setterFunc.get(), args, "setter_result");
+                                lastValue_ = value;
+                                return;
+                            }
                         }
                     }
                 }
@@ -5617,6 +8311,66 @@ public:
                 initValue = lastValue_;
             }
 
+            // Check if this is a destructuring pattern
+            if (decl.pattern) {
+                std::cerr << "DEBUG HIRGen: Processing destructuring pattern" << std::endl;
+
+                // Handle array destructuring: let [a, b, c] = arr;
+                if (auto* arrayPattern = dynamic_cast<ArrayPattern*>(decl.pattern.get())) {
+                    std::cerr << "  DEBUG: Array pattern with " << arrayPattern->elements.size() << " elements" << std::endl;
+
+                    for (size_t i = 0; i < arrayPattern->elements.size(); ++i) {
+                        auto& element = arrayPattern->elements[i];
+                        if (!element) continue;
+
+                        // Get the variable name from IdentifierPattern
+                        if (auto* idPattern = dynamic_cast<IdentifierPattern*>(element.get())) {
+                            std::string varName = idPattern->name;
+                            std::cerr << "    DEBUG: Element " << i << " -> " << varName << std::endl;
+
+                            // Create index constant
+                            auto indexVal = builder_->createIntConstant(static_cast<int64_t>(i));
+
+                            // Get element from array: arr[i]
+                            auto elementVal = builder_->createGetElement(initValue, indexVal, "destructure_elem");
+
+                            // Allocate storage for this variable
+                            auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto alloca = builder_->createAlloca(i64Type.get(), varName);
+                            symbolTable_[varName] = alloca;
+
+                            // Store the element value
+                            builder_->createStore(elementVal, alloca);
+                        }
+                    }
+                }
+                // Handle object destructuring: let {a, b} = obj;
+                else if (auto* objPattern = dynamic_cast<ObjectPattern*>(decl.pattern.get())) {
+                    std::cerr << "  DEBUG: Object pattern with " << objPattern->properties.size() << " properties" << std::endl;
+
+                    for (auto& prop : objPattern->properties) {
+                        // Get the variable name
+                        std::string varName = prop.key;
+                        if (auto* idPattern = dynamic_cast<IdentifierPattern*>(prop.value.get())) {
+                            varName = idPattern->name;
+                        }
+                        std::cerr << "    DEBUG: Property " << prop.key << " -> " << varName << std::endl;
+
+                        // Get property from object using the key
+                        // For now, we need the property index - this is complex
+                        // TODO: Implement proper object property access by name
+                        auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto alloca = builder_->createAlloca(i64Type.get(), varName);
+                        symbolTable_[varName] = alloca;
+
+                        // Store zero for now - proper object destructuring needs more work
+                        auto zeroVal = builder_->createIntConstant(0);
+                        builder_->createStore(zeroVal, alloca);
+                    }
+                }
+                continue;  // Don't process as normal variable
+            }
+
             // Check if this is a function reference assignment
             if (!lastFunctionName_.empty()) {
                 // Register this variable as holding a function reference
@@ -5626,22 +8380,128 @@ public:
                 lastFunctionName_.clear();  // Clear for next declaration
             }
 
-            // Use the initializer's type for the alloca, or default to i64
-            HIRType* allocaType = nullptr;
-            if (initValue && initValue->type) {
-                allocaType = initValue->type.get();
-            } else {
-                auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
-                allocaType = i64Type.get();
+            // Check if this is a class expression assignment
+            if (!lastClassName_.empty()) {
+                // Register this variable as holding a class reference
+                classReferences_[decl.name] = lastClassName_;
+                classNames_.insert(decl.name);  // Register the variable name as a class name
+                std::cerr << "DEBUG HIRGen: Registered class reference: " << decl.name
+                          << " -> " << lastClassName_ << std::endl;
+                lastClassName_.clear();  // Clear for next declaration
             }
 
-            // Allocate storage with the correct type
-            auto alloca = builder_->createAlloca(allocaType, decl.name);
-            symbolTable_[decl.name] = alloca;
+            // Check if this is a TypedArray assignment
+            if (!lastTypedArrayType_.empty()) {
+                typedArrayTypes_[decl.name] = lastTypedArrayType_;
+                std::cerr << "DEBUG HIRGen: Registered TypedArray type: " << decl.name
+                          << " -> " << lastTypedArrayType_ << std::endl;
+                lastTypedArrayType_.clear();  // Clear for next declaration
+            }
 
-            // Store the initializer value if present
-            if (initValue) {
-                builder_->createStore(initValue, alloca);
+            // Check if this is an ArrayBuffer assignment
+            if (lastWasArrayBuffer_) {
+                arrayBufferVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered ArrayBuffer variable: " << decl.name << std::endl;
+                lastWasArrayBuffer_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is a DataView assignment
+            if (lastWasDataView_) {
+                dataViewVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered DataView variable: " << decl.name << std::endl;
+                lastWasDataView_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is a DisposableStack assignment
+            if (lastWasDisposableStack_) {
+                disposableStackVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered DisposableStack variable: " << decl.name << std::endl;
+                lastWasDisposableStack_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is an AsyncDisposableStack assignment
+            if (lastWasAsyncDisposableStack_) {
+                asyncDisposableStackVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered AsyncDisposableStack variable: " << decl.name << std::endl;
+                lastWasAsyncDisposableStack_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is a Promise assignment
+            if (lastWasPromise_) {
+                promiseVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered Promise variable: " << decl.name << std::endl;
+                lastWasPromise_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is a Generator assignment
+            if (lastWasGenerator_) {
+                generatorVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered Generator variable: " << decl.name << std::endl;
+                lastWasGenerator_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is an AsyncGenerator assignment
+            if (lastWasAsyncGenerator_) {
+                asyncGeneratorVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered AsyncGenerator variable: " << decl.name << std::endl;
+                lastWasAsyncGenerator_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is an IteratorResult assignment (from gen.next())
+            if (lastWasIteratorResult_) {
+                iteratorResultVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered IteratorResult variable: " << decl.name << std::endl;
+                lastWasIteratorResult_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is a runtime array assignment (from keys(), values(), entries())
+            if (lastWasRuntimeArray_) {
+                runtimeArrayVars_.insert(decl.name);
+                std::cerr << "DEBUG HIRGen: Registered runtime array variable: " << decl.name << std::endl;
+                lastWasRuntimeArray_ = false;  // Clear for next declaration
+            }
+
+            // Inside generators, use generator local storage for variables that may cross yield boundaries
+            if (currentGeneratorPtr_ && generatorStoreLocalFunc_) {
+                // Assign a slot index for this variable
+                int slotIndex = generatorNextLocalSlot_++;
+                generatorVarSlots_[decl.name] = slotIndex;
+                std::cerr << "DEBUG HIRGen: Generator variable '" << decl.name << "' assigned to slot " << slotIndex << std::endl;
+
+                // Store initial value to generator local slot
+                if (initValue) {
+                    auto* genPtr = builder_->createLoad(currentGeneratorPtr_);
+                    auto* slotConst = builder_->createIntConstant(slotIndex);
+                    std::vector<HIRValue*> storeArgs = {genPtr, slotConst, initValue};
+                    builder_->createCall(generatorStoreLocalFunc_, storeArgs);
+                }
+
+                // Also create a normal alloca for within-block access (optimization)
+                auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                auto alloca = builder_->createAlloca(i64Type.get(), decl.name);
+                symbolTable_[decl.name] = alloca;
+                if (initValue) {
+                    builder_->createStore(initValue, alloca);
+                }
+            } else {
+                // Normal (non-generator) variable handling
+                // Use the initializer's type for the alloca, or default to i64
+                HIRType* allocaType = nullptr;
+                if (initValue && initValue->type) {
+                    allocaType = initValue->type.get();
+                } else {
+                    auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    allocaType = i64Type.get();
+                }
+
+                // Allocate storage with the correct type
+                auto alloca = builder_->createAlloca(allocaType, decl.name);
+                symbolTable_[decl.name] = alloca;
+
+                // Store the initializer value if present
+                if (initValue) {
+                    builder_->createStore(initValue, alloca);
+                }
             }
         }
     }
@@ -5710,10 +8570,15 @@ public:
     
     void visit(WhileStmt& node) override {
         std::cerr << "DEBUG: Entering WhileStmt generation" << std::endl;
-        
-        auto* condBlock = currentFunction_->createBasicBlock("while.cond").get();
-        auto* bodyBlock = currentFunction_->createBasicBlock("while.body").get();
-        auto* endBlock = currentFunction_->createBasicBlock("while.end").get();
+
+        // Include label in block names if we're inside a labeled statement
+        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        // Clear label after using it - label only applies to this loop, not nested loops
+        currentLabel_.clear();
+
+        auto* condBlock = currentFunction_->createBasicBlock("while.cond" + labelSuffix).get();
+        auto* bodyBlock = currentFunction_->createBasicBlock("while.body" + labelSuffix).get();
+        auto* endBlock = currentFunction_->createBasicBlock("while.end" + labelSuffix).get();
         
         std::cerr << "DEBUG: Created while loop blocks: cond=" << condBlock << ", body=" << bodyBlock << ", end=" << endBlock << std::endl;
         
@@ -5757,9 +8622,14 @@ public:
     
     void visit(DoWhileStmt& node) override {
         // Create basic blocks for the do-while loop
-        auto* bodyBlock = currentFunction_->createBasicBlock("do-while.body").get();
-        auto* condBlock = currentFunction_->createBasicBlock("do-while.cond").get();
-        auto* endBlock = currentFunction_->createBasicBlock("do-while.end").get();
+        // Include label in block names if we're inside a labeled statement
+        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        // Clear label after using it - label only applies to this loop, not nested loops
+        currentLabel_.clear();
+
+        auto* bodyBlock = currentFunction_->createBasicBlock("do-while.body" + labelSuffix).get();
+        auto* condBlock = currentFunction_->createBasicBlock("do-while.cond" + labelSuffix).get();
+        auto* endBlock = currentFunction_->createBasicBlock("do-while.end" + labelSuffix).get();
         
         // Jump to body block (do-while always executes at least once)
         builder_->createBr(bodyBlock);
@@ -5797,13 +8667,18 @@ public:
     
     void visit(ForStmt& node) override {
         std::cerr << "DEBUG: Entering ForStmt generation" << std::endl;
-        
+
+        // Include label in block names if we're inside a labeled statement
+        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        // Clear label after using it - label only applies to this loop, not nested loops
+        currentLabel_.clear();
+
         // Create basic blocks for the for loop
-        auto* initBlock = currentFunction_->createBasicBlock("for.init").get();
-        auto* condBlock = currentFunction_->createBasicBlock("for.cond").get();
-        auto* bodyBlock = currentFunction_->createBasicBlock("for.body").get();
-        auto* updateBlock = currentFunction_->createBasicBlock("for.update").get();
-        auto* endBlock = currentFunction_->createBasicBlock("for.end").get();
+        auto* initBlock = currentFunction_->createBasicBlock("for.init" + labelSuffix).get();
+        auto* condBlock = currentFunction_->createBasicBlock("for.cond" + labelSuffix).get();
+        auto* bodyBlock = currentFunction_->createBasicBlock("for.body" + labelSuffix).get();
+        auto* updateBlock = currentFunction_->createBasicBlock("for.update" + labelSuffix).get();
+        auto* endBlock = currentFunction_->createBasicBlock("for.end" + labelSuffix).get();
         
         std::cerr << "DEBUG: Created for loop blocks: init=" << initBlock << ", cond=" << condBlock 
                   << ", body=" << bodyBlock << ", update=" << updateBlock << ", end=" << endBlock << std::endl;
@@ -5896,12 +8771,16 @@ public:
         //       __iter_idx = __iter_idx + 1;
         //   }
 
-        // Create basic blocks
-        auto* initBlock = currentFunction_->createBasicBlock("forin.init").get();
-        auto* condBlock = currentFunction_->createBasicBlock("forin.cond").get();
-        auto* bodyBlock = currentFunction_->createBasicBlock("forin.body").get();
-        auto* updateBlock = currentFunction_->createBasicBlock("forin.update").get();
-        auto* endBlock = currentFunction_->createBasicBlock("forin.end").get();
+        // Create basic blocks (with label suffix if inside labeled statement)
+        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        // Clear label after using it - label only applies to this loop, not nested loops
+        currentLabel_.clear();
+
+        auto* initBlock = currentFunction_->createBasicBlock("forin.init" + labelSuffix).get();
+        auto* condBlock = currentFunction_->createBasicBlock("forin.cond" + labelSuffix).get();
+        auto* bodyBlock = currentFunction_->createBasicBlock("forin.body" + labelSuffix).get();
+        auto* updateBlock = currentFunction_->createBasicBlock("forin.update" + labelSuffix).get();
+        auto* endBlock = currentFunction_->createBasicBlock("forin.end" + labelSuffix).get();
 
         // Branch to init block
         builder_->createBr(initBlock);
@@ -5992,6 +8871,181 @@ public:
     void visit(ForOfStmt& node) override {
         std::cerr << "DEBUG: Generating for-of loop" << std::endl;
 
+        // Check if iterating over a generator or async generator
+        bool isGeneratorIteration = false;
+        bool isAsyncGeneratorIteration = false;
+        if (auto* identExpr = dynamic_cast<Identifier*>(node.right.get())) {
+            if (asyncGeneratorVars_.count(identExpr->name) > 0) {
+                isAsyncGeneratorIteration = true;
+                isGeneratorIteration = true;  // Async generators are also generators
+                std::cerr << "DEBUG: ForOf - iterating over async generator: " << identExpr->name << std::endl;
+            } else if (generatorVars_.count(identExpr->name) > 0) {
+                isGeneratorIteration = true;
+                std::cerr << "DEBUG: ForOf - iterating over generator: " << identExpr->name << std::endl;
+            }
+        }
+
+        // Handle for await...of (async iteration)
+        if (node.isAwait && !isAsyncGeneratorIteration) {
+            std::cerr << "NOTE: 'for await...of' on non-async-generator compiled as synchronous iteration" << std::endl;
+        }
+
+        if (isGeneratorIteration) {
+            // Generator iteration using iterator protocol:
+            //   let result = gen.next(0);
+            //   while (!result.done) {
+            //       let item = result.value;
+            //       body;
+            //       result = gen.next(0);
+            //   }
+
+            std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+            currentLabel_.clear();
+
+            auto* initBlock = currentFunction_->createBasicBlock("forof_gen.init" + labelSuffix).get();
+            auto* condBlock = currentFunction_->createBasicBlock("forof_gen.cond" + labelSuffix).get();
+            auto* bodyBlock = currentFunction_->createBasicBlock("forof_gen.body" + labelSuffix).get();
+            auto* updateBlock = currentFunction_->createBasicBlock("forof_gen.update" + labelSuffix).get();
+            auto* endBlock = currentFunction_->createBasicBlock("forof_gen.end" + labelSuffix).get();
+
+            builder_->createBr(initBlock);
+
+            // Init block: evaluate generator and get first result
+            builder_->setInsertPoint(initBlock);
+            node.right->accept(*this);
+            auto* genValue = lastValue_;
+
+            // Create result variable to hold IteratorResult
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto* resultVar = builder_->createAlloca(ptrType.get(), "__iter_result");
+
+            // Call gen.next(0) for first iteration
+            // Use async generator functions for async generators
+            std::string nextFuncName = isAsyncGeneratorIteration ?
+                "nova_async_generator_next" : "nova_generator_next";
+            auto existingNextFunc = module_->getFunction(nextFuncName);
+            HIRFunction* nextFunc = nullptr;
+            if (existingNextFunc) {
+                nextFunc = existingNextFunc.get();
+            } else {
+                std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction(nextFuncName, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                nextFunc = funcPtr.get();
+            }
+
+            if (isAsyncGeneratorIteration) {
+                std::cerr << "DEBUG: ForOf - using async generator next()" << std::endl;
+            }
+
+            auto* zeroConst = builder_->createIntConstant(0);
+            std::vector<HIRValue*> nextArgs = {genValue, zeroConst};
+            auto* firstResult = builder_->createCall(nextFunc, nextArgs, "iter_result");
+            firstResult->type = ptrType;
+            builder_->createStore(firstResult, resultVar);
+
+            builder_->createBr(condBlock);
+
+            // Condition block: check !result.done
+            builder_->setInsertPoint(condBlock);
+
+            auto* currentResult = builder_->createLoad(resultVar);
+
+            // Get result.done
+            std::string doneFuncName = "nova_iterator_result_done";
+            auto existingDoneFunc = module_->getFunction(doneFuncName);
+            HIRFunction* doneFunc = nullptr;
+            if (existingDoneFunc) {
+                doneFunc = existingDoneFunc.get();
+            } else {
+                std::vector<HIRTypePtr> paramTypes = {ptrType};
+                auto boolType = std::make_shared<HIRType>(HIRType::Kind::Bool);
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, boolType);
+                HIRFunctionPtr funcPtr = module_->createFunction(doneFuncName, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                doneFunc = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> doneArgs = {currentResult};
+            auto* isDone = builder_->createCall(doneFunc, doneArgs, "is_done");
+
+            // If done, exit loop; otherwise continue to body
+            // done == 0 means not done, done != 0 means done
+            auto* zeroForCmp = builder_->createIntConstant(0);
+            auto* notDone = builder_->createEq(isDone, zeroForCmp);
+            builder_->createCondBr(notDone, bodyBlock, endBlock);
+
+            // Body block: let item = result.value; body;
+            builder_->setInsertPoint(bodyBlock);
+
+            auto* resultForValue = builder_->createLoad(resultVar);
+
+            // Get result.value
+            std::string valueFuncName = "nova_iterator_result_value";
+            auto existingValueFunc = module_->getFunction(valueFuncName);
+            HIRFunction* valueFunc = nullptr;
+            if (existingValueFunc) {
+                valueFunc = existingValueFunc.get();
+            } else {
+                std::vector<HIRTypePtr> paramTypes = {ptrType};
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                HIRFunctionPtr funcPtr = module_->createFunction(valueFuncName, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                valueFunc = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> valueArgs = {resultForValue};
+            auto* itemValue = builder_->createCall(valueFunc, valueArgs, "iter_value");
+            itemValue->type = intType;
+
+            // Create loop variable and assign
+            auto* varType = new hir::HIRType(hir::HIRType::Kind::I64);
+            auto* loopVar = builder_->createAlloca(varType, node.left);
+            builder_->createStore(itemValue, loopVar);
+            symbolTable_[node.left] = loopVar;
+
+            // Execute loop body
+            node.body->accept(*this);
+
+            // Check if body ends with terminator
+            bool needsBranch = true;
+            if (!bodyBlock->instructions.empty()) {
+                auto lastOpcode = bodyBlock->instructions.back()->opcode;
+                if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
+                    lastOpcode == hir::HIRInstruction::Opcode::Continue ||
+                    lastOpcode == hir::HIRInstruction::Opcode::Return) {
+                    needsBranch = false;
+                }
+            }
+
+            if (needsBranch) {
+                builder_->createBr(updateBlock);
+            }
+
+            // Update block: result = gen.next(0)
+            builder_->setInsertPoint(updateBlock);
+
+            // Re-evaluate the generator expression to get its current value
+            node.right->accept(*this);
+            auto* genValueAgain = lastValue_;
+
+            auto* zeroForNext = builder_->createIntConstant(0);
+            std::vector<HIRValue*> nextArgs2 = {genValueAgain, zeroForNext};
+            auto* nextResult = builder_->createCall(nextFunc, nextArgs2, "next_result");
+            nextResult->type = ptrType;
+            builder_->createStore(nextResult, resultVar);
+
+            builder_->createBr(condBlock);
+
+            // End block
+            builder_->setInsertPoint(endBlock);
+
+            std::cerr << "DEBUG: ForOf generator loop generation completed" << std::endl;
+            return;
+        }
+
         // For-of loop: for (let item of array) { body }
         // Desugar to:
         //   let __iter_idx = 0;
@@ -6001,12 +9055,16 @@ public:
         //       __iter_idx = __iter_idx + 1;
         //   }
 
-        // Create basic blocks
-        auto* initBlock = currentFunction_->createBasicBlock("forof.init").get();
-        auto* condBlock = currentFunction_->createBasicBlock("forof.cond").get();
-        auto* bodyBlock = currentFunction_->createBasicBlock("forof.body").get();
-        auto* updateBlock = currentFunction_->createBasicBlock("forof.update").get();
-        auto* endBlock = currentFunction_->createBasicBlock("forof.end").get();
+        // Create basic blocks (with label suffix if inside labeled statement)
+        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        // Clear label after using it - label only applies to this loop, not nested loops
+        currentLabel_.clear();
+
+        auto* initBlock = currentFunction_->createBasicBlock("forof.init" + labelSuffix).get();
+        auto* condBlock = currentFunction_->createBasicBlock("forof.cond" + labelSuffix).get();
+        auto* bodyBlock = currentFunction_->createBasicBlock("forof.body" + labelSuffix).get();
+        auto* updateBlock = currentFunction_->createBasicBlock("forof.update" + labelSuffix).get();
+        auto* endBlock = currentFunction_->createBasicBlock("forof.end" + labelSuffix).get();
 
         // Branch to init block
         builder_->createBr(initBlock);
@@ -6033,8 +9091,42 @@ public:
         // Load current index
         auto* currentIndex = builder_->createLoad(indexVar);
 
+        // Check if iterating over a runtime array
+        bool isRuntimeArrayForLength = false;
+        if (auto* identExpr = dynamic_cast<Identifier*>(node.right.get())) {
+            if (runtimeArrayVars_.count(identExpr->name) > 0) {
+                isRuntimeArrayForLength = true;
+            }
+        }
+
         // Get array.length
-        auto* arrayLength = builder_->createGetField(arrayValue, 1);  // field 1 is length
+        HIRValue* arrayLength = nullptr;
+        if (isRuntimeArrayForLength) {
+            std::cerr << "DEBUG: ForOf - using runtime array length function" << std::endl;
+            // Use nova_value_array_length for runtime arrays
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            std::string runtimeFunc = "nova_value_array_length";
+            auto existingFunc = module_->getFunction(runtimeFunc);
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                std::vector<HIRTypePtr> paramTypes = {ptrType};
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {arrayValue};
+            arrayLength = builder_->createCall(func, args, "array_len");
+            arrayLength->type = intType;
+        } else {
+            // Use GetField for regular arrays
+            arrayLength = builder_->createGetField(arrayValue, 1);  // field 1 is length
+        }
 
         // Compare: __iter_idx < array.length
         auto* condition = builder_->createLt(currentIndex, arrayLength);
@@ -6048,7 +9140,42 @@ public:
         auto* indexForAccess = builder_->createLoad(indexVar);
 
         // Get current element: array[__iter_idx]
-        auto* currentElement = builder_->createGetElement(arrayValue, indexForAccess, "iter_elem");
+        HIRValue* currentElement = nullptr;
+
+        // Check if iterating over a runtime array (from keys(), values(), entries())
+        bool isRuntimeArray = false;
+        if (auto* identExpr = dynamic_cast<Identifier*>(node.right.get())) {
+            if (runtimeArrayVars_.count(identExpr->name) > 0) {
+                isRuntimeArray = true;
+                std::cerr << "DEBUG: ForOf - using runtime array element access for " << identExpr->name << std::endl;
+            }
+        }
+
+        if (isRuntimeArray) {
+            // Use nova_value_array_at for runtime arrays
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            std::string runtimeFunc = "nova_value_array_at";
+            auto existingFunc = module_->getFunction(runtimeFunc);
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> args = {arrayValue, indexForAccess};
+            currentElement = builder_->createCall(func, args, "iter_elem");
+            currentElement->type = intType;
+        } else {
+            // Use GetElement for regular arrays
+            currentElement = builder_->createGetElement(arrayValue, indexForAccess, "iter_elem");
+        }
 
         // Declare loop variable and assign current element
         // node.left is the variable name (e.g., "value" in "for (let value of arr)")
@@ -6098,36 +9225,85 @@ public:
     }
     
     void visit(ReturnStmt& node) override {
-        if (node.argument) {
-            node.argument->accept(*this);
-            builder_->createReturn(lastValue_);
-        } else {
+        // For generator functions, return should call nova_generator_complete
+        if (currentGeneratorPtr_) {
+            HIRValue* returnValue = nullptr;
+            if (node.argument) {
+                node.argument->accept(*this);
+                returnValue = lastValue_;
+            } else {
+                returnValue = builder_->createIntConstant(0);
+            }
+
+            // Get types
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+            // Get or create nova_generator_complete function
+            std::string completeFuncName = "nova_generator_complete";
+            auto existingCompleteFunc = module_->getFunction(completeFuncName);
+            HIRFunction* completeFunc = nullptr;
+            if (existingCompleteFunc) {
+                completeFunc = existingCompleteFunc.get();
+            } else {
+                std::vector<HIRTypePtr> completeParamTypes = {ptrType, intType};
+                HIRFunctionType* completeFuncType = new HIRFunctionType(completeParamTypes, voidType);
+                HIRFunctionPtr completeFuncPtr = module_->createFunction(completeFuncName, completeFuncType);
+                completeFuncPtr->linkage = HIRFunction::Linkage::External;
+                completeFunc = completeFuncPtr.get();
+            }
+
+            // Load genPtr and call complete
+            auto* genPtr = builder_->createLoad(currentGeneratorPtr_);
+            std::vector<HIRValue*> args = {genPtr, returnValue};
+            builder_->createCall(completeFunc, args);
+
+            // Return from function
             builder_->createReturn(nullptr);
+        } else {
+            // Normal return
+            if (node.argument) {
+                node.argument->accept(*this);
+                builder_->createReturn(lastValue_);
+            } else {
+                builder_->createReturn(nullptr);
+            }
         }
     }
     
     void visit(BreakStmt& node) override {
-        (void)node;
-        // Create break instruction
+        // Create break instruction with optional label
+        std::cerr << "DEBUG HIRGen: Processing break statement";
+        if (!node.label.empty()) {
+            std::cerr << " with label: " << node.label;
+        }
+        std::cerr << std::endl;
+
         auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
         auto breakInst = std::make_unique<HIRInstruction>(
             HIRInstruction::Opcode::Break,
             voidType,
-            ""
+            node.label  // Store the label in the instruction name
         );
         auto* currentBlock = builder_->getInsertBlock();
         currentBlock->addInstruction(std::move(breakInst));
         currentBlock->hasBreakOrContinue = true;
     }
-    
+
     void visit(ContinueStmt& node) override {
-        (void)node;
-        // Create continue instruction
+        // Create continue instruction with optional label
+        std::cerr << "DEBUG HIRGen: Processing continue statement";
+        if (!node.label.empty()) {
+            std::cerr << " with label: " << node.label;
+        }
+        std::cerr << std::endl;
+
         auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
         auto continueInst = std::make_unique<HIRInstruction>(
             HIRInstruction::Opcode::Continue,
             voidType,
-            ""
+            node.label  // Store the label in the instruction name
         );
         auto* currentBlock = builder_->getInsertBlock();
         currentBlock->addInstruction(std::move(continueInst));
@@ -6367,13 +9543,38 @@ public:
     }
     
     void visit(LabeledStmt& node) override {
-        // labeled statement
-        node.statement->accept(*this);
+        // Labeled statement - store label for potential break/continue targets
+        std::cerr << "DEBUG HIRGen: Processing labeled statement: " << node.label << std::endl;
+
+        // Track the label for potential labeled break/continue
+        // The label applies to the next statement (usually a loop)
+        std::string savedLabel = currentLabel_;
+        currentLabel_ = node.label;
+
+        std::cerr << "DEBUG HIRGen: About to visit labeled statement body" << std::endl;
+        if (node.statement) {
+            node.statement->accept(*this);
+        } else {
+            std::cerr << "DEBUG HIRGen: WARNING - labeled statement has null body" << std::endl;
+        }
+
+        currentLabel_ = savedLabel;
+        std::cerr << "DEBUG HIRGen: Exiting labeled statement: " << node.label << std::endl;
     }
-    
+
     void visit(WithStmt& node) override {
-        (void)node;
-        // with statement
+        // 'with' statement is deprecated in JavaScript and forbidden in strict mode
+        std::cerr << "WARNING: 'with' statement is deprecated and not recommended" << std::endl;
+
+        // Still evaluate the object expression (may have side effects)
+        if (node.object) {
+            node.object->accept(*this);
+        }
+
+        // Execute the body
+        if (node.body) {
+            node.body->accept(*this);
+        }
     }
     
     void visit(DebuggerStmt& node) override {
@@ -6385,7 +9586,50 @@ public:
         (void)node;
         // empty statement - no-op
     }
-    
+
+    void visit(UsingStmt& node) override {
+        // ES2024 'using' statement for Explicit Resource Management
+        // Creates a const binding that will be disposed when scope exits
+        // For now, we implement it as a const binding - full dispose support needs runtime
+
+        std::string name = node.name;
+
+        // Evaluate the initializer first to get its type
+        HIRValue* initValue = nullptr;
+        if (node.init) {
+            node.init->accept(*this);
+            initValue = lastValue_;
+        }
+
+        // Use the initializer's type for the alloca, or default to Any
+        HIRType* allocaType = nullptr;
+        if (initValue && initValue->type) {
+            allocaType = initValue->type.get();
+        } else {
+            auto anyType = std::make_shared<HIRType>(HIRType::Kind::Any);
+            allocaType = anyType.get();
+        }
+
+        // Allocate storage with the correct type
+        auto alloca = builder_->createAlloca(allocaType, name);
+        symbolTable_[name] = alloca;
+
+        // Store the initializer value if present
+        if (initValue) {
+            builder_->createStore(initValue, alloca);
+        }
+
+        // Note: Full implementation would track this for disposal at scope exit
+        // This would require block-level resource tracking for [Symbol.dispose]()
+        // For now, the resource is created but disposal must be done manually
+
+        if (node.isAwait) {
+            // await using - would use [Symbol.asyncDispose]() at scope exit
+            // This requires async context and Promise handling
+            (void)node.isAwait;  // Silence unused warning
+        }
+    }
+
     // Declarations
     void visit(FunctionDecl& node) override {
         // Helper to convert AST Type::Kind to HIR HIRType::Kind
@@ -6406,6 +9650,13 @@ public:
 
         // Create function type with actual parameter types
         std::vector<HIRTypePtr> paramTypes;
+
+        // For generator functions, add implicit genPtr and input parameters
+        if (node.isGenerator) {
+            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer));  // genPtr
+            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));      // input
+        }
+
         for (size_t i = 0; i < node.params.size(); ++i) {
             HIRType::Kind typeKind = HIRType::Kind::Any;  // Default to Any
 
@@ -6423,13 +9674,23 @@ public:
             retTypeKind = convertTypeKind(node.returnType->kind);
         }
         auto retType = std::make_shared<HIRType>(retTypeKind);
-        
+
         auto funcType = new HIRFunctionType(paramTypes, retType);
         
         // Create function
         auto func = module_->createFunction(node.name, funcType);
         func->isAsync = node.isAsync;
         func->isGenerator = node.isGenerator;
+
+        // Track generator functions
+        if (node.isGenerator && node.isAsync) {
+            // AsyncGenerator (ES2018) - async function*
+            asyncGeneratorFuncs_.insert(node.name);
+            std::cerr << "DEBUG HIRGen: Registered AsyncGenerator function: " << node.name << std::endl;
+        } else if (node.isGenerator) {
+            // Regular Generator (ES2015) - function*
+            generatorFuncs_.insert(node.name);
+        }
 
         currentFunction_ = func.get();
 
@@ -6440,31 +9701,270 @@ public:
 
         // Create entry block
         auto entryBlock = func->createBasicBlock("entry");
-        
-        // Create builder
+
+        // Save current builder for nested functions
+        auto savedBuilder = std::move(builder_);
         builder_ = std::make_unique<HIRBuilder>(module_, func.get());
         builder_->setInsertPoint(entryBlock.get());
-        
-        // Add parameters to symbol table
-        for (size_t i = 0; i < node.params.size(); ++i) {
-            symbolTable_[node.params[i]] = func->parameters[i];
+
+        // Save current symbol table and push to scope stack for closure support
+        auto savedSymbolTable = symbolTable_;
+        if (!savedSymbolTable.empty()) {
+            scopeStack_.push_back(savedSymbolTable);  // Push for closure access
         }
-        
+
+        // Clear symbol table for the new function scope
+        symbolTable_.clear();
+
+        // Add parameters to symbol table
+        // For generators, parameters are loaded from local slots (set at call site)
+        if (!node.isGenerator) {
+            for (size_t i = 0; i < node.params.size(); ++i) {
+                if (i < func->parameters.size()) {
+                    symbolTable_[node.params[i]] = func->parameters[i];
+                }
+            }
+        }
+        // For generators, parameter loading happens after state machine setup
+
+        // Handle rest parameter (...args)
+        if (!node.restParam.empty()) {
+            // Create an array to hold rest arguments
+            // For now, create an empty array - full implementation would collect varargs
+            auto* arrayType = new hir::HIRType(hir::HIRType::Kind::Array);
+            auto* restArray = builder_->createAlloca(arrayType, node.restParam);
+            symbolTable_[node.restParam] = restArray;
+            std::cerr << "NOTE: Rest parameter '" << node.restParam << "' created (varargs collection not fully implemented)" << std::endl;
+        }
+
+        // For generator functions, set up state machine
+        if (node.isGenerator) {
+            std::cerr << "DEBUG HIRGen: Setting up generator state machine for " << node.name << std::endl;
+
+            // Reset state machine variables for this generator
+            yieldStateCounter_ = 0;
+            yieldResumeBlocks_.clear();
+            generatorBodyBlock_ = nullptr;
+            currentSetStateFunc_ = nullptr;
+            generatorVarSlots_.clear();
+            generatorNextLocalSlot_ = 0;
+            generatorStoreLocalFunc_ = nullptr;
+            generatorLoadLocalFunc_ = nullptr;
+
+            // Generator function receives (genPtr, input) as implicit first two parameters
+            auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+            // Use proper HIRPointerType for generator pointer (pointer to opaque void)
+            auto ptrType = std::make_shared<HIRPointerType>(voidType, false);
+
+            // Create a local to store genPtr - need pointer-to-pointer type for alloca
+            auto ptrToPtrType = std::make_shared<HIRPointerType>(ptrType, false);
+            auto* genPtrVar = builder_->createAlloca(ptrToPtrType.get(), "__genPtr");
+
+            // Store genPtr (from first parameter) for later use
+            if (!func->parameters.empty()) {
+                builder_->createStore(func->parameters[0], genPtrVar);
+                currentGeneratorPtr_ = genPtrVar;
+            }
+
+            // Get or create nova_generator_get_state function
+            std::string getStateFuncName = "nova_generator_get_state";
+            auto existingGetStateFunc = module_->getFunction(getStateFuncName);
+            HIRFunction* getStateFunc = nullptr;
+            if (existingGetStateFunc) {
+                getStateFunc = existingGetStateFunc.get();
+            } else {
+                std::vector<HIRTypePtr> getStateParamTypes = {ptrType};
+                HIRFunctionType* getStateFuncType = new HIRFunctionType(getStateParamTypes, intType);
+                HIRFunctionPtr getStateFuncPtr = module_->createFunction(getStateFuncName, getStateFuncType);
+                getStateFuncPtr->linkage = HIRFunction::Linkage::External;
+                getStateFunc = getStateFuncPtr.get();
+            }
+
+            // Get or create nova_generator_set_state function
+            std::string setStateFuncName = "nova_generator_set_state";
+            auto existingSetStateFunc = module_->getFunction(setStateFuncName);
+            if (existingSetStateFunc) {
+                currentSetStateFunc_ = existingSetStateFunc.get();
+            } else {
+                std::vector<HIRTypePtr> setStateParamTypes = {ptrType, intType};
+                HIRFunctionType* setStateFuncType = new HIRFunctionType(setStateParamTypes, voidType);
+                HIRFunctionPtr setStateFuncPtr = module_->createFunction(setStateFuncName, setStateFuncType);
+                setStateFuncPtr->linkage = HIRFunction::Linkage::External;
+                currentSetStateFunc_ = setStateFuncPtr.get();
+            }
+
+            // Get or create nova_generator_store_local function (ptr, index, value) -> void
+            std::string storeLocalFuncName = "nova_generator_store_local";
+            auto existingStoreLocal = module_->getFunction(storeLocalFuncName);
+            if (existingStoreLocal) {
+                generatorStoreLocalFunc_ = existingStoreLocal.get();
+            } else {
+                std::vector<HIRTypePtr> storeLocalParamTypes = {ptrType, intType, intType};
+                HIRFunctionType* storeLocalFuncType = new HIRFunctionType(storeLocalParamTypes, voidType);
+                HIRFunctionPtr storeLocalFuncPtr = module_->createFunction(storeLocalFuncName, storeLocalFuncType);
+                storeLocalFuncPtr->linkage = HIRFunction::Linkage::External;
+                generatorStoreLocalFunc_ = storeLocalFuncPtr.get();
+            }
+
+            // Get or create nova_generator_load_local function (ptr, index) -> i64
+            std::string loadLocalFuncName = "nova_generator_load_local";
+            auto existingLoadLocal = module_->getFunction(loadLocalFuncName);
+            if (existingLoadLocal) {
+                generatorLoadLocalFunc_ = existingLoadLocal.get();
+            } else {
+                std::vector<HIRTypePtr> loadLocalParamTypes = {ptrType, intType};
+                HIRFunctionType* loadLocalFuncType = new HIRFunctionType(loadLocalParamTypes, intType);
+                HIRFunctionPtr loadLocalFuncPtr = module_->createFunction(loadLocalFuncName, loadLocalFuncType);
+                loadLocalFuncPtr->linkage = HIRFunction::Linkage::External;
+                generatorLoadLocalFunc_ = loadLocalFuncPtr.get();
+            }
+
+            // Get current state
+            auto* genPtrLoaded = builder_->createLoad(genPtrVar);
+            std::vector<HIRValue*> getStateArgs = {genPtrLoaded};
+            auto* currentState = builder_->createCall(getStateFunc, getStateArgs, "state");
+
+            // Save state value for later dispatch
+            generatorStateValue_ = currentState;
+
+            // Create blocks for state dispatch
+            // State 0 = initial entry (body), State N = resume after yield N
+            generatorDispatchBlock_ = func->createBasicBlock("dispatch").get();
+            generatorBodyBlock_ = func->createBasicBlock("body").get();
+
+            // Branch from entry to dispatch
+            builder_->createBr(generatorDispatchBlock_);
+
+            // Set insert point to dispatch but DON'T add terminator yet
+            // We'll add the if-else chain after processing body to know all resume blocks
+            builder_->setInsertPoint(generatorDispatchBlock_);
+            // Leave dispatch block open - terminator will be added after body processing
+
+            // Set insert point to body block for main code generation
+            builder_->setInsertPoint(generatorBodyBlock_);
+
+            // Load generator function parameters from local slots (stored at call site)
+            // Parameters are stored in slots 100, 101, 102, etc.
+            for (size_t i = 0; i < node.params.size(); ++i) {
+                int slotIndex = 100 + static_cast<int>(i);
+                generatorVarSlots_[node.params[i]] = slotIndex;
+                std::cerr << "DEBUG HIRGen: Generator parameter '" << node.params[i]
+                          << "' mapped to slot " << slotIndex << std::endl;
+            }
+        }
+
         // Generate function body
         if (node.body) {
             node.body->accept(*this);
         }
-        
+
+        // For generator functions, mark completion at the end and wire up dispatch
+        if (node.isGenerator && currentGeneratorPtr_) {
+            // Only add implicit completion if current block doesn't have a terminator
+            // (i.e., no explicit return statement in the generator)
+            auto* currentBlock = builder_->getInsertBlock();
+            if (currentBlock && !currentBlock->hasTerminator()) {
+                auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                std::string completeFuncName = "nova_generator_complete";
+                auto existingCompleteFunc = module_->getFunction(completeFuncName);
+                HIRFunction* completeFunc = nullptr;
+                if (existingCompleteFunc) {
+                    completeFunc = existingCompleteFunc.get();
+                } else {
+                    std::vector<HIRTypePtr> completeParamTypes = {ptrType, intType};
+                    HIRFunctionType* completeFuncType = new HIRFunctionType(completeParamTypes, voidType);
+                    HIRFunctionPtr completeFuncPtr = module_->createFunction(completeFuncName, completeFuncType);
+                    completeFuncPtr->linkage = HIRFunction::Linkage::External;
+                    completeFunc = completeFuncPtr.get();
+                }
+
+                auto* genPtr = builder_->createLoad(currentGeneratorPtr_);
+                auto* zeroVal = builder_->createIntConstant(0);
+                std::vector<HIRValue*> args = {genPtr, zeroVal};
+                builder_->createCall(completeFunc, args);
+
+                // Add return
+                builder_->createReturn(nullptr);
+            }
+
+            // Now generate dispatch logic - we know all resume blocks
+            // Go back to dispatch block and add the if-else chain
+            if (generatorDispatchBlock_ && generatorStateValue_) {
+                std::cerr << "DEBUG HIRGen: Generating dispatch for " << yieldResumeBlocks_.size() << " resume blocks" << std::endl;
+
+                // Save current insert point
+                auto* savedBlock = builder_->getInsertBlock();
+
+                // Set insert point to dispatch block
+                builder_->setInsertPoint(generatorDispatchBlock_);
+
+                // Generate if-else chain for state dispatch:
+                // if state == 1 goto resume_1
+                // if state == 2 goto resume_2
+                // ... else goto body
+                HIRBasicBlock* currentCheckBlock = generatorDispatchBlock_;
+
+                for (size_t i = 0; i < yieldResumeBlocks_.size(); ++i) {
+                    int stateNum = static_cast<int>(i + 1);  // States are 1-indexed
+                    auto* stateConst = builder_->createIntConstant(stateNum);
+                    auto* isThisState = builder_->createEq(
+                        generatorStateValue_, stateConst, "is_state_" + std::to_string(stateNum));
+
+                    if (i < yieldResumeBlocks_.size() - 1) {
+                        // More states to check - create next check block
+                        auto* nextCheckBlock = func->createBasicBlock(
+                            "dispatch_check_" + std::to_string(i + 2)).get();
+                        builder_->createCondBr(isThisState, yieldResumeBlocks_[i], nextCheckBlock);
+                        builder_->setInsertPoint(nextCheckBlock);
+                        currentCheckBlock = nextCheckBlock;
+                    } else {
+                        // Last state - else goes to body
+                        builder_->createCondBr(isThisState, yieldResumeBlocks_[i], generatorBodyBlock_);
+                    }
+                }
+
+                // If no resume blocks, just branch to body
+                if (yieldResumeBlocks_.empty()) {
+                    builder_->createBr(generatorBodyBlock_);
+                }
+
+                // Restore insert point
+                builder_->setInsertPoint(savedBlock);
+            }
+
+            // Reset generator state machine variables
+            generatorDispatchBlock_ = nullptr;
+            generatorStateValue_ = nullptr;
+            generatorBodyBlock_ = nullptr;
+            yieldResumeBlocks_.clear();
+            yieldStateCounter_ = 0;
+            currentSetStateFunc_ = nullptr;
+            currentGeneratorPtr_ = nullptr;
+        }
+
         // Add implicit return if needed
         if (!entryBlock->hasTerminator()) {
             builder_->createReturn(nullptr);
         }
-        
+
+        // Restore context
+        if (!savedSymbolTable.empty()) {
+            scopeStack_.pop_back();  // Pop closure scope
+        }
+        symbolTable_ = savedSymbolTable;
+        builder_ = std::move(savedBuilder);
         currentFunction_ = nullptr;
     }
     
     void visit(ClassDecl& node) override {
         std::cerr << "DEBUG HIRGen: Processing class declaration: " << node.name << std::endl;
+
+        // Register class name for static method call detection
+        classNames_.insert(node.name);
 
         // Helper to convert AST Type::Kind to HIR HIRType::Kind (same as in FunctionDecl)
         auto convertTypeKind = [](Type::Kind astKind) -> HIRType::Kind {
@@ -6482,17 +9982,37 @@ public:
             }
         };
 
-        // 1. Create struct type for class data
+        // 1. Create struct type for class data (only instance properties)
         std::vector<hir::HIRStructType::Field> fields;
         for (const auto& prop : node.properties) {
-            // Convert property type to HIR type
-            hir::HIRType::Kind typeKind = hir::HIRType::Kind::I64;  // Default to i64
-            if (prop.type) {
-                typeKind = convertTypeKind(prop.type->kind);
+            if (prop.isStatic) {
+                // Handle static property - store initial value
+                std::string propKey = node.name + "_" + prop.name;
+                std::cerr << "  DEBUG: Creating static property: " << propKey << std::endl;
+                
+                // Evaluate initializer if present
+                int64_t initValue = 0;
+                if (prop.initializer) {
+                    if (auto* numLit = dynamic_cast<NumberLiteral*>(prop.initializer.get())) {
+                        initValue = static_cast<int64_t>(numLit->value);
+                    }
+                }
+                
+                // Store static property value
+                staticPropertyValues_[propKey] = initValue;
+                
+                // Track which properties are static for this class
+                classStaticProps_[node.name].insert(prop.name);
+            } else {
+                // Instance property - add to struct fields
+                hir::HIRType::Kind typeKind = hir::HIRType::Kind::I64;
+                if (prop.type) {
+                    typeKind = convertTypeKind(prop.type->kind);
+                }
+                auto fieldType = std::make_shared<hir::HIRType>(typeKind);
+                fields.push_back({prop.name, fieldType, true});
+                std::cerr << "  DEBUG: Added field: " << prop.name << std::endl;
             }
-            auto fieldType = std::make_shared<hir::HIRType>(typeKind);
-            fields.push_back({prop.name, fieldType, true});
-            std::cerr << "  DEBUG: Added field: " << prop.name << std::endl;
         }
 
         auto structType = module_->createStructType(node.name);
@@ -6511,13 +10031,30 @@ public:
         if (constructor) {
             std::cerr << "  DEBUG: Generating constructor function" << std::endl;
             generateConstructorFunction(node.name, *constructor, structType, convertTypeKind);
+        } else {
+            // Generate default constructor if none is defined
+            std::cerr << "  DEBUG: Generating default constructor" << std::endl;
+            generateDefaultConstructor(node.name, structType);
         }
 
-        // 3. Generate method functions
+        // 3. Generate method functions (including static, getters, setters)
         for (const auto& method : node.methods) {
             if (method.kind == ClassDecl::Method::Kind::Method) {
-                std::cerr << "  DEBUG: Generating method: " << method.name << std::endl;
-                generateMethodFunction(node.name, method, structType, convertTypeKind);
+                if (method.isStatic) {
+                    std::cerr << "  DEBUG: Generating static method: " << method.name << std::endl;
+                    generateStaticMethodFunction(node.name, method, convertTypeKind);
+                } else {
+                    std::cerr << "  DEBUG: Generating method: " << method.name << std::endl;
+                    generateMethodFunction(node.name, method, structType, convertTypeKind);
+                }
+            } else if (method.kind == ClassDecl::Method::Kind::Get) {
+                std::cerr << "  DEBUG: Generating getter: " << method.name << std::endl;
+                generateGetterFunction(node.name, method, structType, convertTypeKind);
+                classGetters_[node.name].insert(method.name);
+            } else if (method.kind == ClassDecl::Method::Kind::Set) {
+                std::cerr << "  DEBUG: Generating setter: " << method.name << std::endl;
+                generateSetterFunction(node.name, method, structType, convertTypeKind);
+                classSetters_[node.name].insert(method.name);
             }
         }
 
@@ -6623,6 +10160,81 @@ public:
         std::cerr << "    DEBUG: Created constructor function: " << funcName << std::endl;
     }
 
+    void generateDefaultConstructor(const std::string& className,
+                                    hir::HIRStructType* structType) {
+        // Default constructor function name: ClassName_constructor
+        std::string funcName = className + "_constructor";
+
+        // No parameters for default constructor
+        std::vector<hir::HIRTypePtr> paramTypes;
+
+        // Return type is pointer to struct (use Any for now)
+        auto returnType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any);
+
+        // Create function type
+        auto funcType = new HIRFunctionType(paramTypes, returnType);
+
+        // Create HIR function
+        auto func = module_->createFunction(funcName, funcType);
+
+        // Save current function and class context
+        HIRFunction* savedFunction = currentFunction_;
+        hir::HIRStructType* savedClassStructType = currentClassStructType_;
+        currentFunction_ = func.get();
+        currentClassStructType_ = structType;
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Create builder
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // Get or create malloc function declaration
+        HIRFunction* mallocFunc = nullptr;
+        auto& functions = module_->functions;
+        for (auto& f : functions) {
+            if (f->name == "malloc") {
+                mallocFunc = f.get();
+                break;
+            }
+        }
+
+        if (!mallocFunc) {
+            std::vector<HIRTypePtr> mallocParamTypes;
+            mallocParamTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+            auto mallocReturnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            HIRFunctionType* mallocFuncType = new HIRFunctionType(mallocParamTypes, mallocReturnType);
+            HIRFunctionPtr mallocFuncPtr = module_->createFunction("malloc", mallocFuncType);
+            mallocFuncPtr->linkage = HIRFunction::Linkage::External;
+            mallocFunc = mallocFuncPtr.get();
+        }
+
+        // Calculate struct size (number of fields * 8 bytes for i64)
+        size_t structSize = structType->fields.size() * 8;
+        if (structSize == 0) structSize = 8;  // Minimum allocation
+        auto sizeValue = builder_->createIntConstant(structSize);
+
+        // Call malloc to allocate memory
+        std::vector<HIRValue*> mallocArgs = { sizeValue };
+        auto instancePtr = builder_->createCall(mallocFunc, mallocArgs, "instance");
+
+        // Initialize all fields to 0
+        for (size_t i = 0; i < structType->fields.size(); ++i) {
+            auto zero = builder_->createIntConstant(0);
+            builder_->createSetField(instancePtr, static_cast<uint32_t>(i), zero, structType->fields[i].name);
+        }
+
+        // Return the instance
+        builder_->createReturn(instancePtr);
+
+        // Restore context
+        currentClassStructType_ = savedClassStructType;
+        currentFunction_ = savedFunction;
+
+        std::cerr << "    DEBUG: Created default constructor function: " << funcName << std::endl;
+    }
+
     void generateMethodFunction(const std::string& className,
                                 const ClassDecl::Method& method,
                                 hir::HIRStructType* structType,
@@ -6697,6 +10309,197 @@ public:
 
         std::cerr << "    DEBUG: Created method function: " << funcName << std::endl;
     }
+
+    void generateStaticMethodFunction(const std::string& className,
+                                      const ClassDecl::Method& method,
+                                      std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
+        // Static method function name: ClassName_methodName
+        std::string funcName = className + "_" + method.name;
+        
+        // Register as static method
+        staticMethods_.insert(funcName);
+
+        // Parameter types: NO 'this' pointer for static methods
+        std::vector<hir::HIRTypePtr> paramTypes;
+        for (size_t i = 0; i < method.params.size(); ++i) {
+            paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64));
+        }
+
+        // Return type
+        hir::HIRTypePtr returnType;
+        if (method.returnType) {
+            returnType = std::make_shared<hir::HIRType>(convertTypeKind(method.returnType->kind));
+        } else {
+            returnType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64);
+        }
+
+        // Create function type
+        auto funcType = new HIRFunctionType(paramTypes, returnType);
+
+        // Create HIR function
+        auto func = module_->createFunction(funcName, funcType);
+
+        // Save current function context
+        HIRFunction* savedFunction = currentFunction_;
+        currentFunction_ = func.get();
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Create builder
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // Add method parameters to symbol table (starting from index 0, no 'this')
+        for (size_t i = 0; i < method.params.size(); ++i) {
+            symbolTable_[method.params[i]] = func->parameters[i];
+        }
+
+        // Process method body
+        if (method.body) {
+            method.body->accept(*this);
+        }
+
+        // Add implicit return if needed
+        if (!entryBlock->hasTerminator()) {
+            builder_->createReturn(nullptr);
+        }
+
+        // Restore function context
+        currentFunction_ = savedFunction;
+
+        std::cerr << "    DEBUG: Created static method function: " << funcName << std::endl;
+    }
+
+    void generateGetterFunction(const std::string& className,
+                                const ClassDecl::Method& method,
+                                hir::HIRStructType* structType,
+                                std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
+        // Getter function name: ClassName_get_propertyName
+        std::string funcName = className + "_get_" + method.name;
+
+        // Parameter types: only 'this' pointer
+        std::vector<hir::HIRTypePtr> paramTypes;
+        paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any));
+
+        // Return type
+        hir::HIRTypePtr returnType;
+        if (method.returnType) {
+            returnType = std::make_shared<hir::HIRType>(convertTypeKind(method.returnType->kind));
+        } else {
+            returnType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64);
+        }
+
+        // Create function type
+        auto funcType = new HIRFunctionType(paramTypes, returnType);
+
+        // Create HIR function
+        auto func = module_->createFunction(funcName, funcType);
+
+        // Save current function and class context
+        HIRFunction* savedFunction = currentFunction_;
+        hir::HIRStructType* savedClassStructType = currentClassStructType_;
+        currentFunction_ = func.get();
+        currentClassStructType_ = structType;
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Create builder
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // First parameter is 'this'
+        symbolTable_["this"] = func->parameters[0];
+
+        // Save current 'this' context
+        hir::HIRValue* savedThis = currentThis_;
+        currentThis_ = func->parameters[0];
+
+        // Process getter body
+        if (method.body) {
+            method.body->accept(*this);
+        }
+
+        // Add implicit return if needed
+        if (!entryBlock->hasTerminator()) {
+            builder_->createReturn(nullptr);
+        }
+
+        // Restore context
+        currentThis_ = savedThis;
+        currentClassStructType_ = savedClassStructType;
+        currentFunction_ = savedFunction;
+
+        std::cerr << "    DEBUG: Created getter function: " << funcName << std::endl;
+    }
+
+    void generateSetterFunction(const std::string& className,
+                                const ClassDecl::Method& method,
+                                hir::HIRStructType* structType,
+                                std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
+        // Setter function name: ClassName_set_propertyName
+        std::string funcName = className + "_set_" + method.name;
+
+        // Parameter types: 'this' pointer + value parameter
+        std::vector<hir::HIRTypePtr> paramTypes;
+        paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::Any));
+        // Add parameter for the value
+        if (method.params.size() > 0) {
+            paramTypes.push_back(std::make_shared<hir::HIRType>(hir::HIRType::Kind::I64));
+        }
+
+        // Setters return void
+        auto returnType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::Void);
+
+        // Create function type
+        auto funcType = new HIRFunctionType(paramTypes, returnType);
+
+        // Create HIR function
+        auto func = module_->createFunction(funcName, funcType);
+
+        // Save current function and class context
+        HIRFunction* savedFunction = currentFunction_;
+        hir::HIRStructType* savedClassStructType = currentClassStructType_;
+        currentFunction_ = func.get();
+        currentClassStructType_ = structType;
+
+        // Create entry block
+        auto entryBlock = func->createBasicBlock("entry");
+
+        // Create builder
+        builder_ = std::make_unique<HIRBuilder>(module_, func.get());
+        builder_->setInsertPoint(entryBlock.get());
+
+        // First parameter is 'this'
+        symbolTable_["this"] = func->parameters[0];
+
+        // Add value parameter to symbol table
+        if (method.params.size() > 0) {
+            symbolTable_[method.params[0]] = func->parameters[1];
+        }
+
+        // Save current 'this' context
+        hir::HIRValue* savedThis = currentThis_;
+        currentThis_ = func->parameters[0];
+
+        // Process setter body
+        if (method.body) {
+            method.body->accept(*this);
+        }
+
+        // Add implicit return if needed
+        if (!entryBlock->hasTerminator()) {
+            builder_->createReturn(nullptr);
+        }
+
+        // Restore context
+        currentThis_ = savedThis;
+        currentClassStructType_ = savedClassStructType;
+        currentFunction_ = savedFunction;
+
+        std::cerr << "    DEBUG: Created setter function: " << funcName << std::endl;
+    }
     
     void visit(InterfaceDecl& node) override {
         (void)node;
@@ -6740,13 +10543,49 @@ public:
     }
     
     void visit(ImportDecl& node) override {
-        (void)node;
         // Import declaration - module system
+        // For now, log the import for debugging. Full module support TBD.
+        std::cerr << "DEBUG HIRGen: Processing import from '" << node.source << "'" << std::endl;
+
+        if (!node.defaultImport.empty()) {
+            std::cerr << "DEBUG HIRGen: Import default as '" << node.defaultImport << "'" << std::endl;
+        }
+        if (!node.namespaceImport.empty()) {
+            std::cerr << "DEBUG HIRGen: Import namespace as '" << node.namespaceImport << "'" << std::endl;
+        }
+        for (const auto& spec : node.specifiers) {
+            std::cerr << "DEBUG HIRGen: Import '" << spec.imported << "' as '" << spec.local << "'" << std::endl;
+        }
     }
-    
+
     void visit(ExportDecl& node) override {
-        (void)node;
-        // Export declaration
+        // Export declaration - process any exported declaration
+        std::cerr << "DEBUG HIRGen: Processing export declaration" << std::endl;
+
+        if (node.isDefault) {
+            std::cerr << "DEBUG HIRGen: Export default" << std::endl;
+        }
+
+        // If there's an exported declaration (e.g., export function foo() {}), process it
+        if (node.exportedDecl) {
+            std::cerr << "DEBUG HIRGen: Processing exported declaration" << std::endl;
+            node.exportedDecl->accept(*this);
+        }
+
+        // If there's a declaration expression (e.g., export default someExpr), evaluate it
+        if (node.declaration) {
+            std::cerr << "DEBUG HIRGen: Processing export declaration expression" << std::endl;
+            node.declaration->accept(*this);
+        }
+
+        // Log re-exports
+        if (!node.source.empty()) {
+            std::cerr << "DEBUG HIRGen: Re-export from '" << node.source << "'" << std::endl;
+        }
+
+        for (const auto& spec : node.specifiers) {
+            std::cerr << "DEBUG HIRGen: Export '" << spec.local << "' as '" << spec.exported << "'" << std::endl;
+        }
     }
     
     void visit(Program& node) override {
@@ -6763,10 +10602,66 @@ private:
     hir::HIRStructType* currentClassStructType_ = nullptr;  // Current class struct type
     HIRValue* lastValue_ = nullptr;
     std::unordered_map<std::string, HIRValue*> symbolTable_;
+    std::vector<std::unordered_map<std::string, HIRValue*>> scopeStack_;  // Parent scopes for closures
     std::unordered_map<std::string, std::string> functionReferences_;  // Maps variable names to function names
     std::string lastFunctionName_;  // Tracks the last created arrow function name
+    std::string lastClassName_;      // Tracks the last created class name for class expressions
+    std::unordered_map<std::string, std::string> classReferences_;  // Maps variable names to class names
     std::unordered_map<std::string, const std::vector<ExprPtr>*> functionDefaultValues_;  // Maps function names to default values
     std::unordered_map<std::string, std::unordered_map<std::string, int64_t>> enumTable_;  // Maps enum name -> member name -> value
+    std::unordered_set<std::string> classNames_;  // Track class names for static method calls
+    std::unordered_set<std::string> staticMethods_;  // Track static method names (ClassName_methodName)
+    std::unordered_map<std::string, std::unordered_set<std::string>> classGetters_;  // Maps className -> getter property names
+    std::unordered_map<std::string, std::unordered_set<std::string>> classSetters_;  // Maps className -> setter property names
+    std::unordered_map<std::string, int64_t> staticPropertyValues_;  // Maps ClassName_propName -> value
+    std::unordered_map<std::string, std::unordered_set<std::string>> classStaticProps_;  // Maps className -> static property names
+    // TypedArray type tracking
+    std::unordered_map<std::string, std::string> typedArrayTypes_;  // Maps variable name -> TypedArray type (e.g., "uint8" -> "Uint8Array")
+    std::string lastTypedArrayType_;  // Temporarily stores TypedArray type created by NewExpr
+    // ArrayBuffer type tracking
+    std::unordered_set<std::string> arrayBufferVars_;  // Set of variable names that are ArrayBuffers
+    bool lastWasArrayBuffer_ = false;  // Temporarily stores if last NewExpr was ArrayBuffer
+    // DataView type tracking
+    std::unordered_set<std::string> dataViewVars_;  // Set of variable names that are DataViews
+    bool lastWasDataView_ = false;  // Temporarily stores if last NewExpr was DataView
+    // DisposableStack tracking (ES2024)
+    std::unordered_set<std::string> disposableStackVars_;  // Set of variable names that are DisposableStacks
+    bool lastWasDisposableStack_ = false;  // Temporarily stores if last NewExpr was DisposableStack
+    // AsyncDisposableStack tracking (ES2024)
+    std::unordered_set<std::string> asyncDisposableStackVars_;  // Set of variable names that are AsyncDisposableStacks
+    bool lastWasAsyncDisposableStack_ = false;  // Temporarily stores if last NewExpr was AsyncDisposableStack
+    // Promise tracking (ES2015)
+    std::unordered_set<std::string> promiseVars_;  // Set of variable names that are Promises
+    bool lastWasPromise_ = false;  // Temporarily stores if last NewExpr was Promise
+    // Generator tracking (ES2015)
+    std::unordered_set<std::string> generatorVars_;  // Set of variable names that are Generators
+    std::unordered_set<std::string> generatorFuncs_;  // Set of generator function names
+    // AsyncGenerator tracking (ES2018)
+    std::unordered_set<std::string> asyncGeneratorFuncs_;  // Set of async generator function names (async function*)
+    std::unordered_set<std::string> asyncGeneratorVars_;  // Set of variable names that are AsyncGenerators
+    bool lastWasAsyncGenerator_ = false;  // Temporarily stores if last call was to an async generator function
+    bool lastWasGenerator_ = false;  // Temporarily stores if last call was to a generator function
+    HIRValue* currentGeneratorPtr_ = nullptr;  // Current generator object for yield
+    // Generator state machine for multiple yields
+    int yieldStateCounter_ = 0;  // Next yield state number (0 = initial, 1+ = after yield N)
+    std::vector<HIRBasicBlock*> yieldResumeBlocks_;  // Resume blocks indexed by state-1
+    HIRBasicBlock* generatorBodyBlock_ = nullptr;  // Block for state 0 (initial entry)
+    HIRBasicBlock* generatorDispatchBlock_ = nullptr;  // Dispatch block for state switching
+    HIRValue* generatorStateValue_ = nullptr;  // Loaded state value for dispatch
+    HIRFunction* currentSetStateFunc_ = nullptr;  // Cached set_state function
+    // Generator local variable storage (for variables that cross yield boundaries)
+    std::unordered_map<std::string, int> generatorVarSlots_;  // Map variable names to slot indices
+    int generatorNextLocalSlot_ = 0;  // Next available local slot index
+    HIRFunction* generatorStoreLocalFunc_ = nullptr;  // nova_generator_store_local
+    HIRFunction* generatorLoadLocalFunc_ = nullptr;  // nova_generator_load_local
+    // IteratorResult tracking (from gen.next())
+    std::unordered_set<std::string> iteratorResultVars_;  // Set of variable names that are IteratorResults
+    bool lastWasIteratorResult_ = false;  // Temporarily stores if last call returned IteratorResult
+    // Runtime array tracking (for arrays from function returns like keys(), values(), entries())
+    std::unordered_set<std::string> runtimeArrayVars_;  // Set of variable names that hold runtime arrays
+    bool lastWasRuntimeArray_ = false;  // Temporarily stores if last call returned a runtime array
+    // Label support for labeled statements
+    std::string currentLabel_;  // Current label for labeled break/continue
     // Exception handling support
     HIRBasicBlock* currentCatchBlock_ = nullptr;  // Current catch block for throw statements
     HIRBasicBlock* currentFinallyBlock_ = nullptr;  // Current finally block

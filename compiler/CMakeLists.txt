@@ -119,7 +119,13 @@ set(NOVA_SOURCES
     src/runtime/Number.cpp
     src/runtime/Function.cpp
     src/runtime/Utility.cpp
-    
+    src/runtime/Regex.cpp
+    src/runtime/Error.cpp
+    src/runtime/ArrayBuffer.cpp
+    src/runtime/Disposable.cpp
+    src/runtime/Promise.cpp
+    src/runtime/Generator.cpp
+
     # Diagnostics
     src/diagnostics/Diagnostic.cpp
     src/diagnostics/DiagnosticEngine.cpp

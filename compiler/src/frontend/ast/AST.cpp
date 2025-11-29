@@ -5,6 +5,7 @@ namespace nova {
 // Implement accept methods for all AST nodes
 void NumberLiteral::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void StringLiteral::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+void RegexLiteralExpr::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void BooleanLiteral::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void NullLiteral::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void UndefinedLiteral::accept(ASTVisitor& visitor) { visitor.visit(*this); }
@@ -74,6 +75,7 @@ void LabeledStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void WithStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void DebuggerStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void EmptyStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+void UsingStmt::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
 void FunctionDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void ClassDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }

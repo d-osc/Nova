@@ -16,8 +16,9 @@ struct LoopContext {
     MIRBasicBlock* continueTarget; // Target for continue statements (null for switches)
     std::shared_ptr<LoopContext> parent; // Parent context (for nested loops/switches)
     bool isSwitch;                 // True if this is a switch context, false if loop
+    std::string label;             // Label for labeled break/continue (empty if unlabeled)
 
-    LoopContext() : breakTarget(nullptr), continueTarget(nullptr), parent(nullptr), isSwitch(false) {}
+    LoopContext() : breakTarget(nullptr), continueTarget(nullptr), parent(nullptr), isSwitch(false), label("") {}
 };
 
 class MIRGenerator {
@@ -45,6 +46,9 @@ private:
 
     // Map from HIR block to its containing loop context
     std::unordered_map<hir::HIRBasicBlock*, std::shared_ptr<LoopContext>> blockToLoopMap_;
+
+    // Map from label name to its loop context (for labeled break/continue)
+    std::unordered_map<std::string, std::shared_ptr<LoopContext>> labelToLoopMap_;
 
     // Current HIR block being processed
     hir::HIRBasicBlock* currentHIRBlock_;
@@ -371,6 +375,14 @@ private:
         // Create a new loop context
         auto loopContext = std::make_shared<LoopContext>();
 
+        // Extract label from block name (format: "for.cond#labelName" or "while.cond#labelName")
+        std::string blockLabel = loopHeader->label;
+        size_t hashPos = blockLabel.find('#');
+        if (hashPos != std::string::npos) {
+            loopContext->label = blockLabel.substr(hashPos + 1);
+            std::cerr << "DEBUG MIRGen: Found labeled loop with label: " << loopContext->label << std::endl;
+        }
+
         // For a while loop, the structure is:
         // - loopHeader (condition block) -> [bodyBlock, endBlock]
         // - bodyBlock -> loopHeader (back edge)
@@ -444,6 +456,12 @@ private:
 
         // Store in map for lookup by loop header
         loopContextMap_[loopHeader] = loopContext;
+
+        // If this loop has a label, add it to the labelToLoopMap for labeled break/continue
+        if (!loopContext->label.empty()) {
+            labelToLoopMap_[loopContext->label] = loopContext;
+            std::cerr << "DEBUG MIRGen: Registered label '" << loopContext->label << "' in labelToLoopMap" << std::endl;
+        }
 
         // Find all blocks that belong to this loop and map them to this context
         // Using DOMINANCE ANALYSIS: A block belongs to a loop if:
@@ -1078,10 +1096,25 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
     }
     
     void generateBreak(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
-        (void)hirInst;
+        std::shared_ptr<LoopContext> loopContext = nullptr;
 
-        // Find the containing loop/switch for the current HIR block
-        auto loopContext = findContainingLoop(currentHIRBlock_);
+        // Check if this is a labeled break (label stored in instruction name)
+        std::string label = hirInst->name;
+        if (!label.empty()) {
+            // Look up the label in the labelToLoopMap
+            auto it = labelToLoopMap_.find(label);
+            if (it != labelToLoopMap_.end()) {
+                loopContext = it->second;
+                std::cerr << "DEBUG MIRGen: Found labeled break target for label '" << label << "'" << std::endl;
+            } else {
+                std::cerr << "WARNING MIRGen: Label '" << label << "' not found for break statement" << std::endl;
+            }
+        }
+
+        // If no label or label not found, use the containing loop
+        if (!loopContext) {
+            loopContext = findContainingLoop(currentHIRBlock_);
+        }
 
         if (loopContext && loopContext->breakTarget) {
             // Create a direct terminator for the block
@@ -1094,10 +1127,25 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
     }
 
     void generateContinue(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
-        (void)hirInst;
+        std::shared_ptr<LoopContext> loopContext = nullptr;
 
-        // Find the containing loop for the current HIR block
-        auto loopContext = findContainingLoop(currentHIRBlock_);
+        // Check if this is a labeled continue (label stored in instruction name)
+        std::string label = hirInst->name;
+        if (!label.empty()) {
+            // Look up the label in the labelToLoopMap
+            auto it = labelToLoopMap_.find(label);
+            if (it != labelToLoopMap_.end()) {
+                loopContext = it->second;
+                std::cerr << "DEBUG MIRGen: Found labeled continue target for label '" << label << "'" << std::endl;
+            } else {
+                std::cerr << "WARNING MIRGen: Label '" << label << "' not found for continue statement" << std::endl;
+            }
+        }
+
+        // If no label or label not found, use the containing loop
+        if (!loopContext) {
+            loopContext = findContainingLoop(currentHIRBlock_);
+        }
 
         if (loopContext && loopContext->continueTarget) {
             // Create a direct terminator for the block

@@ -17,7 +17,11 @@ public:
     
     Token nextToken();
     Token peekToken();
-    
+
+    // Try to lex a regex literal when parser expects one (context-dependent)
+    // Call this when parser sees a Slash token and expects a regex
+    Token tryLexRegex();
+
     const std::vector<Token>& getAllTokens();
     
     bool hasErrors() const { return !errors_.empty(); }
@@ -29,9 +33,11 @@ private:
     size_t position_;
     uint32_t line_;
     uint32_t column_;
-    
+
     std::vector<Token> tokens_;
     std::vector<std::string> errors_;
+
+    TokenType lastTokenType_ = TokenType::Invalid;  // Track last token for regex context
     
     static std::unordered_map<std::string, TokenType> keywords_;
     

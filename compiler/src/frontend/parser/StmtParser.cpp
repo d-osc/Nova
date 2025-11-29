@@ -13,6 +13,12 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenType::KeywordVar) || match(TokenType::KeywordLet) || match(TokenType::KeywordConst)) {
         return parseVariableDeclaration();
     }
+    // async function declaration
+    if (check(TokenType::KeywordAsync) && peek(1).type == TokenType::KeywordFunction) {
+        advance();  // consume 'async'
+        advance();  // consume 'function'
+        return parseFunctionDeclaration();  // isAsync will be set by checking peek(-2)
+    }
     if (match(TokenType::KeywordFunction)) {
         return parseFunctionDeclaration();
     }
@@ -50,6 +56,12 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenType::KeywordDo)) {
         return parseDoWhileStatement();
     }
+    // for await...of (async iteration)
+    if (check(TokenType::KeywordFor) && peek(1).type == TokenType::KeywordAwait) {
+        advance();  // consume 'for'
+        advance();  // consume 'await'
+        return parseForAwaitOfStatement();
+    }
     if (match(TokenType::KeywordFor)) {
         return parseForStatement();
     }
@@ -77,7 +89,16 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenType::KeywordWith)) {
         return parseWithStatement();
     }
-    
+    if (match(TokenType::KeywordUsing)) {
+        return parseUsingStatement(false);
+    }
+    // await using (ES2024)
+    if (check(TokenType::KeywordAwait) && peek(1).type == TokenType::KeywordUsing) {
+        advance();  // consume 'await'
+        advance();  // consume 'using'
+        return parseUsingStatement(true);
+    }
+
     // Block
     if (check(TokenType::LeftBrace)) {
         return parseBlockStatement();
@@ -109,36 +130,45 @@ std::unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     } else {
         kind = VarDeclStmt::Kind::Const;
     }
-    
+
     std::vector<VarDeclStmt::Declarator> declarators;
-    
+
     // Parse declarators
     do {
         VarDeclStmt::Declarator declarator;
-        
-        // Identifier
-        Token id = consume(TokenType::Identifier, "Expected variable name");
-        declarator.name = id.value;
-        
+
+        // Check for destructuring pattern
+        if (check(TokenType::LeftBracket)) {
+            // Array destructuring: let [a, b] = arr
+            declarator.pattern = parseArrayPattern();
+        } else if (check(TokenType::LeftBrace)) {
+            // Object destructuring: let { x, y } = obj
+            declarator.pattern = parseObjectPattern();
+        } else {
+            // Simple identifier
+            Token id = consume(TokenType::Identifier, "Expected variable name");
+            declarator.name = id.value;
+        }
+
         // Optional type annotation
         if (match(TokenType::Colon)) {
             declarator.type = parseTypeAnnotation();
         }
-        
+
         // Optional initializer
         if (match(TokenType::Equal)) {
             declarator.init = parseAssignmentExpression();
         }
-        
+
         declarators.push_back(std::move(declarator));
-        
+
     } while (match(TokenType::Comma));
-    
+
     consume(TokenType::Semicolon, "Expected ';' after variable declaration");
-    
+
     auto decl = std::make_unique<VarDeclStmt>(kind, std::move(declarators));
     decl->location = getCurrentLocation();
-    
+
     return decl;
 }
 
@@ -153,27 +183,36 @@ std::unique_ptr<Stmt> Parser::parseVariableDeclarationWithoutSemicolon() {
     } else {
         kind = VarDeclStmt::Kind::Const;
     }
-    
+
     std::vector<VarDeclStmt::Declarator> declarators;
-    
+
     // Parse declarators
     do {
         VarDeclStmt::Declarator declarator;
-        
-        // Identifier
-        Token id = consume(TokenType::Identifier, "Expected variable name");
-        declarator.name = id.value;
-        
+
+        // Check for destructuring pattern
+        if (check(TokenType::LeftBracket)) {
+            // Array destructuring: let [a, b] = arr
+            declarator.pattern = parseArrayPattern();
+        } else if (check(TokenType::LeftBrace)) {
+            // Object destructuring: let { x, y } = obj
+            declarator.pattern = parseObjectPattern();
+        } else {
+            // Simple identifier
+            Token id = consume(TokenType::Identifier, "Expected variable name");
+            declarator.name = id.value;
+        }
+
         // Optional type annotation
         if (match(TokenType::Colon)) {
             declarator.type = parseTypeAnnotation();
         }
-        
+
         // Optional initializer
         if (match(TokenType::Equal)) {
             declarator.init = parseAssignmentExpression();
         }
-        
+
         declarators.push_back(std::move(declarator));
         
     } while (match(TokenType::Comma));
@@ -217,8 +256,22 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     std::vector<std::string> params;
     std::vector<TypePtr> paramTypes;
     std::vector<ExprPtr> defaultValues;
+    std::string restParam;
+    TypePtr restParamType = nullptr;
     consume(TokenType::LeftParen, "Expected '(' after function name");
     while (!check(TokenType::RightParen) && !isAtEnd()) {
+        // Check for rest parameter (...args)
+        if (match(TokenType::DotDotDot)) {
+            Token restName = consume(TokenType::Identifier, "Expected rest parameter name");
+            restParam = restName.value;
+            // Optional type annotation for rest param
+            if (match(TokenType::Colon)) {
+                restParamType = parseTypeAnnotation();
+            }
+            // Rest parameter must be last
+            break;
+        }
+
         Token paramName = consume(TokenType::Identifier, "Expected parameter name");
         params.push_back(paramName.value);
 
@@ -244,6 +297,8 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     func->params = std::move(params);
     func->paramTypes = std::move(paramTypes);
     func->defaultValues = std::move(defaultValues);
+    func->restParam = std::move(restParam);
+    func->restParamType = std::move(restParamType);
     
     // Return type
     if (match(TokenType::Colon)) {
@@ -340,6 +395,13 @@ std::unique_ptr<Stmt> Parser::parseWhileStatement() {
 std::unique_ptr<Stmt> Parser::parseBreakStatement() {
     auto brk = std::make_unique<BreakStatement>();
     brk->location = getCurrentLocation();
+
+    // Check for optional label (identifier on the same line, before semicolon)
+    if (check(TokenType::Identifier) && !check(TokenType::Semicolon)) {
+        Token labelToken = advance();
+        brk->label = labelToken.value;
+    }
+
     match(TokenType::Semicolon);
     return brk;
 }
@@ -347,6 +409,13 @@ std::unique_ptr<Stmt> Parser::parseBreakStatement() {
 std::unique_ptr<Stmt> Parser::parseContinueStatement() {
     auto cont = std::make_unique<ContinueStatement>();
     cont->location = getCurrentLocation();
+
+    // Check for optional label (identifier on the same line, before semicolon)
+    if (check(TokenType::Identifier) && !check(TokenType::Semicolon)) {
+        Token labelToken = advance();
+        cont->label = labelToken.value;
+    }
+
     match(TokenType::Semicolon);
     return cont;
 }
@@ -954,14 +1023,43 @@ std::unique_ptr<Stmt> Parser::parseForInStatementBody(const std::string& variabl
 
 std::unique_ptr<Stmt> Parser::parseForOfStatementBody(const std::string& variable, const std::string& kind) {
     auto right = parseExpression();
-    
+
     consume(TokenType::RightParen, "Expected ')' after for-of");
     auto body = parseStatement();
-    
+
     auto forOf = std::make_unique<ForOfStatement>(variable, kind, std::move(right), std::move(body), false);
     forOf->location = getCurrentLocation();
-    
+
     return forOf;
+}
+
+std::unique_ptr<Stmt> Parser::parseForAwaitOfStatement() {
+    // for await (const x of asyncIterable) { ... }
+    // 'for' and 'await' already consumed
+
+    consume(TokenType::LeftParen, "Expected '(' after 'for await'");
+
+    // Parse variable declaration
+    std::string kind = "";
+    if (check(TokenType::KeywordVar) || check(TokenType::KeywordLet) || check(TokenType::KeywordConst)) {
+        kind = check(TokenType::KeywordConst) ? "const" : (check(TokenType::KeywordLet) ? "let" : "var");
+        advance();
+    }
+
+    Token id = consume(TokenType::Identifier, "Expected variable name");
+    std::string variable = id.value;
+
+    consume(TokenType::KeywordOf, "Expected 'of' in for await...of");
+
+    auto right = parseExpression();
+    consume(TokenType::RightParen, "Expected ')' after for await...of");
+    auto body = parseStatement();
+
+    // Create ForOfStatement with isAwait = true
+    auto forAwaitOf = std::make_unique<ForOfStatement>(variable, kind, std::move(right), std::move(body), true);
+    forAwaitOf->location = getCurrentLocation();
+
+    return forAwaitOf;
 }
 
 std::unique_ptr<Stmt> Parser::parseSwitchStatement() {
@@ -1118,12 +1216,37 @@ std::unique_ptr<Decorator> Parser::parseDecorator() {
 
 std::vector<std::unique_ptr<Decorator>> Parser::parseDecorators() {
     std::vector<std::unique_ptr<Decorator>> decorators;
-    
+
     while (match(TokenType::At)) {
         decorators.push_back(parseDecorator());
     }
-    
+
     return decorators;
+}
+
+std::unique_ptr<Stmt> Parser::parseUsingStatement(bool isAwait) {
+    // using name = expression;
+    // await using name = expression;
+
+    Token nameToken = consume(TokenType::Identifier, "Expected variable name after 'using'");
+    std::string name = nameToken.value;
+
+    // Optional type annotation
+    TypePtr type = nullptr;
+    if (match(TokenType::Colon)) {
+        type = parseTypeAnnotation();
+    }
+
+    // Initializer is required for using
+    consume(TokenType::Equal, "Expected '=' after variable name in using declaration");
+    auto init = parseAssignmentExpression();
+
+    match(TokenType::Semicolon);
+
+    auto usingStmt = std::make_unique<UsingStmt>(isAwait, name, std::move(init), std::move(type));
+    usingStmt->location = nameToken.location;
+
+    return usingStmt;
 }
 
 } // namespace nova

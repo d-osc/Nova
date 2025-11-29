@@ -49,6 +49,7 @@ private:
     std::unique_ptr<Stmt> parseForOfStatement();
     std::unique_ptr<Stmt> parseForInStatementBody(const std::string& variable, const std::string& kind);
     std::unique_ptr<Stmt> parseForOfStatementBody(const std::string& variable, const std::string& kind);
+    std::unique_ptr<Stmt> parseForAwaitOfStatement();
     std::unique_ptr<Stmt> parseSwitchStatement();
     std::unique_ptr<Stmt> parseTryStatement();
     std::unique_ptr<Stmt> parseThrowStatement();
@@ -57,6 +58,7 @@ private:
     std::unique_ptr<Stmt> parseContinueStatement();
     std::unique_ptr<Stmt> parseDebuggerStatement();
     std::unique_ptr<Stmt> parseWithStatement();
+    std::unique_ptr<Stmt> parseUsingStatement(bool isAwait = false);
     
     // Expression parsing (precedence climbing)
     std::unique_ptr<Expr> parseExpression();
