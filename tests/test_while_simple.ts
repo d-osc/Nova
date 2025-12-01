@@ -1,12 +1,11 @@
-// Simple while loop test
 function testWhile(): number {
-    let count: number = 0;
-    while (count < 5) {
-        count = count + 1;
+    let i = 0;
+    while (i < 3) {
+        i = i + 1;
     }
-    return count;
+    return i;
 }
 
 function main(): number {
-    return testWhile();  // Should return 5
+    return testWhile();
 }

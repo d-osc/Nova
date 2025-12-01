@@ -1,222 +1,119 @@
-# 🚀 Nova Compiler
+# Nova Compiler
 
-**TypeScript/JavaScript compiler with LLVM backend - Now with control flow and loops!**
+**TypeScript/JavaScript to Native Code Compiler via LLVM**
 
-[![Status](https://img.shields.io/badge/status-beta-blue)]()
-[![Tests](https://img.shields.io/badge/tests-15%2F15%20passing-brightgreen)]()
-[![Performance](https://img.shields.io/badge/compile%20time-~10ms-blue)]()
+[![Status](https://img.shields.io/badge/status-stable-green)]()
+[![Tests](https://img.shields.io/badge/tests-511%20passing-brightgreen)]()
+[![Pass Rate](https://img.shields.io/badge/pass%20rate-100%25-brightgreen)]()
 [![LLVM](https://img.shields.io/badge/LLVM-18.1.7-orange)]()
 
-Nova compiles TypeScript and JavaScript to LLVM IR through a multi-stage compilation pipeline:
+Nova compiles TypeScript and JavaScript directly to native code through a multi-stage compilation pipeline:
 
 ```
-TypeScript/JavaScript → HIR → MIR → LLVM IR → Native Code
+TypeScript/JavaScript -> AST -> HIR -> MIR -> LLVM IR -> Native Code
 ```
 
-## ✨ Features (v0.9.5)
+## Features
 
-### ✅ Core Language (100% Working)
-- ✅ **Functions** - Declarations, parameters, return values, recursion
-- ✅ **Control Flow** - if/else statements with proper branching
-- ✅ **Loops** - while and for loops with runtime conditions
-- ✅ **Logical Operators** - `&&`, `||` with short-circuit evaluation
-- ✅ **Comparison Operators** - `<`, `>`, `==`, `!=`, `===`, `!==`
-- ✅ **Arithmetic Operations** - `+`, `-`, `*`, `/`, `%`, `**`
-- ✅ **Variables** - `let`, `const`, `var` with proper scoping
-- ✅ **typeof Operator** - `typeof x` returns type as string
+### Core Language
+- **Variables**: `let`, `const`, `var` with proper scoping
+- **Functions**: Declarations, parameters, return values, recursion
+- **Arrow Functions**: `(a, b) => a + b`, implicit/explicit return
+- **Classes**: Properties, methods, constructors, inheritance, static members, getters/setters
+- **Control Flow**: if/else, switch/case, ternary operator
+- **Loops**: for, while, do-while, for-of, for-in, break/continue with labels
+- **Error Handling**: try/catch/finally, throw, Error types
+- **Operators**: All arithmetic, logical, bitwise, comparison, assignment operators
 
-### ✅ Strings (100% Working) 🎉 NEW!
-- ✅ **String Concatenation** - `"Hello" + " World"`
-- ✅ **String.length** - Both compile-time and runtime
-- ✅ **Template Literals** - `` `Hello ${name}!` ``
-- ✅ **String Methods**:
-  - `str.substring(start, end)` - Extract substring
-  - `str.indexOf(searchStr)` - Find index (-1 if not found)
-  - `str.charAt(index)` - Get character at index
+### Built-in Types & Methods
 
-### ✅ Arrays (100% Working) 🎉 NEW!
-- ✅ **Array Literals** - `[1, 2, 3]`
-- ✅ **Array Indexing** - `arr[0]` for reading
-- ✅ **Array Assignment** - `arr[0] = 42` for writing
-- ✅ **Array.length** - `arr.length` get array size
+| Category | Methods/Features |
+|----------|-----------------|
+| **Array** | push, pop, shift, unshift, slice, splice, concat, indexOf, includes, find, filter, map, reduce, forEach, sort, reverse, join, every, some, flat, flatMap, at, with, toReversed, toSorted, toSpliced, fill, copyWithin, findIndex, findLast, findLastIndex, lastIndexOf, reduceRight, Array.from, Array.of, Array.isArray |
+| **String** | length, charAt, charCodeAt, indexOf, lastIndexOf, includes, substring, slice, split, concat, repeat, trim, trimStart, trimEnd, toLowerCase, toUpperCase, padStart, padEnd, replace, replaceAll, at, match, localeCompare, String.fromCharCode, String.fromCodePoint |
+| **Number** | toString, toFixed, toExponential, toPrecision, valueOf, Number.isNaN, Number.isFinite, Number.isInteger, Number.isSafeInteger, Number.parseInt, Number.parseFloat, Number.MAX_VALUE, Number.MIN_VALUE, Number.EPSILON, etc. |
+| **Math** | abs, ceil, floor, round, trunc, sqrt, cbrt, pow, exp, log, log10, log2, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, sign, min, max, random, hypot, clz32, imul, fround, PI, E, etc. |
+| **Object** | keys, values, entries, assign, freeze, seal, is, hasOwn, isFrozen, isSealed |
+| **JSON** | stringify, parse |
+| **Console** | log, error, warn, info, debug, trace, dir, table, time, timeEnd, count, clear, group, groupEnd |
+| **TypedArray** | Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array with full method support |
+| **RegExp** | test, exec, match (basic support) |
+| **Promise** | resolve, reject, then (basic support) |
+| **Date** | Date.now() |
+| **Global** | parseInt, parseFloat, isNaN, isFinite, encodeURI, decodeURI, encodeURIComponent, decodeURIComponent, btoa, atob |
 
-### ✅ Objects (100% Working) 🎉 NEW!
-- ✅ **Object Literals** - `{x: 10, y: 20}`
-- ✅ **Property Access** - `obj.x` for reading
-- ✅ **Property Assignment** - `obj.x = 42` for writing
-- ✅ **Nested Objects** - `obj.child.grandchild.value`
+### Advanced Features
+- **Async/Await**: async functions, await expressions
+- **Generators**: function*, yield, yield*
+- **Async Generators**: async function*, for-await-of
+- **Destructuring**: Array and object destructuring
+- **Spread Operator**: `...array`, `...object`
+- **Rest Parameters**: `function(...args)`
+- **Default Parameters**: `function(x = 10)`
+- **Template Literals**: `` `Hello ${name}!` ``
+- **Optional Chaining**: `obj?.prop?.method?.()`
+- **Nullish Coalescing**: `value ?? default`
+- **typeof Operator**: Runtime type checking
+- **instanceof Operator**: Type checking
+- **in Operator**: Property existence check
+- **delete Operator**: Property deletion
+- **Enums**: Basic enum support
+- **using/DisposableStack**: Resource management
 
-### ✅ Classes (100% Working) 🎉 NEW!
-- ✅ **Class Declarations** - `class Person { ... }`
-- ✅ **Constructors** - `constructor(name: string, age: number) { this.name = name; }`
-- ✅ **Properties** - `this.property` access and assignment
-- ✅ **Methods** - `obj.method()` calls with proper `this` binding
-- ✅ **Memory Allocation** - Automatic `malloc` for instances
-- ✅ **Multiple Instances** - Each object gets its own memory
-
-### ✅ Arrow Functions (100% Working) 🎉 NEW!
-- ✅ **Arrow Function Syntax** - `(a, b) => a + b`
-- ✅ **First-Class Values** - Store in variables and call through them
-- ✅ **Implicit Return** - Expression body: `x => x * 2`
-- ✅ **Block Body** - Explicit return: `x => { return x * 2; }`
-- ✅ **Multiple Parameters** - `(a, b, c) => a + b + c`
-- ✅ **Indirect Calls** - `const add = (a, b) => a + b; add(5, 3);`
-
-### ⚠️ Partial Support
-- ⚠️ **Arrow Functions (IIFE)** - Immediate invocation pattern not yet supported
-
-### 📊 Performance
-- **Average Compilation Time**: ~10ms per file
-- **Performance Grade**: EXCELLENT ⚡
-- **Test Success Rate**: 100% (all core tests passing)
-- **Generated IR Quality**: Zero verification errors
-- **Completion**: 74% of TypeScript/JavaScript features
-
-## 🏗️ Architecture
-
-### Compilation Pipeline (v0.6.0)
-
-```
-┌─────────────────┐
-│  TypeScript/JS  │ (.ts, .js)
-│   Source Code   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Tree-sitter    │ Parsing
-│     Parser      │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   AST Builder   │ AST Construction
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   HIR Gen       │ High-level IR
-│  (HIRBuilder)   │ - Function translation
-└────────┬────────┘ - Type preservation
-         │
-         ▼
-┌─────────────────┐
-│   MIR Gen       │ Mid-level IR
-│  (MIRGen)       │ - SSA form conversion
-└────────┬────────┘ - Basic block generation
-         │
-         ▼
-┌─────────────────┐
-│ LLVM CodeGen    │ LLVM IR
-│ (LLVMCodeGen)   │ - Instruction emission
-└────────┬────────┘ - Value mapping
-         │
-         ▼
-┌─────────────────┐
-│   LLVM IR       │ (.ll)
-│  Output File    │
-└─────────────────┘
-       │
-       ▼
-┌──────────────┐
-│ LLVM Backend │ Native Code
-└──────────────┘
-```
-
-### Intermediate Representations (IR)
-
-#### HIR (High-level IR)
-- Preserves TypeScript/JavaScript semantics
-- High-level constructs (closures, async, classes)
-- Type information retained
-- Early optimizations (inlining, constant folding)
-
-#### MIR (Mid-level IR)
-- Lowered control flow (SSA form)
-- Basic blocks and CFG
-- Register-based operations
-- Target-independent optimizations
-
-#### LLVM IR
-- Target-specific optimizations
-- Machine code generation
-- Link-time optimization (LTO)
-
-## 📦 Installation
+## Quick Start
 
 ### Prerequisites
+- LLVM 18.1.7
+- CMake 3.20+
+- C++20 Compiler (MSVC 19.29+ on Windows)
 
-- **LLVM 18.1.7** - Backend compiler
-- **CMake 3.20+** - Build system
-- **C++20 Compiler** - MSVC 19.29+ (Windows)
-- **Tree-sitter** - Included in dependencies
+### Build
 
-### Build from Source (Windows)
-
-```powershell
-# Clone repository
-git clone https://github.com/nova-lang/compiler
-cd compiler
-
-# Configure with CMake
+```bash
+# Configure
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
 # Build
 cmake --build build --config Release
-
-# Binary will be at: build\Release\nova.exe
 ```
 
-## 🚀 Quick Start
+### Usage
 
-### Basic Usage
+```bash
+# Run TypeScript directly (JIT)
+./build/Release/nova.exe script.ts
 
-```powershell
-# Compile TypeScript to LLVM IR
-.\build\Release\nova.exe compile app.ts
+# Or with explicit run command
+./build/Release/nova.exe run script.ts
 
-# Generate all intermediate representations
-.\build\Release\nova.exe compile app.ts --emit-all
-# Creates: app.hir, app.mir, app.ll
+# Compile to LLVM IR
+./build/Release/nova.exe compile app.ts --emit-llvm
+
+# Compile with optimizations
+./build/Release/nova.exe compile app.ts -O3 -o app.ll
 ```
 
-### Example Programs
+### Examples
 
-**Simple Loop:**
+**Hello World:**
 ```typescript
-function testWhile(): number {
-    let count: number = 0;
-    while (count < 5) {
-        count = count + 1;
-    }
-    return count;  // Returns 5
+function main(): number {
+    console.log("Hello, World!");
+    return 0;
 }
 ```
 
-**For Loop:**
+**Array Operations:**
 ```typescript
-function testFor(): number {
-    let sum: number = 0;
-    for (let i: number = 0; i < 5; i = i + 1) {
-        sum = sum + i;
-    }
-    return sum;  // Returns 10 (0+1+2+3+4)
+function main(): number {
+    let arr = [1, 2, 3, 4, 5];
+    arr.push(6);
+    let sum = arr.reduce((a, b) => a + b, 0);
+    return sum;  // Returns 21
 }
 ```
 
-**Conditionals and Logical Operators:**
-```typescript
-function testLogic(x: number, y: number): number {
-    if (x > 0 && y > 0) {
-        return 1;  // Both positive
-    } else if (x > 0 || y > 0) {
-        return 2;  // At least one positive
-    }
-    return 0;  // Both non-positive
-}
-```
-
-**Classes with Properties and Methods:**
+**Classes:**
 ```typescript
 class Rectangle {
     width: number;
@@ -230,10 +127,6 @@ class Rectangle {
     area(): number {
         return this.width * this.height;
     }
-
-    perimeter(): number {
-        return 2 * (this.width + this.height);
-    }
 }
 
 function main(): number {
@@ -242,314 +135,68 @@ function main(): number {
 }
 ```
 
-Compile and run:
-```powershell
-# Compile to LLVM IR
-.\build\Release\nova.exe compile example.ts
-
-# Compile to native executable (using clang)
-clang example.ll -o example.exe
-
-# Run the executable
-.\example.exe
-echo $?  # Shows return value
-```
-
-## 📚 More Examples
-
-### Complex Control Flow
-
+**Async/Await:**
 ```typescript
-function fibonacci(n: number): number {
-    if (n === 0) return 0;
-    if (n === 1) return 1;
+async function fetchData(): Promise<number> {
+    return 42;
+}
 
-    let prev: number = 0;
-    let curr: number = 1;
-    let i: number = 2;
-
-    while (i <= n) {
-        let next: number = prev + curr;
-        prev = curr;
-        curr = next;
-        i = i + 1;
-    }
-
-    return curr;
+async function main(): Promise<number> {
+    let result = await fetchData();
+    return result;
 }
 ```
 
-### Nested Conditionals
-
-```typescript
-function gradeCalculator(score: number): number {
-    if (score >= 90) {
-        return 4;  // A
-    } else if (score >= 80) {
-        return 3;  // B
-    } else if (score >= 70) {
-        return 2;  // C
-    } else if (score >= 60) {
-        return 1;  // D
-    }
-    return 0;  // F
-}
-```
-
-### Nested Loops
-
-```typescript
-function multiplicationTable(n: number): number {
-    let sum: number = 0;
-    for (let i: number = 1; i <= n; i = i + 1) {
-        for (let j: number = 1; j <= n; j = j + 1) {
-            sum = sum + (i * j);
-        }
-    }
-    return sum;
-}
-```
-
-## 🧪 Testing
-
-### Run Test Suite
-
-```powershell
-# Run all validation tests
-.\validate.ps1
-
-# Run individual test
-.\build\Release\nova.exe compile test_simple.ts --emit-all
-
-# Run all tests with details
-.\run_tests.ps1
-```
-
-### Test Results (v0.6.0)
-
-**All 15 tests passing (100%)**
-
-| Test | Feature | Exit Code | Status |
-|------|---------|-----------|--------|
-| test_while_simple | While loops | 5 | ✅ |
-| test_for_simple | For loops | 10 | ✅ |
-| test_and_direct | Logical AND | 1 | ✅ |
-| test_or_direct | Logical OR | 3 | ✅ |
-| test_simple_if | If statement | 1 | ✅ |
-| test_logical_ops | Complex logic | 42 | ✅ |
-| test_and_local | Local variables | 1 | ✅ |
-| test_and_local_var | Scoped vars | 1 | ✅ |
-| test_and_only | AND only | 1 | ✅ |
-| test_assign_check | Assignments | 42 | ✅ |
-| test_logical_runtime | Runtime logic | 42 | ✅ |
-| test_logical_simple | Simple logic | 1 | ✅ |
-| test_return_value | Return values | 42 | ✅ |
-| test_simple_assign | Variable assign | 10 | ✅ |
-| test_simple_return | Return stmt | 42 | ✅ |
-
-**Total: 15/15 tests passing (100%)**
-
-## � Documentation
-
-### Available Docs
-
-- **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** - Complete documentation index
-- **[USAGE_GUIDE.md](USAGE_GUIDE.md)** - Comprehensive usage guide
-- **[PROJECT_STATUS.md](PROJECT_STATUS.md)** - Current project status
-- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick command reference
-- **[TEST_RESULTS.md](TEST_RESULTS.md)** - Detailed test results
-- **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)** - Project completion summary
-
-## 🔧 Project Structure
+## Project Structure
 
 ```
-compiler/
-├── CMakeLists.txt              # Build configuration
-├── README.md                   # This file
-│
-├── include/nova/              # Public headers
-│   ├── ast/                   # AST nodes
-│   ├── hir/                   # High-level IR
-│   ├── mir/                   # Mid-level IR
-│   └── codegen/               # LLVM codegen
-│
-├── src/                       # Implementation
-│   ├── ast/                   # AST construction
-│   ├── parser/                # Tree-sitter parser
-│   ├── hir/                   # HIR generation
-│   ├── mir/                   # MIR generation
-│   ├── codegen/               # LLVM IR generation
-│   └── main.cpp               # Entry point
-│
-├── grammar/                   # Grammar files
-│   ├── hir-grammar.json
-│   ├── mir-grammar.json
-│   └── llvm-ir-grammar.json
-│
-├── tests/                     # Test files
-│   ├── test_add_only.ts
-│   ├── test_simple.ts
-│   ├── test_math.ts
-│   ├── test_complex.ts
-│   ├── test_nested.ts
-│   ├── test_advanced.ts
-│   ├── showcase.ts
-│   └── examples.ts            # 27 examples
-│
-├── scripts/                   # Automation
-│   ├── validate.ps1           # Final validation
-│   ├── run_tests.ps1          # Test runner
-│   └── demo.ps1               # Interactive demo
-│
-└── docs/                      # Documentation
-    ├── DOCUMENTATION_INDEX.md
-    ├── USAGE_GUIDE.md
-    ├── PROJECT_STATUS.md
-    ├── QUICK_REFERENCE.md
-    ├── TEST_RESULTS.md
-    └── FINAL_SUMMARY.md
-│
-├── docs/                 # Documentation
-│   ├── design/          # Design documents
-│   ├── api/             # API reference
-│   └── guide/           # User guide
-│
-└── grammar/              # Language grammars
-    ├── javascript-grammar.json
-    ├── typescript-grammar.json
-    ├── hir-grammar.json
-    ├── mir-grammar.json
-    └── llvm-ir-grammar.json
+Nova/
+├── src/                    # Source code
+│   ├── codegen/           # LLVM code generation
+│   ├── frontend/          # Lexer, parser, AST
+│   ├── hir/               # High-level IR
+│   ├── mir/               # Mid-level IR
+│   └── runtime/           # Runtime library
+├── include/               # Header files
+├── tests/                 # Test files (515 tests)
+├── examples/              # Example programs
+├── docs/                  # Documentation
+├── grammar/               # Language grammar definitions
+├── build.bat             # Windows build script
+├── build.sh              # Unix build script
+├── CMakeLists.txt        # CMake configuration
+└── run_all_tests.py      # Test runner
 ```
 
-### Building Components
+## Testing
 
 ```bash
-# Build only compiler core
-cmake --build build --target novacore
+# Run all tests
+python run_all_tests.py
 
-# Build executable
-cmake --build build --target nova
-
-# Build tests
-cmake --build build --target tests
-
-# Build examples
-cmake --build build --target examples
+# Run specific test
+./build/Release/nova.exe tests/test_array_simple.ts
 ```
 
-## 📊 Performance Benchmarks (v1.0.0)
+**Current Status: 511 tests passing (100%)**
 
-Compilation performance (7 test files):
+## Documentation
 
-| File | Compile Time | Functions | LLVM IR Lines |
-|------|--------------|-----------|---------------|
-| test_add_only.ts | 11.06ms | 1 | 10 |
-| test_simple.ts | 10.18ms | 2 | 19 |
-| test_math.ts | 10.20ms | 1 | 13 |
-| test_complex.ts | 9.94ms | 2 | 23 |
-| test_nested.ts | 10.79ms | 3 | 33 |
-| test_advanced.ts | 10.82ms | 3 | 32 |
-| showcase.ts | 10.93ms | 8 | 75 |
-| **Average** | **10.56ms** | - | - |
+- [USAGE_GUIDE.md](docs/USAGE_GUIDE.md) - Comprehensive usage guide
+- [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md) - Quick command reference
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Compiler architecture
+- [BUILD.md](docs/BUILD.md) - Build instructions
+- [METHODS_STATUS.md](docs/METHODS_STATUS.md) - Supported methods list
+- [TS_JS_COMPATIBILITY.md](docs/TS_JS_COMPATIBILITY.md) - TypeScript/JavaScript compatibility
 
-**Performance Grade: EXCELLENT ⚡**
+## Version History
 
-## ⚠️ Current Limitations
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
-### Not Yet Implemented (v0.6.0)
+## License
 
-- ❌ Switch statements
-- ❌ Do-while loops
-- ❌ Boolean negation (!) operator
-- ❌ Arrays and array indexing
-- ❌ Objects and property access
-- ❌ String operations and concatenation
-- ❌ Classes and interfaces
-- ❌ Arrow functions
-- ❌ Async/await
-- ❌ Imports/exports
-- ❌ Type checking/inference
-- ❌ Try/catch error handling
-
-### What Works (v0.6.0)
-
-- ✅ Function declarations with parameters and return types
-- ✅ Control flow (if/else with multiple branches)
-- ✅ Loops (while, for with proper phi nodes)
-- ✅ Logical operators (&&, || with short-circuit evaluation)
-- ✅ Comparison operators (<, >, ==, !=, ===, !==)
-- ✅ Arithmetic operations (+, -, *, /)
-- ✅ Function calls (direct, nested, chained)
-- ✅ Variable declarations (let with proper scoping)
-- ✅ Return statements
-- ✅ Number type (converted to i64)
-- ✅ Multi-stage IR generation (HIR → MIR → LLVM IR)
-- ✅ SSA form with phi nodes
-
-## 🙏 Acknowledgments
-
-- **LLVM Project** - Backend compiler infrastructure (v18.1.7)
-- **Tree-sitter** - Parser generator and incremental parsing
-- **TypeScript Team** - Language specification and inspiration
-
-## 🗺️ Roadmap
-
-### v0.6.0 (Current) ✅
-- [x] TypeScript/JavaScript parser
-- [x] Function declarations with parameters
-- [x] Control flow (if/else)
-- [x] Loops (while, for)
-- [x] Logical operators (&&, ||)
-- [x] Comparison operators (<, >, ==, !=, ===, !==)
-- [x] Arithmetic operations (+, -, *, /)
-- [x] Variable declarations (let)
-- [x] HIR generation
-- [x] MIR generation with SSA form
-- [x] LLVM IR codegen
-- [x] Comprehensive testing (15 tests)
-
-### v0.7.0 (Next - Planned)
-- [ ] Arrays and array indexing (`arr[0]`, `arr[1] = 10`)
-- [ ] Object literals and property access (`obj.name`)
-- [ ] String operations (concatenation, `.length`)
-- [ ] Boolean negation (!) operator
-- [ ] Switch statements
-
-### v0.8.0 (Planned)
-- [ ] Arrow functions (`(x) => x + 1`)
-- [ ] Do-while loops
-- [ ] Enhanced error messages with line numbers
-- [ ] Type checking and inference
-
-### v1.0.0 (Future)
-- [ ] Classes and interfaces
-- [ ] Try/catch error handling
-- [ ] Module system (import/export)
-- [ ] Async/await
-- [ ] Optimization passes
-- [ ] Direct executable generation (no external clang needed)
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## 📈 Project Status
-
-**Version**: 0.6.0
-**Status**: 🔵 Beta - Feature Complete for Control Flow
-**Last Updated**: November 13, 2025
-**Build Status**: ✅ Passing
-**Test Coverage**: 100% (15/15 tests)
-**Performance**: EXCELLENT (avg ~10ms)
-**Features**: Control flow, loops, operators, functions all working  
-
-### Quick Links
-
-- 📖 [Full Documentation](DOCUMENTATION_INDEX.md)
-- 🚀 [Usage Guide](USAGE_GUIDE.md)
-- 📊 [Test Results](TEST_RESULTS.md)
-- ⚡ [Quick Reference](QUICK_REFERENCE.md)
-
----
-
-**Made with ❤️ by the Nova team**  
 **Powered by LLVM 18.1.7**

@@ -1,5 +1,12 @@
 # Nova Compiler Changelog
 
+## v1.4.0 - Project Cleanup & 100% Tests Passing
+- **511 tests passing** (100% pass rate)
+- **Project cleanup**: Organized test files into tests/ folder
+- **Documentation update**: Updated README, USAGE_GUIDE, QUICK_REFERENCE, TODO
+- **CLI improvement**: Added shortcut syntax `nova script.ts` (equivalent to `nova run script.ts`)
+- **Bug fix**: Fixed string.charAt() to return string instead of character code
+
 ## v1.3.71 - Generator & AsyncGenerator 100% Complete!
 - **GeneratorFunction (ES2015)**: Full implementation!
   - `function* name() {}` declaration

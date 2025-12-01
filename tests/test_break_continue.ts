@@ -1,24 +1,130 @@
-// Test break and continue statements
-function main(): number {
-    let sum = 0;
+// Test break statement in while loop
+function testBreakInWhile() {
+    let i = 0;
+    let result = 0;
+    
+    while (i < 10) {
+        if (i == 5) {
+            break;
+        }
+        result = result + i;
+        i = i + 1;
+    }
+    
+    return result;
+}
 
-    // Test continue: skip even numbers
+// Test continue statement in while loop
+function testContinueInWhile() {
+    let i = 0;
+    let result = 0;
+    
+    while (i < 5) {
+        i = i + 1;
+        if (i == 3) {
+            continue;
+        }
+        result = result + i;
+    }
+    
+    return result;
+}
+
+// Test break in for loop
+function testBreakInFor() {
+    let result = 0;
+    
     for (let i = 0; i < 10; i = i + 1) {
-        if (i % 2 == 0) {
-            continue;  // Skip even numbers
+        if (i == 3) {
+            break;
         }
-        sum = sum + i;  // Only odd numbers: 1+3+5+7+9 = 25
+        result = result + i;
     }
+    
+    return result;
+}
 
-    // Test break: stop at 5
-    let count = 0;
-    for (let j = 0; j < 100; j = j + 1) {
-        if (j == 5) {
-            break;  // Stop when j reaches 5
+// Test continue in for loop
+function testContinueInFor() {
+    let result = 0;
+    
+    for (let i = 0; i < 5; i = i + 1) {
+        if (i == 2) {
+            continue;
         }
-        count = count + 1;  // count will be 5 (0,1,2,3,4)
+        result = result + i;
     }
+    
+    return result;
+}
 
-    // Result: sum(25) + count(5) = 30
-    return sum + count;
+// Test break in do-while loop
+function testBreakInDoWhile() {
+    let i = 0;
+    let result = 0;
+    
+    do {
+        if (i == 3) {
+            break;
+        }
+        result = result + i;
+        i = i + 1;
+    } while (i < 5);
+    
+    return result;
+}
+
+// Test continue in do-while loop
+function testContinueInDoWhile() {
+    let i = 0;
+    let result = 0;
+    
+    do {
+        i = i + 1;
+        if (i == 2) {
+            continue;
+        }
+        result = result + i;
+    } while (i < 5);
+    
+    return result;
+}
+
+// Test nested loops with break and continue
+function testNestedLoopsWithBreakContinue() {
+    let result = 0;
+    let i = 0;
+    
+    while (i < 3) {
+        let j = 0;
+        while (j < 3) {
+            if (i == 1 && j == 1) {
+                break;
+            }
+            if (j == 0) {
+                j = j + 1;
+                continue;
+            }
+            result = result + i * j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    
+    return result;
+}
+
+// Main function to run all tests
+function main() {
+    let result = 0;
+    
+    result = result + testBreakInWhile();
+    result = result + testContinueInWhile();
+    result = result + testBreakInFor();
+    result = result + testContinueInFor();
+    result = result + testBreakInDoWhile();
+    result = result + testContinueInDoWhile();
+    result = result + testNestedLoopsWithBreakContinue();
+    
+    return result;
 }

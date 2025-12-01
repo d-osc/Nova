@@ -1,17 +1,42 @@
-// Test do-while loop
-function main(): number {
-    // Basic do-while: executes at least once
+function testDoWhileLoop(): number {
     let count = 0;
+    let i = 0;
+    
     do {
         count = count + 1;
-    } while (count < 5);
+        i = i + 1;
+    } while (i < 5);
+    
+    return count;
+}
 
-    // Do-while that executes only once (condition false from start)
-    let x = 10;
+function testDoWhileAtLeastOnce(): number {
+    let count = 0;
+    let i = 10;
+    
     do {
-        x = x + 5;
-    } while (x < 10);  // False, but body already executed once
+        count = count + 1;
+    } while (i < 5);
+    
+    return count;
+}
 
-    // Result: count(5) + x(15) = 20
-    return count + x;
+function testDoWhileWithCondition(): number {
+    let sum = 0;
+    let i = 1;
+    
+    do {
+        sum = sum + i;
+        i = i + 1;
+    } while (i <= 5);
+    
+    return sum;
+}
+
+function main(): number {
+    const result1 = testDoWhileLoop();
+    const result2 = testDoWhileAtLeastOnce();
+    const result3 = testDoWhileWithCondition();
+    
+    return result1 + result2 + result3;
 }
