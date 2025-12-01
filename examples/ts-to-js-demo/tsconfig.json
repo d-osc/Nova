@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "moduleDetection": "auto",
+    "outDir": "./dist-full",
+    "rootDir": "./src",
+    "target": "es2020",
+    "strict": true,
+    "maxNodeModuleJsDepth": 2,
+    "plugins": [
+      { "name": "@typescript-eslint/parser" }
+    ],
+    "moduleSuffixes": [".ios", ".android", ""],
+    "customConditions": ["development", "production"]
+  },
+  "include": ["src/**/*.ts"]
+}

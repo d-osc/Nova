@@ -145,10 +145,13 @@ set(NOVA_SOURCES
     # Diagnostics
     src/diagnostics/Diagnostic.cpp
     src/diagnostics/DiagnosticEngine.cpp
-    
+
     # Driver
     src/driver/Driver.cpp
     src/driver/CompilationJob.cpp
+
+    # Transpiler (TypeScript to JavaScript)
+    src/transpiler/Transpiler.cpp
 )
 
 # Create library

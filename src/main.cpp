@@ -3,11 +3,13 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <filesystem>
 #include "nova/Frontend/Lexer.h"
 #include "nova/Frontend/Parser.h"
 #include "nova/HIR/HIRGen.h"
 #include "nova/MIR/MIRGen.h"
 #include "nova/CodeGen/LLVMCodeGen.h"
+#include "nova/Transpiler/Transpiler.h"
 
 using namespace nova;
 
@@ -22,13 +24,14 @@ Usage: nova [command] [options] <input>
        nova <file.ts>                    (shortcut for: nova run <file.ts>)
 
 Commands:
-  compile, -c    Compile source to native code
+  compile, -c    Compile source to native code (LLVM)
   run, -r        JIT compile and run
+  build, -b      Transpile TypeScript to JavaScript (like tsc)
   check          Type check only
   emit           Emit IR at various stages
 
 Options:
-  -o <file>           Output file
+  -o <file>           Output file/directory
   -O<level>           Optimization level (0-3) [default: 2]
   --emit-llvm         Emit LLVM IR (.ll)
   --emit-mir          Emit MIR (.mir)
@@ -37,29 +40,35 @@ Options:
   --emit-obj          Emit object file (.o)
   --emit-all          Emit all IR stages
   --target <triple>   Target triple (e.g., x86_64-pc-windows-msvc)
-  --no-gc             Disable garbage collector
-  --no-runtime        Exclude runtime library
   --verbose           Verbose output
   --help              Show this help message
   --version           Show version
 
+Build Options (for -b/build):
+  --outDir <dir>      Output directory [default: ./dist]
+  --minify            Minify output JavaScript
+  --declaration       Generate .d.ts declaration files
+  --declarationMap    Generate .d.ts.map source maps
+  --sourceMap         Generate source map files
+  --module <type>     Module system: commonjs, es6 [default: commonjs]
+  --target <ver>      JS target: es5, es6, es2020 [default: es2020]
+  --watch, -w         Watch mode - recompile on file changes
+
 Examples:
-  # Run TypeScript directly (shortcut)
+  # Run TypeScript directly
   nova script.ts
 
-  # JIT execute
-  nova run script.ts
-  nova -r script.ts
+  # Transpile to JavaScript (like tsc)
+  nova build                      # Uses tsconfig.json
+  nova -b src/app.ts              # Single file
+  nova -b --outDir dist --minify  # With options
+  nova -b --watch                 # Watch mode
 
-  # Compile to LLVM IR
-  nova compile app.ts --emit-llvm
+  # Compile to native (LLVM)
   nova -c app.ts --emit-llvm
 
-  # Compile with optimizations
-  nova -c app.ts -O3 -o app.ll
-
-  # Emit all IR stages
-  nova -c app.ts --emit-all
+  # JIT execute
+  nova -r script.ts
 
 For more information: https://nova-lang.org/docs
 )" << std::endl;
@@ -94,6 +103,8 @@ int main(int argc, char** argv) {
         command = "compile";
     } else if (command == "-r") {
         command = "run";
+    } else if (command == "-b") {
+        command = "build";
     }
 
     // Auto-detect: if first argument is a .ts or .js file, treat as "run" command
@@ -118,6 +129,16 @@ int main(int argc, char** argv) {
     bool noGC = false;
     bool noRuntime = false;
     std::string targetTriple;
+
+    // Build-specific options
+    std::string outDir = "./dist";
+    bool minify = false;
+    bool declaration = false;
+    bool declarationMap = false;
+    bool sourceMap = false;
+    bool watchMode = false;
+    std::string moduleType = "commonjs";
+    std::string jsTarget = "es2020";
     
     // If auto-run mode, the first argument is the input file
     int startArg = 2;
@@ -169,11 +190,147 @@ int main(int argc, char** argv) {
         else if (arg == "--no-runtime") {
             noRuntime = true;
         }
+        // Build-specific options
+        else if (arg == "--outDir" && i + 1 < argc) {
+            outDir = argv[++i];
+        }
+        else if (arg == "--minify") {
+            minify = true;
+        }
+        else if (arg == "--declaration") {
+            declaration = true;
+        }
+        else if (arg == "--declarationMap") {
+            declarationMap = true;
+            declaration = true;  // declarationMap requires declaration
+        }
+        else if (arg == "--sourceMap") {
+            sourceMap = true;
+        }
+        else if (arg == "--watch" || arg == "-w") {
+            watchMode = true;
+        }
+        else if (arg == "--module" && i + 1 < argc) {
+            moduleType = argv[++i];
+        }
         else if (arg[0] != '-') {
             inputFile = arg;
         }
     }
-    
+
+    // Handle build command
+    if (command == "build") {
+        transpiler::Transpiler transpiler;
+        transpiler::CompilerOptions opts;
+        opts.outDir = outDir;
+        opts.minify = minify;
+        opts.declaration = declaration;
+        opts.declarationMap = declarationMap;
+        opts.sourceMap = sourceMap;
+        opts.module = moduleType;
+        opts.target = jsTarget;
+        transpiler.setOptions(opts);
+
+        // Check if input is a directory (project build) or file (single file)
+        bool isProjectBuild = inputFile.empty() ||
+                              std::filesystem::is_directory(inputFile) ||
+                              inputFile == ".";
+
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+
+        // Check for tsconfig.json in project directory
+        std::string configPath = projectPath + "/tsconfig.json";
+        if (std::filesystem::exists(configPath)) {
+            if (!transpiler.loadConfig(configPath)) {
+                std::cerr << "[WARN] Could not load tsconfig.json, using defaults" << std::endl;
+            }
+        }
+
+        // Watch mode
+        if (watchMode) {
+            transpiler.watch(projectPath, [](const transpiler::TranspileResult& result) {
+                if (result.success) {
+                    std::cout << "[OK] " << result.filename << std::endl;
+                } else {
+                    std::cerr << "[FAIL] " << result.filename << std::endl;
+                    for (const auto& err : result.errors) {
+                        std::cerr << "  " << err << std::endl;
+                    }
+                }
+            });
+            return 0; // Never reached, watch runs forever
+        }
+
+        if (!isProjectBuild) {
+            // Single file transpilation
+            auto result = transpiler.transpileFile(inputFile);
+            if (result.success) {
+                // Write output
+                std::string baseName = std::filesystem::path(inputFile).stem().string();
+                std::string outPath = outDir + "/" + baseName + ".js";
+                std::filesystem::create_directories(outDir);
+
+                // Write JS file
+                std::ofstream out(outPath);
+                out << result.jsCode;
+                out.close();
+
+                // Write declaration file if generated
+                if (!result.dtsCode.empty()) {
+                    std::string dtsPath = outDir + "/" + baseName + ".d.ts";
+                    std::ofstream dtsOut(dtsPath);
+                    dtsOut << result.dtsCode;
+                    dtsOut.close();
+
+                    // Write declaration map if generated
+                    if (!result.declarationMap.empty()) {
+                        std::string dtsMapPath = dtsPath + ".map";
+                        std::ofstream dtsMapOut(dtsMapPath);
+                        dtsMapOut << result.declarationMap;
+                        dtsMapOut.close();
+                    }
+                }
+
+                // Write source map if generated
+                if (!result.sourceMap.empty()) {
+                    std::string mapPath = outPath + ".map";
+                    std::ofstream mapOut(mapPath);
+                    mapOut << result.sourceMap;
+                    mapOut.close();
+                }
+
+                std::cout << "[OK] " << inputFile << " -> " << outPath << std::endl;
+                std::cout << "     " << result.inputSize << " bytes -> "
+                          << result.outputSize << " bytes ("
+                          << (result.inputSize > 0 ? (100 - result.outputSize * 100 / result.inputSize) : 0)
+                          << "% smaller)" << std::endl;
+                std::cout << "     Time: " << result.transpileTimeMs << "ms" << std::endl;
+            } else {
+                for (const auto& err : result.errors) {
+                    std::cerr << "[ERROR] " << err << std::endl;
+                }
+                return 1;
+            }
+        } else {
+            // Project build using tsconfig.json
+            auto result = transpiler.build(projectPath);
+            if (result.success) {
+                std::cout << "[OK] Build completed successfully!" << std::endl;
+                std::cout << "     Files: " << result.successCount << "/" << result.totalFiles << std::endl;
+                std::cout << "     Size: " << result.totalInputSize << " -> "
+                          << result.totalOutputSize << " bytes" << std::endl;
+                std::cout << "     Time: " << result.totalTimeMs << "ms" << std::endl;
+            } else {
+                std::cerr << "[FAIL] Build failed with " << result.failCount << " errors" << std::endl;
+                for (const auto& err : result.errors) {
+                    std::cerr << "  " << err << std::endl;
+                }
+                return 1;
+            }
+        }
+        return 0;
+    }
+
     if (inputFile.empty()) {
         std::cerr << "Error: No input file specified" << std::endl;
         printUsage();

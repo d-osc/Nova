@@ -183,7 +183,17 @@
       "Bash(cmake:*)",
       "Bash(for test in test_array_simple test_array_length test_object_simple test_class_simple test_for_simple test_while_simple test_typeof test_math_sqrt)",
       "Bash(do timeout 3 ./build/Release/nova.exe run tests/$test.ts)",
-      "Bash(for test in test_object_simple test_object_assign test_object_literal test_nested_obj test_nested_simple)"
+      "Bash(for test in test_object_simple test_object_assign test_object_literal test_nested_obj test_nested_simple)",
+      "Bash(node dist/test_class_simple.js:*)",
+      "Bash(for test in test_arrow_func test_for_simple test_typeof)",
+      "Bash(../../build/Release/nova.exe:*)",
+      "Bash(for:*)",
+      "Bash(do echo \"=== Building $f ===\")",
+      "Bash(do ../../build/Release/nova.exe -b \"$f\" --outDir ./dist --minify)",
+      "Bash(./build.bat --minify)",
+      "Bash(node dist/index.js:*)",
+      "Bash(node dist-full/index.js:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []
