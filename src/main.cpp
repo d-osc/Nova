@@ -22,10 +22,10 @@ Usage: nova [command] [options] <input>
        nova <file.ts>                    (shortcut for: nova run <file.ts>)
 
 Commands:
-  compile    Compile source to native code
-  run        JIT compile and run
-  check      Type check only
-  emit       Emit IR at various stages
+  compile, -c    Compile source to native code
+  run, -r        JIT compile and run
+  check          Type check only
+  emit           Emit IR at various stages
 
 Options:
   -o <file>           Output file
@@ -47,23 +47,19 @@ Examples:
   # Run TypeScript directly (shortcut)
   nova script.ts
 
-  # JIT execute (explicit)
+  # JIT execute
   nova run script.ts
+  nova -r script.ts
 
-  # Compile to executable
-  nova compile hello.ts -o hello.exe
+  # Compile to LLVM IR
+  nova compile app.ts --emit-llvm
+  nova -c app.ts --emit-llvm
 
   # Compile with optimizations
-  nova compile app.ts -O3 -o app.exe
-
-  # Emit LLVM IR
-  nova compile app.ts --emit-llvm -o app.ll
-
-  # Type check only
-  nova check app.ts
+  nova -c app.ts -O3 -o app.ll
 
   # Emit all IR stages
-  nova compile app.ts --emit-all --verbose
+  nova -c app.ts --emit-all
 
 For more information: https://nova-lang.org/docs
 )" << std::endl;
@@ -91,6 +87,13 @@ int main(int argc, char** argv) {
     if (command == "--version" || command == "-v") {
         printVersion();
         return 0;
+    }
+
+    // Command aliases
+    if (command == "-c") {
+        command = "compile";
+    } else if (command == "-r") {
+        command = "run";
     }
 
     // Auto-detect: if first argument is a .ts or .js file, treat as "run" command
