@@ -19,6 +19,7 @@ void printUsage() {
 ╚═══════════════════════════════════════════════════════════════╝
 
 Usage: nova [command] [options] <input>
+       nova <file.ts>                    (shortcut for: nova run <file.ts>)
 
 Commands:
   compile    Compile source to native code
@@ -43,6 +44,12 @@ Options:
   --version           Show version
 
 Examples:
+  # Run TypeScript directly (shortcut)
+  nova script.ts
+
+  # JIT execute (explicit)
+  nova run script.ts
+
   # Compile to executable
   nova compile hello.ts -o hello.exe
 
@@ -51,9 +58,6 @@ Examples:
 
   # Emit LLVM IR
   nova compile app.ts --emit-llvm -o app.ll
-
-  # JIT execute
-  nova run script.ts
 
   # Type check only
   nova check app.ts
@@ -78,15 +82,24 @@ int main(int argc, char** argv) {
     }
     
     std::string command = argv[1];
-    
+
     if (command == "--help" || command == "-h") {
         printUsage();
         return 0;
     }
-    
+
     if (command == "--version" || command == "-v") {
         printVersion();
         return 0;
+    }
+
+    // Auto-detect: if first argument is a .ts or .js file, treat as "run" command
+    bool autoRun = false;
+    if (command.size() > 3) {
+        std::string ext = command.substr(command.size() - 3);
+        if (ext == ".ts" || ext == ".js") {
+            autoRun = true;
+        }
     }
     
     // Parse arguments
@@ -103,9 +116,17 @@ int main(int argc, char** argv) {
     bool noRuntime = false;
     std::string targetTriple;
     
-    for (int i = 2; i < argc; ++i) {
+    // If auto-run mode, the first argument is the input file
+    int startArg = 2;
+    if (autoRun) {
+        inputFile = command;
+        command = "run";  // Treat as run command
+        startArg = 2;     // Other args still start at index 2
+    }
+
+    for (int i = startArg; i < argc; ++i) {
         std::string arg = argv[i];
-        
+
         if (arg == "-o" && i + 1 < argc) {
             outputFile = argv[++i];
         }
