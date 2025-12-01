@@ -10,6 +10,7 @@
 #include "nova/MIR/MIRGen.h"
 #include "nova/CodeGen/LLVMCodeGen.h"
 #include "nova/Transpiler/Transpiler.h"
+#include "nova/PackageManager/PackageManager.h"
 
 using namespace nova;
 
@@ -24,10 +25,23 @@ Usage: nova [command] [options] <input>
        nova <file.ts>                    (shortcut for: nova run <file.ts>)
 
 Commands:
+  init [ts]      Initialize a new project (ts = with TypeScript)
   compile, -c    Compile source to native code (LLVM)
   run, -r        JIT compile and run
   build, -b      Transpile TypeScript to JavaScript (like tsc)
+  test           Run automated tests
   check          Type check only
+  install, i     Install packages (fast, with cache)
+  update, u      Update packages to latest versions
+  uninstall, un  Remove a package
+  ci             Clean install from lockfile
+  link           Link package globally or link global package to project
+  list, ls       Show dependency tree
+  outdated       Check for outdated packages
+  login          Log in to registry
+  logout         Log out from registry
+  pack           Create a tarball for publishing
+  publish        Publish package to registry
   emit           Emit IR at various stages
 
 Options:
@@ -105,6 +119,14 @@ int main(int argc, char** argv) {
         command = "run";
     } else if (command == "-b") {
         command = "build";
+    } else if (command == "i") {
+        command = "install";
+    } else if (command == "u") {
+        command = "update";
+    } else if (command == "un") {
+        command = "uninstall";
+    } else if (command == "ls") {
+        command = "list";
     }
 
     // Auto-detect: if first argument is a .ts or .js file, treat as "run" command
@@ -216,6 +238,181 @@ int main(int argc, char** argv) {
         else if (arg[0] != '-') {
             inputFile = arg;
         }
+    }
+
+    // Handle init command
+    if (command == "init") {
+        pm::PackageManager pm;
+        bool withTypeScript = (inputFile == "ts" || inputFile == "typescript");
+        bool success = pm.init(".", withTypeScript);
+        return success ? 0 : 1;
+    }
+
+    // Handle test command
+    if (command == "test") {
+        pm::PackageManager pm;
+        std::string pattern = inputFile.empty() ? "" : inputFile;
+        int result = pm.runTests(".", pattern);
+        return result;
+    }
+
+    // Handle install command
+    if (command == "install") {
+        pm::PackageManager pm;
+        pm.setProgressCallback([](const std::string& pkg, int current, int total, bool fromCache) {
+            std::string status = fromCache ? " (cached)" : "";
+            std::cout << "\r[" << current << "/" << total << "] " << pkg << status << "          " << std::flush;
+        });
+
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+
+        // Check if installing specific package or all dependencies
+        if (!inputFile.empty() && inputFile.find('/') == std::string::npos &&
+            !std::filesystem::is_directory(inputFile)) {
+            // Installing specific package: nova i lodash
+            auto result = pm.add(inputFile, "latest", false);
+            return result.success ? 0 : 1;
+        }
+
+        // Install all dependencies from package.json
+        auto result = pm.install(projectPath, true);
+
+        if (!result.success) {
+            for (const auto& err : result.errors) {
+                std::cerr << "[error] " << err << std::endl;
+            }
+            return 1;
+        }
+
+        return 0;
+    }
+
+    // Handle update command
+    if (command == "update") {
+        pm::PackageManager pm;
+        pm.setProgressCallback([](const std::string& pkg, int current, int total, bool fromCache) {
+            std::string status = fromCache ? " (cached)" : "";
+            std::cout << "\r[" << current << "/" << total << "] " << pkg << status << "          " << std::flush;
+        });
+
+        std::string projectPath = ".";
+
+        // Check if updating specific package or all
+        if (!inputFile.empty() && inputFile.find('/') == std::string::npos &&
+            !std::filesystem::is_directory(inputFile)) {
+            // Update specific package: nova u lodash
+            auto result = pm.update(inputFile);
+            return result.success ? 0 : 1;
+        }
+
+        // Update all packages
+        auto result = pm.update("");
+
+        if (!result.success) {
+            for (const auto& err : result.errors) {
+                std::cerr << "[error] " << err << std::endl;
+            }
+            return 1;
+        }
+
+        return 0;
+    }
+
+    // Handle uninstall command
+    if (command == "uninstall") {
+        if (inputFile.empty()) {
+            std::cerr << "[error] Please specify a package to uninstall" << std::endl;
+            std::cerr << "Usage: nova uninstall <package-name>" << std::endl;
+            return 1;
+        }
+
+        pm::PackageManager pm;
+        bool success = pm.remove(inputFile);
+        return success ? 0 : 1;
+    }
+
+    // Handle ci command (clean install from lockfile)
+    if (command == "ci") {
+        pm::PackageManager pm;
+        pm.setProgressCallback([](const std::string& pkg, int current, int total, bool fromCache) {
+            std::string status = fromCache ? " (cached)" : "";
+            std::cout << "\r[" << current << "/" << total << "] " << pkg << status << "          " << std::flush;
+        });
+
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+        auto result = pm.cleanInstall(projectPath);
+
+        if (!result.success) {
+            for (const auto& err : result.errors) {
+                std::cerr << "[error] " << err << std::endl;
+            }
+            return 1;
+        }
+
+        return 0;
+    }
+
+    // Handle link command
+    if (command == "link") {
+        pm::PackageManager pm;
+
+        if (inputFile.empty()) {
+            // Link current package globally: nova link
+            bool success = pm.link(".");
+            return success ? 0 : 1;
+        } else {
+            // Link global package to current project: nova link <package>
+            bool success = pm.linkPackage(inputFile);
+            return success ? 0 : 1;
+        }
+    }
+
+    // Handle list command
+    if (command == "list") {
+        pm::PackageManager pm;
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+        pm.listDependencies(projectPath);
+        return 0;
+    }
+
+    // Handle outdated command
+    if (command == "outdated") {
+        pm::PackageManager pm;
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+        pm.checkOutdated(projectPath);
+        return 0;
+    }
+
+    // Handle login command
+    if (command == "login") {
+        pm::PackageManager pm;
+        std::string registry = inputFile.empty() ? "" : inputFile;
+        bool success = pm.login(registry);
+        return success ? 0 : 1;
+    }
+
+    // Handle logout command
+    if (command == "logout") {
+        pm::PackageManager pm;
+        std::string registry = inputFile.empty() ? "" : inputFile;
+        bool success = pm.logout(registry);
+        return success ? 0 : 1;
+    }
+
+    // Handle pack command
+    if (command == "pack") {
+        pm::PackageManager pm;
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+        std::string tarballPath = pm.pack(projectPath);
+        return tarballPath.empty() ? 1 : 0;
+    }
+
+    // Handle publish command
+    if (command == "publish") {
+        pm::PackageManager pm;
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+        bool success = pm.publish(projectPath);
+        return success ? 0 : 1;
     }
 
     // Handle build command

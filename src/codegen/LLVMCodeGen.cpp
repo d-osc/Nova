@@ -4,6 +4,11 @@
 #pragma warning(disable: 4100 4127 4244 4245 4267 4310 4324 4458 4459 4624)
 #endif
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 #include "nova/CodeGen/LLVMCodeGen.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -339,11 +344,27 @@ int LLVMCodeGen::executeMain() {
     }
     
     // Link object file to executable (including novacore runtime library)
+    // Get novacore library path relative to the executable directory
+    std::string novacoreLib;
+#ifdef _WIN32
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    std::string exeDir = exePath;
+    size_t lastSlash = exeDir.find_last_of("\\/");
+    if (lastSlash != std::string::npos) {
+        exeDir = exeDir.substr(0, lastSlash);
+    }
+    novacoreLib = exeDir + "/novacore.lib";
+#else
+    // On Unix, use relative path or look for lib in standard locations
+    novacoreLib = "build/Release/libnovacore.a";
+#endif
+
     std::string linkCmd;
 #ifdef _WIN32
-    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"build/Release/novacore.lib\" -lmsvcrt -lkernel32";
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"" + novacoreLib + "\" -lmsvcrt -lkernel32";
 #else
-    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"build/Release/libnovacore.a\" -lc -lstdc++";
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"" + novacoreLib + "\" -lc -lstdc++";
 #endif
     std::cerr << "DEBUG LLVM: Running: " << linkCmd << std::endl;
     int linkResult = system(linkCmd.c_str());

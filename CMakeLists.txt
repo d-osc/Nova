@@ -135,6 +135,7 @@ set(NOVA_SOURCES
     src/runtime/WeakMap.cpp
     src/runtime/WeakRef.cpp
     src/runtime/WeakSet.cpp
+    src/runtime/Test.cpp
 
     # Web APIs Runtime
     src/runtime/Timers.cpp
@@ -152,6 +153,9 @@ set(NOVA_SOURCES
 
     # Transpiler (TypeScript to JavaScript)
     src/transpiler/Transpiler.cpp
+
+    # Package Manager
+    src/pm/PackageManager.cpp
 )
 
 # Create library

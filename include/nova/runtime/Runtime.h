@@ -197,3 +197,46 @@ void async_wait_for_completion();
 
 } // namespace runtime
 } // namespace nova
+
+// Test framework functions (bun:test compatible)
+extern "C" {
+
+// Test structure functions
+void nova_describe(const char* name, void (*fn)());
+void nova_test(const char* name, void (*fn)());
+void nova_it(const char* name, void (*fn)());
+
+// Expect functions
+void* nova_expect_number(double value);
+void* nova_expect_string(const char* value);
+void* nova_expect_bool(int value);
+void* nova_expect_not(void* exp);
+
+// Matchers
+void nova_expect_toBe_number(void* exp, double expected);
+void nova_expect_toBe_string(void* exp, const char* expected);
+void nova_expect_toBe_bool(void* exp, int expected);
+void nova_expect_toEqual_number(void* exp, double expected);
+void nova_expect_toEqual_string(void* exp, const char* expected);
+void nova_expect_toEqual_bool(void* exp, int expected);
+void nova_expect_toBeTruthy(void* exp);
+void nova_expect_toBeFalsy(void* exp);
+void nova_expect_toBeNull(void* exp);
+void nova_expect_toBeDefined(void* exp);
+void nova_expect_toBeUndefined(void* exp);
+void nova_expect_toBeGreaterThan(void* exp, double expected);
+void nova_expect_toBeGreaterThanOrEqual(void* exp, double expected);
+void nova_expect_toBeLessThan(void* exp, double expected);
+void nova_expect_toBeLessThanOrEqual(void* exp, double expected);
+void nova_expect_toBeCloseTo(void* exp, double expected, int precision);
+void nova_expect_toContain(void* exp, const char* item);
+void nova_expect_toHaveLength(void* exp, int length);
+void nova_expect_toMatch(void* exp, const char* pattern);
+void nova_expect_toThrow(void* exp);
+
+// Test utilities
+void nova_test_summary();
+int nova_test_exit_code();
+void nova_test_reset();
+
+}

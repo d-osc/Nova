@@ -1,0 +1,9 @@
+{
+  "name": "test-runner-demo",
+  "version": "1.0.0",
+  "description": "Demo project for nova test command",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "nova test"
+  }
+}

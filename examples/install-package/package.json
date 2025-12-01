@@ -1,0 +1,17 @@
+{
+  "name": "nova-install-demo",
+  "version": "1.0.0",
+  "description": "Demo project for testing nova install command",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "nova -b",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "lodash": "^4.17.21",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

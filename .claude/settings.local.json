@@ -193,7 +193,18 @@
       "Bash(./build.bat --minify)",
       "Bash(node dist/index.js:*)",
       "Bash(node dist-full/index.js:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(powershell -Command \"\n$content = Get-Content -Raw ''src/main.cpp''\n$content = $content -replace ''#include \"\"nova/Transpiler/Transpiler.h\"\"'', ''#include \"\"nova/Transpiler/Transpiler.h\"\"\n#include \"\"nova/PackageManager/PackageManager.h\"\"''\nSet-Content -Path ''src/main.cpp'' -Value $content -NoNewline\necho ''Include added''\n\")",
+      "Bash(powershell -Command \"\n$content = Get-Content -Raw ''src/main.cpp''\n\n# Update usage text - add install command\n$content = $content -replace ''check          Type check only'', ''check          Type check only\n  install, i     Install packages (fast, with cache)''\n\n# Add command alias for i -> install\n$content = $content -replace ''command = \"\"build\"\";\n    }'', ''command = \"\"build\"\";\n    } else if (command == \"\"i\"\") {\n        command = \"\"install\"\";\n    }''\n\nSet-Content -Path ''src/main.cpp'' -Value $content -NoNewline\necho ''Command alias added''\n\")",
+      "Bash(powershell -Command:*)",
+      "Bash(../build/Release/nova.exe install:*)",
+      "Bash(tar:*)",
+      "Bash(cmd //c \"tar -xzf \"\"C:\\Users\\ondev\\AppData\\Local\\nova\\cache\\lodash\\latest\\4.17.21.tar.gz\"\" --strip-components=1\")",
+      "Bash(powershell -NoProfile -Command \"cd ''C:\\Users\\ondev\\AppData\\Local\\nova\\cache\\lodash\\latest''; tar -xzf ''4.17.21.tar.gz'' -C ''C:\\Users\\ondev\\Projects\\Nova\\examples\\install-package\\node_modules\\lodash'' --strip-components=1; ls ''C:\\Users\\ondev\\Projects\\Nova\\examples\\install-package\\node_modules\\lodash''\")",
+      "Bash(cmd.exe /c \"cd /d C:\\Users\\ondev\\AppData\\Local\\nova\\cache\\lodash\\latest && tar -xzf 4.17.21.tar.gz -C C:\\Users\\ondev\\Projects\\Nova\\examples\\install-package\\node_modules\\lodash --strip-components=1 && dir C:\\Users\\ondev\\Projects\\Nova\\examples\\install-package\\node_modules\\lodash\")",
+      "Bash(cmd.exe /c \"cd /d C:\\Users\\ondev\\AppData\\Local\\nova\\cache\\lodash\\latest && tar -xzf 4.17.21.tar.gz && dir\")",
+      "Bash(curl:*)",
+      "Bash(C:/Users/ondev/Projects/Nova/build/Release/nova.exe init:*)"
     ],
     "deny": [],
     "ask": []
