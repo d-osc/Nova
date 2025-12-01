@@ -58,6 +58,13 @@ Options:
   --help              Show this help message
   --version           Show version
 
+Package Manager Options (for install/update/uninstall):
+  -S, --save          Save to dependencies (default)
+  -D, --dev           Save to devDependencies
+  -g, --global        Install/uninstall globally
+  -p, -P, --peer      Save to peerDependencies
+  -op, -Op, --optional Save to optionalDependencies
+
 Build Options (for -b/build):
   --outDir <dir>      Output directory [default: ./dist]
   --minify            Minify output JavaScript
@@ -161,6 +168,10 @@ int main(int argc, char** argv) {
     bool watchMode = false;
     std::string moduleType = "commonjs";
     std::string jsTarget = "es2020";
+
+    // Package manager options
+    pm::DependencyType depType = pm::DependencyType::Production;
+    bool isGlobal = false;
     
     // If auto-run mode, the first argument is the input file
     int startArg = 2;
@@ -235,6 +246,23 @@ int main(int argc, char** argv) {
         else if (arg == "--module" && i + 1 < argc) {
             moduleType = argv[++i];
         }
+        // Package manager dependency type flags
+        else if (arg == "-S" || arg == "-s" || arg == "--save") {
+            depType = pm::DependencyType::Production;
+        }
+        else if (arg == "-D" || arg == "-d" || arg == "--dev" || arg == "--save-dev") {
+            depType = pm::DependencyType::Development;
+        }
+        else if (arg == "-g" || arg == "--global") {
+            depType = pm::DependencyType::Global;
+            isGlobal = true;
+        }
+        else if (arg == "-p" || arg == "-P" || arg == "--peer" || arg == "--save-peer") {
+            depType = pm::DependencyType::Peer;
+        }
+        else if (arg == "-op" || arg == "-Op" || arg == "--optional" || arg == "--save-optional") {
+            depType = pm::DependencyType::Optional;
+        }
         else if (arg[0] != '-') {
             inputFile = arg;
         }
@@ -258,8 +286,8 @@ int main(int argc, char** argv) {
 
     // Handle install command
     if (command == "install") {
-        pm::PackageManager pm;
-        pm.setProgressCallback([](const std::string& pkg, int current, int total, bool fromCache) {
+        pm::PackageManager pmgr;
+        pmgr.setProgressCallback([](const std::string& pkg, int current, int total, bool fromCache) {
             std::string status = fromCache ? " (cached)" : "";
             std::cout << "\r[" << current << "/" << total << "] " << pkg << status << "          " << std::flush;
         });
@@ -270,12 +298,30 @@ int main(int argc, char** argv) {
         if (!inputFile.empty() && inputFile.find('/') == std::string::npos &&
             !std::filesystem::is_directory(inputFile)) {
             // Installing specific package: nova i lodash
-            auto result = pm.add(inputFile, "latest", false);
+            pm::InstallResult result;
+
+            if (isGlobal) {
+                // Global install: nova i -g lodash
+                result = pmgr.installGlobal(inputFile, "latest");
+                if (result.success) {
+                    std::cout << "\n[nova] Installed " << inputFile << " globally" << std::endl;
+                }
+            } else {
+                // Local install with dependency type
+                result = pmgr.add(inputFile, "latest", depType);
+                if (result.success) {
+                    std::string typeStr = "dependencies";
+                    if (depType == pm::DependencyType::Development) typeStr = "devDependencies";
+                    else if (depType == pm::DependencyType::Peer) typeStr = "peerDependencies";
+                    else if (depType == pm::DependencyType::Optional) typeStr = "optionalDependencies";
+                    std::cout << "\n[nova] Added " << inputFile << " to " << typeStr << std::endl;
+                }
+            }
             return result.success ? 0 : 1;
         }
 
         // Install all dependencies from package.json
-        auto result = pm.install(projectPath, true);
+        auto result = pmgr.install(projectPath, true);
 
         if (!result.success) {
             for (const auto& err : result.errors) {
@@ -289,8 +335,8 @@ int main(int argc, char** argv) {
 
     // Handle update command
     if (command == "update") {
-        pm::PackageManager pm;
-        pm.setProgressCallback([](const std::string& pkg, int current, int total, bool fromCache) {
+        pm::PackageManager pmgr;
+        pmgr.setProgressCallback([](const std::string& pkg, int current, int total, bool fromCache) {
             std::string status = fromCache ? " (cached)" : "";
             std::cout << "\r[" << current << "/" << total << "] " << pkg << status << "          " << std::flush;
         });
@@ -301,12 +347,15 @@ int main(int argc, char** argv) {
         if (!inputFile.empty() && inputFile.find('/') == std::string::npos &&
             !std::filesystem::is_directory(inputFile)) {
             // Update specific package: nova u lodash
-            auto result = pm.update(inputFile);
+            auto result = pmgr.update(inputFile, depType);
+            if (result.success) {
+                std::cout << "\n[nova] Updated " << inputFile << std::endl;
+            }
             return result.success ? 0 : 1;
         }
 
         // Update all packages
-        auto result = pm.update("");
+        auto result = pmgr.update("", depType);
 
         if (!result.success) {
             for (const auto& err : result.errors) {
@@ -322,12 +371,23 @@ int main(int argc, char** argv) {
     if (command == "uninstall") {
         if (inputFile.empty()) {
             std::cerr << "[error] Please specify a package to uninstall" << std::endl;
-            std::cerr << "Usage: nova uninstall <package-name>" << std::endl;
+            std::cerr << "Usage: nova uninstall <package-name> [-g]" << std::endl;
             return 1;
         }
 
-        pm::PackageManager pm;
-        bool success = pm.remove(inputFile);
+        pm::PackageManager pmgr;
+        bool success;
+
+        if (isGlobal) {
+            // Global uninstall: nova un -g lodash
+            success = pmgr.removeGlobal(inputFile);
+            if (success) {
+                std::cout << "[nova] Removed " << inputFile << " globally" << std::endl;
+            }
+        } else {
+            // Local uninstall
+            success = pmgr.remove(inputFile, depType);
+        }
         return success ? 0 : 1;
     }
 

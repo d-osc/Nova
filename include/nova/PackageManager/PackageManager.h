@@ -9,6 +9,15 @@
 namespace nova {
 namespace pm {
 
+// Dependency type for package installation
+enum class DependencyType {
+    Production,      // dependencies (default, -S, --save)
+    Development,     // devDependencies (-D, --dev, --save-dev)
+    Peer,           // peerDependencies (-p, -P, --peer, --save-peer)
+    Optional,       // optionalDependencies (-op, -Op, --optional, --save-optional)
+    Global          // global installation (-g, --global)
+};
+
 // Package dependency info
 struct PackageInfo {
     std::string name;
@@ -62,13 +71,24 @@ public:
     InstallResult installPackage(const std::string& packageName, const std::string& version = "latest");
 
     // Add package to package.json and install
-    InstallResult add(const std::string& packageName, const std::string& version = "latest", bool isDev = false);
+    InstallResult add(const std::string& packageName, const std::string& version = "latest",
+                      DependencyType depType = DependencyType::Production);
 
     // Remove package
-    bool remove(const std::string& packageName);
+    bool remove(const std::string& packageName, DependencyType depType = DependencyType::Production);
 
     // Update packages
-    InstallResult update(const std::string& packageName = "");
+    InstallResult update(const std::string& packageName = "",
+                         DependencyType depType = DependencyType::Production);
+
+    // Install package globally
+    InstallResult installGlobal(const std::string& packageName, const std::string& version = "latest");
+
+    // Uninstall global package
+    bool removeGlobal(const std::string& packageName);
+
+    // Get global packages directory
+    static std::string getGlobalDir();
 
     // Clean install from lockfile (like npm ci)
     InstallResult cleanInstall(const std::string& projectPath = ".");

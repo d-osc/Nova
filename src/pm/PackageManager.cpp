@@ -65,6 +65,39 @@ std::string getDefaultCacheDir() {
 #endif
 }
 
+// Get global packages directory
+std::string PackageManager::getGlobalDir() {
+#ifdef _WIN32
+    const char* localAppData = std::getenv("LOCALAPPDATA");
+    if (localAppData) {
+        return std::string(localAppData) + "\\nova\\global";
+    }
+    return "C:\\nova\\global";
+#else
+    const char* home = std::getenv("HOME");
+    if (home) {
+        return std::string(home) + "/.nova/global";
+    }
+    return "/usr/local/lib/nova/global";
+#endif
+}
+
+// Get dependency key name from type
+static std::string getDependencyKeyFromType(DependencyType depType) {
+    switch (depType) {
+        case DependencyType::Production:
+            return "dependencies";
+        case DependencyType::Development:
+            return "devDependencies";
+        case DependencyType::Peer:
+            return "peerDependencies";
+        case DependencyType::Optional:
+            return "optionalDependencies";
+        default:
+            return "dependencies";
+    }
+}
+
 // Format bytes for display
 std::string formatBytes(size_t bytes) {
     if (bytes < 1024) return std::to_string(bytes) + " B";
@@ -637,8 +670,16 @@ bool PackageManager::extractTarGz(const std::string& tarPath, const std::string&
     std::filesystem::create_directories(destDir);
 
 #ifdef _WIN32
-    // Use tar command on Windows 10+
-    std::string cmd = "tar -xzf \"" + tarPath + "\" -C \"" + destDir + "\" --strip-components=1 2>nul";
+    // Use Windows native tar from System32 to avoid MSYS path issues
+    // MSYS tar interprets C: as a remote URL scheme
+    std::string winTarPath = tarPath;
+    std::string winDestDir = destDir;
+
+    // Convert forward slashes to backslashes for Windows native tar
+    std::replace(winTarPath.begin(), winTarPath.end(), '/', '\\');
+    std::replace(winDestDir.begin(), winDestDir.end(), '/', '\\');
+
+    std::string cmd = "C:\\Windows\\System32\\tar.exe -xzf \"" + winTarPath + "\" -C \"" + winDestDir + "\" --strip-components=1 2>nul";
     return system(cmd.c_str()) == 0;
 #else
     std::string cmd = "tar -xzf \"" + tarPath + "\" -C \"" + destDir + "\" --strip-components=1 2>/dev/null";
@@ -648,7 +689,8 @@ bool PackageManager::extractTarGz(const std::string& tarPath, const std::string&
 
 // Get cache path for a package
 std::string PackageManager::getCachePath(const std::string& packageName, const std::string& tag, const std::string& version) {
-    return cacheDir_ + "/" + packageName + "/" + tag + "/" + version + ".tar.gz";
+    std::filesystem::path cachePath = std::filesystem::path(cacheDir_) / packageName / tag / (version + ".tar.gz");
+    return cachePath.string();
 }
 
 // Check if package is in cache
@@ -970,7 +1012,12 @@ InstallResult PackageManager::installPackage(const std::string& packageName, con
 }
 
 // Add package
-InstallResult PackageManager::add(const std::string& packageName, const std::string& version, bool isDev) {
+InstallResult PackageManager::add(const std::string& packageName, const std::string& version, DependencyType depType) {
+    // Handle global installation
+    if (depType == DependencyType::Global) {
+        return installGlobal(packageName, version);
+    }
+
     InstallResult result = installPackage(packageName, version);
 
     if (!result.success) return result;
@@ -993,7 +1040,9 @@ InstallResult PackageManager::add(const std::string& packageName, const std::str
     PackageInfo pkg = resolvePackage(packageName, version);
     std::string versionToAdd = "^" + pkg.resolvedVersion;
 
-    std::string depsKey = isDev ? "\"devDependencies\"" : "\"dependencies\"";
+    // Get the right dependency key
+    std::string depsKeyName = getDependencyKeyFromType(depType);
+    std::string depsKey = "\"" + depsKeyName + "\"";
     size_t depsPos = content.find(depsKey);
 
     if (depsPos != std::string::npos) {
@@ -1012,6 +1061,30 @@ InstallResult PackageManager::add(const std::string& packageName, const std::str
                 content.insert(bracePos + 1, "\n    " + newEntry + ",");
             }
         }
+    } else {
+        // Dependencies section doesn't exist, create it
+        // Find position before last closing brace
+        size_t lastBrace = content.rfind('}');
+        if (lastBrace != std::string::npos) {
+            // Find the last non-whitespace character before the closing brace
+            size_t prevContent = content.find_last_not_of(" \n\r\t", lastBrace - 1);
+
+            std::string newSection;
+            if (prevContent != std::string::npos && content[prevContent] != '{' && content[prevContent] != ',') {
+                // Need to add comma after previous content - insert comma right after prevContent
+                content.insert(prevContent + 1, ",");
+                // Now find lastBrace again since we modified content
+                lastBrace = content.rfind('}');
+                // Remove whitespace between comma and lastBrace to avoid extra blank lines
+                size_t wsStart = prevContent + 2; // After the comma we just inserted
+                if (wsStart < lastBrace) {
+                    content.erase(wsStart, lastBrace - wsStart);
+                    lastBrace = content.rfind('}');
+                }
+            }
+            newSection = "\n  " + depsKey + ": {\n    \"" + packageName + "\": \"" + versionToAdd + "\"\n  }\n";
+            content.insert(lastBrace, newSection);
+        }
     }
 
     std::ofstream outFile(packageJsonPath);
@@ -1021,8 +1094,72 @@ InstallResult PackageManager::add(const std::string& packageName, const std::str
     return result;
 }
 
+// Install package globally
+InstallResult PackageManager::installGlobal(const std::string& packageName, const std::string& version) {
+    InstallResult result = {true, 1, 0, 0, 0, 0.0, 0, {}, {}};
+
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    PackageInfo pkg = resolvePackage(packageName, version);
+    if (pkg.resolvedVersion.empty()) {
+        result.success = false;
+        result.errors.push_back("Package not found: " + packageName);
+        return result;
+    }
+
+    std::string tag = getTagFromVersion(version);
+    std::string cachePath = getCachePath(packageName, tag, pkg.resolvedVersion);
+
+    if (std::filesystem::exists(cachePath)) {
+        result.cachedPackages = 1;
+    } else {
+        if (downloadPackage(pkg)) {
+            result.downloadedPackages = 1;
+        } else {
+            result.success = false;
+            result.errors.push_back("Failed to download: " + packageName);
+            return result;
+        }
+    }
+
+    // Extract to global directory
+    std::filesystem::path globalDir = getGlobalDir();
+    std::filesystem::path destPath = globalDir / "node_modules" / packageName;
+    std::filesystem::create_directories(destPath.parent_path());
+
+    if (!extractPackage(cachePath, destPath.string())) {
+        result.success = false;
+        result.errors.push_back("Failed to extract: " + packageName);
+    }
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    result.totalTimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+
+    return result;
+}
+
+// Remove global package
+bool PackageManager::removeGlobal(const std::string& packageName) {
+    std::filesystem::path globalDir = getGlobalDir();
+    std::filesystem::path packagePath = globalDir / "node_modules" / packageName;
+
+    if (std::filesystem::exists(packagePath)) {
+        std::filesystem::remove_all(packagePath);
+        std::cout << "[nova] Removed " << packageName << " from global packages" << std::endl;
+        return true;
+    } else {
+        std::cerr << "[nova] Package " << packageName << " is not installed globally" << std::endl;
+        return false;
+    }
+}
+
 // Remove package
-bool PackageManager::remove(const std::string& packageName) {
+bool PackageManager::remove(const std::string& packageName, DependencyType depType) {
+    // Handle global uninstall
+    if (depType == DependencyType::Global) {
+        return removeGlobal(packageName);
+    }
+
     std::filesystem::path basePath = std::filesystem::absolute(projectPath_);
     std::filesystem::path packagePath = basePath / "node_modules" / packageName;
 
@@ -1042,7 +1179,7 @@ bool PackageManager::remove(const std::string& packageName) {
     std::string content = buffer.str();
     inFile.close();
 
-    // Remove from dependencies and devDependencies
+    // Remove from dependencies and devDependencies (search all sections)
     std::regex depRegex("\\s*\"" + packageName + "\"\\s*:\\s*\"[^\"]+\"\\s*,?");
     content = std::regex_replace(content, depRegex, "");
 
@@ -1055,14 +1192,19 @@ bool PackageManager::remove(const std::string& packageName) {
 }
 
 // Update packages
-InstallResult PackageManager::update(const std::string& packageName) {
+InstallResult PackageManager::update(const std::string& packageName, DependencyType depType) {
     if (packageName.empty()) {
         // Update all packages
         return install(projectPath_, true);
     }
 
-    // Update specific package
-    return installPackage(packageName, "latest");
+    // Handle global update
+    if (depType == DependencyType::Global) {
+        return installGlobal(packageName, "latest");
+    }
+
+    // Update specific package - reinstall with same dependency type
+    return add(packageName, "latest", depType);
 }
 
 // Clean install from lockfile
