@@ -1,0 +1,562 @@
+// Nova Runtime - Promise Implementation (ES2015+)
+// JavaScript-like Promise for async/await support
+
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+#include <functional>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
+
+extern "C" {
+
+// Forward declarations
+void nova_console_log_string(const char* str);
+void nova_console_error_string(const char* str);
+
+// Forward declarations for Promise functions (needed for mutual recursion)
+void nova_promise_fulfill(void* promisePtr, int64_t value);
+void nova_promise_reject_internal(void* promisePtr, int64_t reason);
+
+// ============================================================================
+// Promise State
+// ============================================================================
+enum class PromiseState {
+    PENDING,
+    FULFILLED,
+    REJECTED
+};
+
+// ============================================================================
+// Callback entry for then/catch/finally
+// ============================================================================
+struct PromiseCallback {
+    enum class Type {
+        THEN,
+        CATCH,
+        FINALLY
+    };
+
+    Type type;
+    void* callback;      // Function pointer
+    void* nextPromise;   // Promise to chain result to
+};
+
+// ============================================================================
+// Promise Structure
+// ============================================================================
+struct NovaPromise {
+    PromiseState state;
+    int64_t value;           // Fulfilled value (for simplicity, using int64_t)
+    int64_t error;           // Rejection reason
+    std::vector<PromiseCallback> callbacks;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool hasValue;
+    bool hasError;
+};
+
+// ============================================================================
+// Microtask Queue (for proper Promise scheduling)
+// ============================================================================
+static std::queue<std::function<void()>> microtaskQueue;
+static std::mutex microtaskMutex;
+static std::atomic<bool> processingMicrotasks{false};
+
+void nova_promise_queue_microtask(std::function<void()> task) {
+    std::lock_guard<std::mutex> lock(microtaskMutex);
+    microtaskQueue.push(task);
+}
+
+void nova_promise_process_microtasks() {
+    if (processingMicrotasks.exchange(true)) {
+        return; // Already processing
+    }
+
+    while (true) {
+        std::function<void()> task;
+        {
+            std::lock_guard<std::mutex> lock(microtaskMutex);
+            if (microtaskQueue.empty()) {
+                processingMicrotasks.store(false);
+                return;
+            }
+            task = microtaskQueue.front();
+            microtaskQueue.pop();
+        }
+        task();
+    }
+}
+
+// ============================================================================
+// Promise Creation
+// ============================================================================
+
+// new Promise((resolve, reject) => ...)
+// For simplicity, we create a pending promise and provide resolve/reject functions
+void* nova_promise_create() {
+    NovaPromise* promise = new NovaPromise();
+    promise->state = PromiseState::PENDING;
+    promise->value = 0;
+    promise->error = 0;
+    promise->hasValue = false;
+    promise->hasError = false;
+    return promise;
+}
+
+// Promise.resolve(value) - Create an already-fulfilled promise
+void* nova_promise_resolve(int64_t value) {
+    NovaPromise* promise = new NovaPromise();
+    promise->state = PromiseState::FULFILLED;
+    promise->value = value;
+    promise->error = 0;
+    promise->hasValue = true;
+    promise->hasError = false;
+    return promise;
+}
+
+// Promise.reject(reason) - Create an already-rejected promise
+void* nova_promise_reject(int64_t reason) {
+    NovaPromise* promise = new NovaPromise();
+    promise->state = PromiseState::REJECTED;
+    promise->value = 0;
+    promise->error = reason;
+    promise->hasValue = false;
+    promise->hasError = true;
+    return promise;
+}
+
+// ============================================================================
+// Promise Resolution
+// ============================================================================
+
+// Internal: Process callbacks when promise settles
+void nova_promise_process_callbacks(NovaPromise* promise) {
+    typedef int64_t (*ThenCallback)(int64_t);
+    typedef int64_t (*CatchCallback)(int64_t);
+    typedef void (*FinallyCallback)();
+
+    for (auto& cb : promise->callbacks) {
+        NovaPromise* nextPromise = static_cast<NovaPromise*>(cb.nextPromise);
+
+        switch (cb.type) {
+            case PromiseCallback::Type::THEN:
+                if (promise->state == PromiseState::FULFILLED && cb.callback) {
+                    try {
+                        int64_t result = reinterpret_cast<ThenCallback>(cb.callback)(promise->value);
+                        if (nextPromise) {
+                            nova_promise_fulfill(nextPromise, result);
+                        }
+                    } catch (...) {
+                        if (nextPromise) {
+                            nova_promise_reject_internal(nextPromise, -1);
+                        }
+                    }
+                } else if (promise->state == PromiseState::REJECTED && nextPromise) {
+                    // Pass rejection to next promise
+                    nova_promise_reject_internal(nextPromise, promise->error);
+                }
+                break;
+
+            case PromiseCallback::Type::CATCH:
+                if (promise->state == PromiseState::REJECTED && cb.callback) {
+                    try {
+                        int64_t result = reinterpret_cast<CatchCallback>(cb.callback)(promise->error);
+                        if (nextPromise) {
+                            nova_promise_fulfill(nextPromise, result);
+                        }
+                    } catch (...) {
+                        if (nextPromise) {
+                            nova_promise_reject_internal(nextPromise, -1);
+                        }
+                    }
+                } else if (promise->state == PromiseState::FULFILLED && nextPromise) {
+                    // Pass fulfillment to next promise
+                    nova_promise_fulfill(nextPromise, promise->value);
+                }
+                break;
+
+            case PromiseCallback::Type::FINALLY:
+                if (cb.callback) {
+                    reinterpret_cast<FinallyCallback>(cb.callback)();
+                }
+                // Pass through the original state
+                if (nextPromise) {
+                    if (promise->state == PromiseState::FULFILLED) {
+                        nova_promise_fulfill(nextPromise, promise->value);
+                    } else {
+                        nova_promise_reject_internal(nextPromise, promise->error);
+                    }
+                }
+                break;
+        }
+    }
+
+    promise->callbacks.clear();
+}
+
+// Resolve a promise (fulfill it)
+void nova_promise_fulfill(void* promisePtr, int64_t value) {
+    if (!promisePtr) return;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+        if (promise->state != PromiseState::PENDING) {
+            return; // Already settled
+        }
+
+        promise->state = PromiseState::FULFILLED;
+        promise->value = value;
+        promise->hasValue = true;
+    }
+
+    promise->cv.notify_all();
+
+    // Process callbacks asynchronously (microtask)
+    nova_promise_queue_microtask([promise]() {
+        nova_promise_process_callbacks(promise);
+    });
+    nova_promise_process_microtasks();
+}
+
+// Reject a promise (internal)
+void nova_promise_reject_internal(void* promisePtr, int64_t reason) {
+    if (!promisePtr) return;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+        if (promise->state != PromiseState::PENDING) {
+            return; // Already settled
+        }
+
+        promise->state = PromiseState::REJECTED;
+        promise->error = reason;
+        promise->hasError = true;
+    }
+
+    promise->cv.notify_all();
+
+    // Process callbacks
+    nova_promise_queue_microtask([promise]() {
+        nova_promise_process_callbacks(promise);
+    });
+    nova_promise_process_microtasks();
+}
+
+// External reject function
+void nova_promise_reject_value(void* promisePtr, int64_t reason) {
+    nova_promise_reject_internal(promisePtr, reason);
+}
+
+// ============================================================================
+// Promise Methods
+// ============================================================================
+
+// promise.then(onFulfilled) - returns new Promise
+void* nova_promise_then(void* promisePtr, void* onFulfilled) {
+    if (!promisePtr) return nova_promise_reject(-1);
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    // Create new promise for chaining
+    NovaPromise* nextPromise = static_cast<NovaPromise*>(nova_promise_create());
+
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+
+        if (promise->state == PromiseState::PENDING) {
+            // Add callback for later
+            PromiseCallback cb;
+            cb.type = PromiseCallback::Type::THEN;
+            cb.callback = onFulfilled;
+            cb.nextPromise = nextPromise;
+            promise->callbacks.push_back(cb);
+        } else if (promise->state == PromiseState::FULFILLED) {
+            // Already fulfilled, schedule callback
+            int64_t value = promise->value;
+            nova_promise_queue_microtask([onFulfilled, value, nextPromise]() {
+                if (onFulfilled) {
+                    typedef int64_t (*ThenCallback)(int64_t);
+                    try {
+                        int64_t result = reinterpret_cast<ThenCallback>(onFulfilled)(value);
+                        nova_promise_fulfill(nextPromise, result);
+                    } catch (...) {
+                        nova_promise_reject_internal(nextPromise, -1);
+                    }
+                } else {
+                    nova_promise_fulfill(nextPromise, value);
+                }
+            });
+            nova_promise_process_microtasks();
+        } else {
+            // Rejected, pass through
+            nova_promise_reject_internal(nextPromise, promise->error);
+        }
+    }
+
+    return nextPromise;
+}
+
+// promise.catch(onRejected) - returns new Promise
+void* nova_promise_catch(void* promisePtr, void* onRejected) {
+    if (!promisePtr) return nova_promise_reject(-1);
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    NovaPromise* nextPromise = static_cast<NovaPromise*>(nova_promise_create());
+
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+
+        if (promise->state == PromiseState::PENDING) {
+            PromiseCallback cb;
+            cb.type = PromiseCallback::Type::CATCH;
+            cb.callback = onRejected;
+            cb.nextPromise = nextPromise;
+            promise->callbacks.push_back(cb);
+        } else if (promise->state == PromiseState::REJECTED) {
+            int64_t error = promise->error;
+            nova_promise_queue_microtask([onRejected, error, nextPromise]() {
+                if (onRejected) {
+                    typedef int64_t (*CatchCallback)(int64_t);
+                    try {
+                        int64_t result = reinterpret_cast<CatchCallback>(onRejected)(error);
+                        nova_promise_fulfill(nextPromise, result);
+                    } catch (...) {
+                        nova_promise_reject_internal(nextPromise, -1);
+                    }
+                } else {
+                    nova_promise_reject_internal(nextPromise, error);
+                }
+            });
+            nova_promise_process_microtasks();
+        } else {
+            // Fulfilled, pass through
+            nova_promise_fulfill(nextPromise, promise->value);
+        }
+    }
+
+    return nextPromise;
+}
+
+// promise.finally(onFinally) - returns new Promise
+void* nova_promise_finally(void* promisePtr, void* onFinally) {
+    if (!promisePtr) return nova_promise_reject(-1);
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    NovaPromise* nextPromise = static_cast<NovaPromise*>(nova_promise_create());
+
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+
+        if (promise->state == PromiseState::PENDING) {
+            PromiseCallback cb;
+            cb.type = PromiseCallback::Type::FINALLY;
+            cb.callback = onFinally;
+            cb.nextPromise = nextPromise;
+            promise->callbacks.push_back(cb);
+        } else {
+            int64_t value = promise->value;
+            int64_t error = promise->error;
+            PromiseState state = promise->state;
+
+            nova_promise_queue_microtask([onFinally, value, error, state, nextPromise]() {
+                if (onFinally) {
+                    typedef void (*FinallyCallback)();
+                    reinterpret_cast<FinallyCallback>(onFinally)();
+                }
+                if (state == PromiseState::FULFILLED) {
+                    nova_promise_fulfill(nextPromise, value);
+                } else {
+                    nova_promise_reject_internal(nextPromise, error);
+                }
+            });
+            nova_promise_process_microtasks();
+        }
+    }
+
+    return nextPromise;
+}
+
+// ============================================================================
+// Promise Static Methods
+// ============================================================================
+
+// Promise.all(promises) - Wait for all promises
+void* nova_promise_all(void** promises, int64_t count) {
+    if (count == 0) {
+        return nova_promise_resolve(0);
+    }
+
+    NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
+
+    // For simplicity, we'll process synchronously
+    // A full implementation would track each promise's state
+    for (int64_t i = 0; i < count; i++) {
+        NovaPromise* p = static_cast<NovaPromise*>(promises[i]);
+        if (p && p->state == PromiseState::REJECTED) {
+            nova_promise_reject_internal(result, p->error);
+            return result;
+        }
+    }
+
+    // All fulfilled (or still pending - simplified)
+    nova_promise_fulfill(result, count);
+    return result;
+}
+
+// Promise.race(promises) - First promise to settle wins
+void* nova_promise_race(void** promises, int64_t count) {
+    if (count == 0) {
+        return nova_promise_create(); // Never settles
+    }
+
+    NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
+
+    for (int64_t i = 0; i < count; i++) {
+        NovaPromise* p = static_cast<NovaPromise*>(promises[i]);
+        if (p) {
+            if (p->state == PromiseState::FULFILLED) {
+                nova_promise_fulfill(result, p->value);
+                return result;
+            } else if (p->state == PromiseState::REJECTED) {
+                nova_promise_reject_internal(result, p->error);
+                return result;
+            }
+        }
+    }
+
+    return result;
+}
+
+// Promise.allSettled(promises) - Wait for all to settle (ES2020)
+void* nova_promise_allSettled(void** promises, int64_t count) {
+    // For simplicity, just wait for all and return count
+    return nova_promise_resolve(count);
+}
+
+// Promise.any(promises) - First fulfilled promise wins (ES2021)
+void* nova_promise_any(void** promises, int64_t count) {
+    if (count == 0) {
+        return nova_promise_reject(-1); // AggregateError
+    }
+
+    NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
+
+    for (int64_t i = 0; i < count; i++) {
+        NovaPromise* p = static_cast<NovaPromise*>(promises[i]);
+        if (p && p->state == PromiseState::FULFILLED) {
+            nova_promise_fulfill(result, p->value);
+            return result;
+        }
+    }
+
+    // All rejected
+    nova_promise_reject_internal(result, -1);
+    return result;
+}
+
+// Promise.withResolvers() - Returns { promise, resolve, reject } (ES2024)
+// For simplicity, returns the promise pointer. resolve/reject are handled separately.
+struct PromiseWithResolvers {
+    void* promise;
+    void* resolve;  // Function pointer placeholder
+    void* reject;   // Function pointer placeholder
+};
+
+void* nova_promise_withResolvers() {
+    PromiseWithResolvers* result = new PromiseWithResolvers();
+    result->promise = nova_promise_create();
+    result->resolve = nullptr;  // Would be function pointers in full impl
+    result->reject = nullptr;
+    return result;
+}
+
+// Get promise from withResolvers result
+void* nova_promise_withResolvers_promise(void* resolversPtr) {
+    if (!resolversPtr) return nullptr;
+    PromiseWithResolvers* resolvers = static_cast<PromiseWithResolvers*>(resolversPtr);
+    return resolvers->promise;
+}
+
+// Resolve the promise from withResolvers
+void nova_promise_withResolvers_resolve(void* resolversPtr, int64_t value) {
+    if (!resolversPtr) return;
+    PromiseWithResolvers* resolvers = static_cast<PromiseWithResolvers*>(resolversPtr);
+    nova_promise_fulfill(resolvers->promise, value);
+}
+
+// Reject the promise from withResolvers
+void nova_promise_withResolvers_reject(void* resolversPtr, int64_t reason) {
+    if (!resolversPtr) return;
+    PromiseWithResolvers* resolvers = static_cast<PromiseWithResolvers*>(resolversPtr);
+    nova_promise_reject_internal(resolvers->promise, reason);
+}
+
+// ============================================================================
+// Await Support
+// ============================================================================
+
+// await promise - blocks until promise settles (simplified synchronous wait)
+int64_t nova_promise_await(void* promisePtr) {
+    if (!promisePtr) return 0;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    // Process any pending microtasks first
+    nova_promise_process_microtasks();
+
+    // Wait for promise to settle
+    {
+        std::unique_lock<std::mutex> lock(promise->mutex);
+        promise->cv.wait(lock, [promise]() {
+            return promise->state != PromiseState::PENDING;
+        });
+    }
+
+    if (promise->state == PromiseState::FULFILLED) {
+        return promise->value;
+    } else {
+        // In a real implementation, this would throw
+        return promise->error;
+    }
+}
+
+// Check if promise is fulfilled
+int64_t nova_promise_is_fulfilled(void* promisePtr) {
+    if (!promisePtr) return 0;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    return promise->state == PromiseState::FULFILLED ? 1 : 0;
+}
+
+// Check if promise is rejected
+int64_t nova_promise_is_rejected(void* promisePtr) {
+    if (!promisePtr) return 0;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    return promise->state == PromiseState::REJECTED ? 1 : 0;
+}
+
+// Check if promise is pending
+int64_t nova_promise_is_pending(void* promisePtr) {
+    if (!promisePtr) return 0;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    return promise->state == PromiseState::PENDING ? 1 : 0;
+}
+
+// Get promise value (only valid if fulfilled)
+int64_t nova_promise_get_value(void* promisePtr) {
+    if (!promisePtr) return 0;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    return promise->value;
+}
+
+// Get promise error (only valid if rejected)
+int64_t nova_promise_get_error(void* promisePtr) {
+    if (!promisePtr) return 0;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    return promise->error;
+}
+
+} // extern "C"
