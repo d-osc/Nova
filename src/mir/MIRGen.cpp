@@ -5,6 +5,9 @@
 #include <set>
 #include <queue>
 
+// Debug output control - set to 1 to enable debug output
+#define NOVA_DEBUG 0
+
 namespace nova::mir {
 
 // ==================== MIR Generator Implementation ====================
@@ -380,7 +383,7 @@ private:
         size_t hashPos = blockLabel.find('#');
         if (hashPos != std::string::npos) {
             loopContext->label = blockLabel.substr(hashPos + 1);
-            std::cerr << "DEBUG MIRGen: Found labeled loop with label: " << loopContext->label << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Found labeled loop with label: " << loopContext->label << std::endl;
         }
 
         // For a while loop, the structure is:
@@ -460,7 +463,7 @@ private:
         // If this loop has a label, add it to the labelToLoopMap for labeled break/continue
         if (!loopContext->label.empty()) {
             labelToLoopMap_[loopContext->label] = loopContext;
-            std::cerr << "DEBUG MIRGen: Registered label '" << loopContext->label << "' in labelToLoopMap" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Registered label '" << loopContext->label << "' in labelToLoopMap" << std::endl;
         }
 
         // Find all blocks that belong to this loop and map them to this context
@@ -835,7 +838,7 @@ private:
 
                 case hir::HIRConstant::Kind::String: {
                     std::string strValue = std::get<std::string>(constant->value);
-                    std::cerr << "DEBUG MIRGen: Translating string constant: " << strValue << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translating string constant: " << strValue << std::endl;
                     return builder_->createStringConstant(strValue, mirType);
                 }
 
@@ -997,32 +1000,32 @@ private:
         (void)mirBlock;
         if (hirInst->operands.empty()) return;
 
-        std::cerr << "DEBUG MIRGen: Processing HIR Call instruction with "
+        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Processing HIR Call instruction with "
                   << hirInst->operands.size() << " operands" << std::endl;
 
         // First operand is the function name (string constant)
         auto funcOperand = translateOperand(hirInst->operands[0].get());
 
-        std::cerr << "DEBUG MIRGen: Translated function operand" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translated function operand" << std::endl;
         
         std::vector<MIROperandPtr> args;
         for (size_t i = 1; i < hirInst->operands.size(); ++i) {
             args.push_back(translateOperand(hirInst->operands[i].get()));
         }
         
-        std::cerr << "DEBUG MIRGen: Collected " << args.size() << " arguments" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Collected " << args.size() << " arguments" << std::endl;
 
         auto dest = getOrCreatePlace(hirInst);
 
         // Create a new block for the continuation after the call
         auto contBlock = builder_->createBasicBlock("call_cont");
 
-        std::cerr << "DEBUG MIRGen: Creating MIR Call terminator" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Creating MIR Call terminator" << std::endl;
 
         // Create the call terminator with destination and continuation block
         builder_->createCall(funcOperand, args, dest, contBlock.get(), nullptr);
 
-        std::cerr << "DEBUG MIRGen: MIR Call created successfully" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: MIR Call created successfully" << std::endl;
 
         // Switch to the continuation block
         builder_->setInsertPoint(contBlock.get());
@@ -1105,7 +1108,7 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
             auto it = labelToLoopMap_.find(label);
             if (it != labelToLoopMap_.end()) {
                 loopContext = it->second;
-                std::cerr << "DEBUG MIRGen: Found labeled break target for label '" << label << "'" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Found labeled break target for label '" << label << "'" << std::endl;
             } else {
                 std::cerr << "WARNING MIRGen: Label '" << label << "' not found for break statement" << std::endl;
             }
@@ -1136,7 +1139,7 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
             auto it = labelToLoopMap_.find(label);
             if (it != labelToLoopMap_.end()) {
                 loopContext = it->second;
-                std::cerr << "DEBUG MIRGen: Found labeled continue target for label '" << label << "'" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Found labeled continue target for label '" << label << "'" << std::endl;
             } else {
                 std::cerr << "WARNING MIRGen: Label '" << label << "' not found for continue statement" << std::endl;
             }

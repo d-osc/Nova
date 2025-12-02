@@ -1,12 +1,21 @@
 #include "nova/HIR/HIRGen.h"
 #include "nova/HIR/HIR.h"
 #include "nova/Frontend/AST.h"
+#include <iostream>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
 #include <functional>
 #include <limits>
+
+// Debug output control - set to 1 to enable debug output
+#define NOVA_DEBUG 0
+#if NOVA_DEBUG
+#define NOVA_DBG(x) std::cerr << x
+#else
+#define NOVA_DBG(x) do {} while(0)
+#endif
 
 namespace nova::hir {
 
@@ -30,7 +39,7 @@ public:
 
     void visit(BigIntLiteral& node) override {
         // Create BigInt from string literal (ES2020)
-        std::cerr << "DEBUG HIRGen: BigInt literal: " << node.value << "n" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: BigInt literal: " << node.value << "n" << std::endl;
 
         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -131,7 +140,7 @@ public:
     void visit(Identifier& node) override {
         // Handle globalThis (ES2020) - the global object
         if (node.name == "globalThis") {
-            std::cerr << "DEBUG HIRGen: Detected globalThis identifier" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected globalThis identifier" << std::endl;
             // Return a special marker value for globalThis
             // When used in MemberExpr, we'll handle the property access
             lastWasGlobalThis_ = true;
@@ -396,7 +405,7 @@ public:
                         }
                     }
 
-                    std::cerr << "DEBUG HIRGen: typeof operator returns '" << typeStr << "'" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: typeof operator returns '" << typeStr << "'" << std::endl;
                     lastValue_ = builder_->createStringConstant(typeStr);
                 }
                 break;
@@ -459,6 +468,143 @@ public:
     }
     
     void visit(CallExpr& node) override {
+        if (!node.callee) {
+            return;
+        }
+
+        // Check for built-in module function calls (nova:fs, nova:test, etc.)
+        if (auto* ident = dynamic_cast<Identifier*>(node.callee.get())) {
+            auto builtinIt = builtinFunctionImports_.find(ident->name);
+            if (builtinIt != builtinFunctionImports_.end()) {
+                std::string runtimeFuncName = builtinIt->second;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Calling built-in module function: " << ident->name << " -> " << runtimeFuncName << std::endl;
+
+                // Evaluate arguments
+                std::vector<HIRValue*> args;
+                for (auto& arg : node.arguments) {
+                    arg->accept(*this);
+                    args.push_back(lastValue_);
+                }
+
+                // Determine function signature based on the function name
+                auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                std::vector<HIRTypePtr> paramTypes;
+                HIRTypePtr returnType = ptrType;  // Default to pointer return
+
+                // nova:fs functions
+                if (runtimeFuncName == "nova_fs_readFileSync") {
+                    paramTypes = {ptrType};  // (path: string)
+                    returnType = ptrType;    // returns string
+                } else if (runtimeFuncName == "nova_fs_writeFileSync") {
+                    paramTypes = {ptrType, ptrType};  // (path: string, data: string)
+                    returnType = i64Type;    // returns int (success)
+                } else if (runtimeFuncName == "nova_fs_appendFileSync") {
+                    paramTypes = {ptrType, ptrType};  // (path: string, data: string)
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_existsSync") {
+                    paramTypes = {ptrType};  // (path: string)
+                    returnType = i64Type;    // returns bool
+                } else if (runtimeFuncName == "nova_fs_unlinkSync") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_mkdirSync") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_rmdirSync") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_isFileSync") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_isDirectorySync") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_fileSizeSync") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_copyFileSync") {
+                    paramTypes = {ptrType, ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_fs_renameSync") {
+                    paramTypes = {ptrType, ptrType};
+                    returnType = i64Type;
+                }
+                // nova:path functions
+                else if (runtimeFuncName == "nova_path_dirname" ||
+                         runtimeFuncName == "nova_path_basename" ||
+                         runtimeFuncName == "nova_path_extname" ||
+                         runtimeFuncName == "nova_path_normalize" ||
+                         runtimeFuncName == "nova_path_resolve") {
+                    paramTypes = {ptrType};
+                    returnType = ptrType;
+                } else if (runtimeFuncName == "nova_path_isAbsolute") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_path_relative") {
+                    paramTypes = {ptrType, ptrType};
+                    returnType = ptrType;
+                }
+                // nova:os functions
+                else if (runtimeFuncName == "nova_os_platform" ||
+                         runtimeFuncName == "nova_os_arch" ||
+                         runtimeFuncName == "nova_os_homedir" ||
+                         runtimeFuncName == "nova_os_tmpdir" ||
+                         runtimeFuncName == "nova_os_hostname" ||
+                         runtimeFuncName == "nova_os_cwd") {
+                    paramTypes = {};
+                    returnType = ptrType;
+                } else if (runtimeFuncName == "nova_os_getenv") {
+                    paramTypes = {ptrType};
+                    returnType = ptrType;
+                } else if (runtimeFuncName == "nova_os_setenv") {
+                    paramTypes = {ptrType, ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_os_chdir") {
+                    paramTypes = {ptrType};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_os_cpus") {
+                    paramTypes = {};
+                    returnType = i64Type;
+                } else if (runtimeFuncName == "nova_os_exit") {
+                    paramTypes = {i64Type};
+                    returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                }
+                // Default - assume all pointer params and pointer return
+                else {
+                    for (size_t i = 0; i < args.size(); i++) {
+                        paramTypes.push_back(ptrType);
+                    }
+                }
+
+                // Find or create runtime function
+                HIRFunction* runtimeFunc = nullptr;
+                auto& functions = module_->functions;
+                for (auto& func : functions) {
+                    if (func->name == runtimeFuncName) {
+                        runtimeFunc = func.get();
+                        break;
+                    }
+                }
+
+                if (!runtimeFunc) {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    runtimeFunc = funcPtr.get();
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                }
+
+                // Create call to runtime function
+                lastValue_ = builder_->createCall(runtimeFunc, args, "builtin_result");
+                if (returnType) {
+                    lastValue_->type = returnType;
+                }
+                return;
+            }
+        }
+
         // Check for global functions (parseInt, parseFloat, etc.)
         if (auto* ident = dynamic_cast<Identifier*>(node.callee.get())) {
             if (ident->name == "parseInt") {
@@ -485,7 +631,7 @@ public:
                 return;
             } else if (ident->name == "isNaN") {
                 // isNaN() global function - tests if value is NaN after coercing to number
-                std::cerr << "DEBUG HIRGen: Detected global function call: isNaN()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: isNaN()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: isNaN() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -517,7 +663,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -526,7 +672,7 @@ public:
                 return;
             } else if (ident->name == "isFinite") {
                 // isFinite() global function - tests if value is finite after coercing to number
-                std::cerr << "DEBUG HIRGen: Detected global function call: isFinite()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: isFinite()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: isFinite() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -558,7 +704,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -567,7 +713,7 @@ public:
                 return;
             } else if (ident->name == "parseInt") {
                 // parseInt() global function - parses string to integer with optional radix
-                std::cerr << "DEBUG HIRGen: Detected global function call: parseInt()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: parseInt()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: parseInt() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -609,7 +755,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -618,7 +764,7 @@ public:
                 return;
             } else if (ident->name == "parseFloat") {
                 // parseFloat() global function - parses string to floating-point number
-                std::cerr << "DEBUG HIRGen: Detected global function call: parseFloat()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: parseFloat()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: parseFloat() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createFloatConstant(0.0);
@@ -650,7 +796,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -659,7 +805,7 @@ public:
                 return;
             } else if (ident->name == "encodeURIComponent") {
                 // encodeURIComponent() global function - encodes a URI component (ES3)
-                std::cerr << "DEBUG HIRGen: Detected global function call: encodeURIComponent()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: encodeURIComponent()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: encodeURIComponent() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -691,7 +837,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -700,7 +846,7 @@ public:
                 return;
             } else if (ident->name == "decodeURIComponent") {
                 // decodeURIComponent() global function - decodes a URI component (ES3)
-                std::cerr << "DEBUG HIRGen: Detected global function call: decodeURIComponent()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: decodeURIComponent()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: decodeURIComponent() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -732,7 +878,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -741,7 +887,7 @@ public:
                 return;
             } else if (ident->name == "btoa") {
                 // btoa() global function - encodes a string to base64 (Web API)
-                std::cerr << "DEBUG HIRGen: Detected global function call: btoa()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: btoa()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: btoa() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -773,7 +919,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -782,7 +928,7 @@ public:
                 return;
             } else if (ident->name == "atob") {
                 // atob() global function - decodes a base64 string (Web API)
-                std::cerr << "DEBUG HIRGen: Detected global function call: atob()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: atob()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: atob() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -814,7 +960,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -823,7 +969,7 @@ public:
                 return;
             } else if (ident->name == "setTimeout") {
                 // setTimeout(callback, delay) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: setTimeout()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: setTimeout()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: setTimeout() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -871,7 +1017,7 @@ public:
                 return;
             } else if (ident->name == "setInterval") {
                 // setInterval(callback, delay) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: setInterval()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: setInterval()" << std::endl;
                 if (node.arguments.size() < 2) {
                     std::cerr << "ERROR: setInterval() expects at least 2 arguments" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -910,7 +1056,7 @@ public:
                 return;
             } else if (ident->name == "clearTimeout") {
                 // clearTimeout(id) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: clearTimeout()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: clearTimeout()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: clearTimeout() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -946,7 +1092,7 @@ public:
                 return;
             } else if (ident->name == "clearInterval") {
                 // clearInterval(id) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: clearInterval()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: clearInterval()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: clearInterval() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -982,7 +1128,7 @@ public:
                 return;
             } else if (ident->name == "queueMicrotask") {
                 // queueMicrotask(callback) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: queueMicrotask()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: queueMicrotask()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: queueMicrotask() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -1018,7 +1164,7 @@ public:
                 return;
             } else if (ident->name == "requestAnimationFrame") {
                 // requestAnimationFrame(callback) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: requestAnimationFrame()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: requestAnimationFrame()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: requestAnimationFrame() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -1054,7 +1200,7 @@ public:
                 return;
             } else if (ident->name == "cancelAnimationFrame") {
                 // cancelAnimationFrame(id) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: cancelAnimationFrame()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: cancelAnimationFrame()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: cancelAnimationFrame() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -1090,7 +1236,7 @@ public:
                 return;
             } else if (ident->name == "fetch") {
                 // fetch(url, init?) - Web API
-                std::cerr << "DEBUG HIRGen: Detected global function call: fetch()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: fetch()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: fetch() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -1127,7 +1273,7 @@ public:
                 return;
             } else if (ident->name == "encodeURI") {
                 // encodeURI() global function - encodes a full URI (ES3)
-                std::cerr << "DEBUG HIRGen: Detected global function call: encodeURI()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: encodeURI()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: encodeURI() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -1159,7 +1305,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -1168,7 +1314,7 @@ public:
                 return;
             } else if (ident->name == "decodeURI") {
                 // decodeURI() global function - decodes a full URI (ES3)
-                std::cerr << "DEBUG HIRGen: Detected global function call: decodeURI()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: decodeURI()" << std::endl;
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: decodeURI() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
@@ -1200,7 +1346,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -1210,7 +1356,7 @@ public:
             } else if (ident->name == "eval") {
                 // eval() global function - evaluates JavaScript code (ES1)
                 // AOT limitation: only supports constant string literals with simple expressions
-                std::cerr << "DEBUG HIRGen: Detected global function call: eval()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: eval()" << std::endl;
                 if (node.arguments.size() < 1) {
                     // eval() with no arguments returns undefined
                     lastValue_ = builder_->createIntConstant(0);
@@ -1220,7 +1366,7 @@ public:
                 // Check if argument is a string literal (compile-time constant)
                 if (auto* strLit = dynamic_cast<StringLiteral*>(node.arguments[0].get())) {
                     std::string code = strLit->value;
-                    std::cerr << "DEBUG HIRGen: eval() with constant string: \"" << code << "\"" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() with constant string: \"" << code << "\"" << std::endl;
 
                     // Try to parse simple expressions at compile time
                     // Trim whitespace
@@ -1259,26 +1405,26 @@ public:
                             int64_t val = std::stoll(code);
                             lastValue_ = builder_->createIntConstant(val);
                         }
-                        std::cerr << "DEBUG HIRGen: eval() parsed numeric literal: " << code << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() parsed numeric literal: " << code << std::endl;
                         return;
                     }
 
                     // Check for boolean literals
                     if (code == "true") {
                         lastValue_ = builder_->createIntConstant(1);
-                        std::cerr << "DEBUG HIRGen: eval() parsed boolean: true" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() parsed boolean: true" << std::endl;
                         return;
                     }
                     if (code == "false") {
                         lastValue_ = builder_->createIntConstant(0);
-                        std::cerr << "DEBUG HIRGen: eval() parsed boolean: false" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() parsed boolean: false" << std::endl;
                         return;
                     }
 
                     // Check for null/undefined
                     if (code == "null" || code == "undefined") {
                         lastValue_ = builder_->createIntConstant(0);
-                        std::cerr << "DEBUG HIRGen: eval() parsed: " << code << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() parsed: " << code << std::endl;
                         return;
                     }
 
@@ -1288,7 +1434,7 @@ public:
                          (code[0] == '\'' && code[code.size()-1] == '\''))) {
                         std::string strVal = code.substr(1, code.size() - 2);
                         lastValue_ = builder_->createStringConstant(strVal);
-                        std::cerr << "DEBUG HIRGen: eval() parsed string literal: " << strVal << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() parsed string literal: " << strVal << std::endl;
                         return;
                     }
 
@@ -1327,7 +1473,7 @@ public:
                                     }
 
                                     lastValue_ = builder_->createIntConstant(result);
-                                    std::cerr << "DEBUG HIRGen: eval() computed: " << left << " " << op << " " << right << " = " << result << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() computed: " << left << " " << op << " " << right << " = " << result << std::endl;
                                     return;
                                 } catch (...) {
                                     // Not valid numbers, fall through
@@ -1337,7 +1483,7 @@ public:
                     }
 
                     // Complex expression - call runtime (will throw error)
-                    std::cerr << "DEBUG HIRGen: eval() with complex expression, calling runtime" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: eval() with complex expression, calling runtime" << std::endl;
                 }
 
                 // Non-constant string or complex expression - call runtime function
@@ -1365,7 +1511,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                 }
 
                 // Create call to runtime function
@@ -1417,7 +1563,7 @@ public:
             } else if (ident->name == "Symbol") {
                 // Symbol(description?) - Create a new unique symbol (ES2015)
                 // Note: Symbol is NOT called with new, just Symbol()
-                std::cerr << "DEBUG HIRGen: Detected Symbol() call" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Symbol() call" << std::endl;
 
                 HIRValue* descArg = nullptr;
                 if (node.arguments.size() >= 1) {
@@ -1447,7 +1593,7 @@ public:
                 return;
             } else if (ident->name == "BigInt") {
                 // BigInt() constructor - converts value to BigInt (ES2020)
-                std::cerr << "DEBUG HIRGen: Detected BigInt() constructor call" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected BigInt() constructor call" << std::endl;
 
                 if (node.arguments.size() < 1) {
                     std::cerr << "ERROR: BigInt() requires an argument" << std::endl;
@@ -1506,7 +1652,7 @@ public:
                     if (objIdent->name == "console") {
                         if (propIdent->name == "clear") {
                             // console.clear() - clears the console (no arguments)
-                            std::cerr << "DEBUG HIRGen: Detected console.clear() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console.clear() call" << std::endl;
 
                             std::string runtimeFuncName = "nova_console_clear";
                             std::vector<HIRTypePtr> paramTypes; // No parameters
@@ -1527,7 +1673,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function (no arguments)
@@ -1536,7 +1682,7 @@ public:
                             return;
                         } else if (propIdent->name == "time" || propIdent->name == "timeEnd") {
                             // console.time(label) / console.timeEnd(label) - timing operations
-                            std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
 
                             if (node.arguments.size() < 1) {
                                 // No label provided - use default
@@ -1572,7 +1718,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -1581,7 +1727,7 @@ public:
                             return;
                         } else if (propIdent->name == "assert") {
                             // console.assert(condition, message) - prints error if condition is false
-                            std::cerr << "DEBUG HIRGen: Detected console.assert() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console.assert() call" << std::endl;
 
                             if (node.arguments.size() < 2) {
                                 // Need both condition and message
@@ -1619,7 +1765,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -1628,7 +1774,7 @@ public:
                             return;
                         } else if (propIdent->name == "count" || propIdent->name == "countReset") {
                             // console.count(label) / console.countReset(label) - counting operations
-                            std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
 
                             if (node.arguments.size() < 1) {
                                 // No label provided - use default
@@ -1664,7 +1810,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -1673,7 +1819,7 @@ public:
                             return;
                         } else if (propIdent->name == "table") {
                             // console.table(data) - displays data in tabular format
-                            std::cerr << "DEBUG HIRGen: Detected console.table() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console.table() call" << std::endl;
 
                             if (node.arguments.size() < 1) {
                                 // No data provided - just return
@@ -1706,7 +1852,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function with array pointer only
@@ -1715,7 +1861,7 @@ public:
                             return;
                         } else if (propIdent->name == "group" || propIdent->name == "groupEnd") {
                             // console.group(label) / console.groupEnd() - group console output
-                            std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
 
                             std::string runtimeFuncName;
                             std::vector<HIRTypePtr> paramTypes;
@@ -1745,7 +1891,7 @@ public:
                                         HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                         funcPtr->linkage = HIRFunction::Linkage::External;
                                         runtimeFunc = funcPtr.get();
-                                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                                     }
 
                                     std::vector<HIRValue*> args = {labelArg};
@@ -1778,7 +1924,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -1787,7 +1933,7 @@ public:
                             return;
                         } else if (propIdent->name == "trace") {
                             // console.trace(message) - prints stack trace with optional message
-                            std::cerr << "DEBUG HIRGen: Detected console.trace() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console.trace() call" << std::endl;
 
                             std::string runtimeFuncName;
                             std::vector<HIRTypePtr> paramTypes;
@@ -1815,7 +1961,7 @@ public:
                                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                     funcPtr->linkage = HIRFunction::Linkage::External;
                                     runtimeFunc = funcPtr.get();
-                                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                                 }
 
                                 std::vector<HIRValue*> args = {messageArg};
@@ -1840,7 +1986,7 @@ public:
                                     HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                     funcPtr->linkage = HIRFunction::Linkage::External;
                                     runtimeFunc = funcPtr.get();
-                                    std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                                 }
 
                                 std::vector<HIRValue*> args;
@@ -1849,7 +1995,7 @@ public:
                             }
                         } else if (propIdent->name == "dir") {
                             // console.dir(value) - displays value properties
-                            std::cerr << "DEBUG HIRGen: Detected console.dir() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console.dir() call" << std::endl;
 
                             if (node.arguments.size() < 1) {
                                 // No argument - just return
@@ -1898,7 +2044,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -1908,7 +2054,7 @@ public:
                         } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {
-                            std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
 
                             // console methods can have any number of arguments
                             // For simplicity, we'll handle the first argument
@@ -1962,7 +2108,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -2357,7 +2503,7 @@ public:
                     // Check if this is Math.log()
                     if (objIdent->name == "Math" && propIdent->name == "log") {
                         // Math.log() - natural logarithm (base e)
-                        std::cerr << "DEBUG HIRGen: Detected Math.log() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.log() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2389,7 +2535,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2400,7 +2546,7 @@ public:
                     // Check if this is Math.exp()
                     if (objIdent->name == "Math" && propIdent->name == "exp") {
                         // Math.exp() - exponential function (e^x)
-                        std::cerr << "DEBUG HIRGen: Detected Math.exp() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.exp() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.exp() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2432,7 +2578,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2443,7 +2589,7 @@ public:
                     // Check if this is Math.log10()
                     if (objIdent->name == "Math" && propIdent->name == "log10") {
                         // Math.log10() - base 10 logarithm
-                        std::cerr << "DEBUG HIRGen: Detected Math.log10() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log10() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.log10() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2475,7 +2621,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2486,7 +2632,7 @@ public:
                     // Check if this is Math.log2()
                     if (objIdent->name == "Math" && propIdent->name == "log2") {
                         // Math.log2() - base 2 logarithm
-                        std::cerr << "DEBUG HIRGen: Detected Math.log2() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log2() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.log2() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2518,7 +2664,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2529,7 +2675,7 @@ public:
                     // Check if this is Math.sin()
                     if (objIdent->name == "Math" && propIdent->name == "sin") {
                         // Math.sin() - sine function (radians)
-                        std::cerr << "DEBUG HIRGen: Detected Math.sin() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.sin() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.sin() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2561,7 +2707,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2572,7 +2718,7 @@ public:
                     // Check if this is Math.cos()
                     if (objIdent->name == "Math" && propIdent->name == "cos") {
                         // Math.cos() - cosine function (radians)
-                        std::cerr << "DEBUG HIRGen: Detected Math.cos() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.cos() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.cos() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2604,7 +2750,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2615,7 +2761,7 @@ public:
                     // Check if this is Math.tan()
                     if (objIdent->name == "Math" && propIdent->name == "tan") {
                         // Math.tan() - tangent function (radians)
-                        std::cerr << "DEBUG HIRGen: Detected Math.tan() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.tan() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.tan() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2647,7 +2793,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2658,7 +2804,7 @@ public:
                     // Check if this is Math.atan()
                     if (objIdent->name == "Math" && propIdent->name == "atan") {
                         // Math.atan() - arctangent (inverse tangent) function
-                        std::cerr << "DEBUG HIRGen: Detected Math.atan() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.atan() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.atan() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2690,7 +2836,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2701,7 +2847,7 @@ public:
                     // Check if this is Math.asin()
                     if (objIdent->name == "Math" && propIdent->name == "asin") {
                         // Math.asin() - arcsine (inverse sine) function
-                        std::cerr << "DEBUG HIRGen: Detected Math.asin() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.asin() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.asin() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2733,7 +2879,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2744,7 +2890,7 @@ public:
                     // Check if this is Math.acos()
                     if (objIdent->name == "Math" && propIdent->name == "acos") {
                         // Math.acos() - arccosine (inverse cosine) function
-                        std::cerr << "DEBUG HIRGen: Detected Math.acos() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.acos() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.acos() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2776,7 +2922,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2787,7 +2933,7 @@ public:
                     // Check if this is Math.atan2()
                     if (objIdent->name == "Math" && propIdent->name == "atan2") {
                         // Math.atan2(y, x) - two-argument arctangent function
-                        std::cerr << "DEBUG HIRGen: Detected Math.atan2() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.atan2() call" << std::endl;
                         if (node.arguments.size() != 2) {
                             std::cerr << "ERROR: Math.atan2() expects exactly 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2822,7 +2968,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {yValue, xValue};
@@ -2833,7 +2979,7 @@ public:
                     // Check if this is Math.min()
                     if (objIdent->name == "Math" && propIdent->name == "min") {
                         // Math.min(a, b) - returns the smaller of two values (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected Math.min() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.min() call" << std::endl;
                         if (node.arguments.size() != 2) {
                             std::cerr << "ERROR: Math.min() expects exactly 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2868,7 +3014,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {aValue, bValue};
@@ -2879,7 +3025,7 @@ public:
                     // Check if this is Math.max()
                     if (objIdent->name == "Math" && propIdent->name == "max") {
                         // Math.max(a, b) - returns the larger of two values (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected Math.max() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.max() call" << std::endl;
                         if (node.arguments.size() != 2) {
                             std::cerr << "ERROR: Math.max() expects exactly 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2914,7 +3060,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {aValue, bValue};
@@ -2925,7 +3071,7 @@ public:
                     // Check if this is JSON.stringify()
                     if (objIdent->name == "JSON" && propIdent->name == "stringify") {
                         // JSON.stringify(value) - converts a value to a JSON string (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected JSON.stringify() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected JSON.stringify() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: JSON.stringify() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -2949,23 +3095,23 @@ public:
                         if (isString) {
                             runtimeFuncName = "nova_json_stringify_string";
                             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                            std::cerr << "DEBUG HIRGen: JSON.stringify() with string argument" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: JSON.stringify() with string argument" << std::endl;
                         } else if (isBool) {
                             runtimeFuncName = "nova_json_stringify_bool";
                             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                            std::cerr << "DEBUG HIRGen: JSON.stringify() with boolean argument" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: JSON.stringify() with boolean argument" << std::endl;
                         } else if (isPointer) {
                             runtimeFuncName = "nova_json_stringify_array";
                             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer));
-                            std::cerr << "DEBUG HIRGen: JSON.stringify() with array/object argument" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: JSON.stringify() with array/object argument" << std::endl;
                         } else if (isFloat) {
                             runtimeFuncName = "nova_json_stringify_float";
                             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));
-                            std::cerr << "DEBUG HIRGen: JSON.stringify() with float argument" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: JSON.stringify() with float argument" << std::endl;
                         } else {
                             runtimeFuncName = "nova_json_stringify_number";
                             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                            std::cerr << "DEBUG HIRGen: JSON.stringify() with number argument" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: JSON.stringify() with number argument" << std::endl;
                         }
 
                         // Find or create runtime function
@@ -2983,7 +3129,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -2994,7 +3140,7 @@ public:
                     // Check if this is JSON.parse()
                     if (objIdent->name == "JSON" && propIdent->name == "parse") {
                         // JSON.parse(text) - parses a JSON string (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected JSON.parse() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected JSON.parse() call" << std::endl;
                         if (node.arguments.size() < 1) {
                             std::cerr << "ERROR: JSON.parse() expects at least 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3027,7 +3173,7 @@ public:
                     // Check if this is Math.sinh()
                     if (objIdent->name == "Math" && propIdent->name == "sinh") {
                         // Math.sinh() - hyperbolic sine function
-                        std::cerr << "DEBUG HIRGen: Detected Math.sinh() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.sinh() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.sinh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3059,7 +3205,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3070,7 +3216,7 @@ public:
                     // Check if this is Math.cosh()
                     if (objIdent->name == "Math" && propIdent->name == "cosh") {
                         // Math.cosh() - hyperbolic cosine function
-                        std::cerr << "DEBUG HIRGen: Detected Math.cosh() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.cosh() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.cosh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3102,7 +3248,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3113,7 +3259,7 @@ public:
                     // Check if this is Math.tanh()
                     if (objIdent->name == "Math" && propIdent->name == "tanh") {
                         // Math.tanh() - hyperbolic tangent function
-                        std::cerr << "DEBUG HIRGen: Detected Math.tanh() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.tanh() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.tanh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3145,7 +3291,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3156,7 +3302,7 @@ public:
                     // Check if this is Math.asinh()
                     if (objIdent->name == "Math" && propIdent->name == "asinh") {
                         // Math.asinh() - inverse hyperbolic sine function
-                        std::cerr << "DEBUG HIRGen: Detected Math.asinh() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.asinh() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.asinh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3188,7 +3334,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3199,7 +3345,7 @@ public:
                     // Check if this is Math.acosh()
                     if (objIdent->name == "Math" && propIdent->name == "acosh") {
                         // Math.acosh() - inverse hyperbolic cosine function
-                        std::cerr << "DEBUG HIRGen: Detected Math.acosh() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.acosh() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.acosh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3231,7 +3377,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3242,7 +3388,7 @@ public:
                     // Check if this is Math.atanh()
                     if (objIdent->name == "Math" && propIdent->name == "atanh") {
                         // Math.atanh() - inverse hyperbolic tangent function
-                        std::cerr << "DEBUG HIRGen: Detected Math.atanh() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.atanh() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.atanh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3274,7 +3420,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3285,7 +3431,7 @@ public:
                     // Check if this is Math.expm1()
                     if (objIdent->name == "Math" && propIdent->name == "expm1") {
                         // Math.expm1() - returns e^x - 1
-                        std::cerr << "DEBUG HIRGen: Detected Math.expm1() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.expm1() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.expm1() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3317,7 +3463,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3328,7 +3474,7 @@ public:
                     // Check if this is Math.log1p()
                     if (objIdent->name == "Math" && propIdent->name == "log1p") {
                         // Math.log1p() - returns ln(1 + x)
-                        std::cerr << "DEBUG HIRGen: Detected Math.log1p() call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log1p() call" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Math.log1p() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -3360,7 +3506,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value};
@@ -3724,7 +3870,7 @@ public:
 
                     if (objIdent->name == "Array" && propIdent->name == "from") {
                         // Array.from(arrayLike) - creates new array from array-like object (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Array.from" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Array.from" << std::endl;
 
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Array.from() expects exactly 1 argument" << std::endl;
@@ -3761,7 +3907,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {arrayArg};
@@ -3771,7 +3917,7 @@ public:
 
                     if (objIdent->name == "Array" && propIdent->name == "of") {
                         // Array.of(...elements) - creates new array from arguments (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Array.of" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Array.of" << std::endl;
 
                         // Evaluate all arguments (variable number)
                         std::vector<HIRValue*> elementValues;
@@ -3810,7 +3956,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external variadic function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external variadic function: " << runtimeFuncName << std::endl;
                         }
 
                         // Create arguments: count + elements
@@ -3832,7 +3978,7 @@ public:
                     };
 
                     if (typedArrayTypes.count(objIdent->name) && propIdent->name == "from") {
-                        std::cerr << "DEBUG HIRGen: Detected static method call: " << objIdent->name << ".from" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: " << objIdent->name << ".from" << std::endl;
 
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: " << objIdent->name << ".from() expects 1 argument" << std::endl;
@@ -3878,7 +4024,7 @@ public:
                     }
 
                     if (typedArrayTypes.count(objIdent->name) && propIdent->name == "of") {
-                        std::cerr << "DEBUG HIRGen: Detected static method call: " << objIdent->name << ".of" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: " << objIdent->name << ".of" << std::endl;
 
                         std::vector<HIRValue*> elementValues;
                         for (auto& arg : node.arguments) {
@@ -3996,7 +4142,7 @@ public:
                             return;
                         } else if (propIdent->name == "parseInt") {
                             // Number.parseInt(string, radix) - parses a string and returns an integer
-                            std::cerr << "DEBUG HIRGen: Detected static method call: Number.parseInt" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Number.parseInt" << std::endl;
                             if (node.arguments.size() != 2) {
                                 std::cerr << "ERROR: Number.parseInt() expects exactly 2 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
@@ -4031,7 +4177,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -4040,7 +4186,7 @@ public:
                             return;
                         } else if (propIdent->name == "parseFloat") {
                             // Number.parseFloat(string) - parse string to floating point
-                            std::cerr << "DEBUG HIRGen: Detected static method call: Number.parseFloat" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Number.parseFloat" << std::endl;
                             if (node.arguments.size() != 1) {
                                 std::cerr << "ERROR: Number.parseFloat() expects exactly 1 argument" << std::endl;
                                 lastValue_ = builder_->createFloatConstant(0.0);
@@ -4072,7 +4218,7 @@ public:
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 runtimeFunc = funcPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                             }
 
                             // Create call to runtime function
@@ -4091,7 +4237,7 @@ public:
                 if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                     if (objIdent->name == "String" && propIdent->name == "fromCharCode") {
                         // String.fromCharCode(code) - create string from character code
-                        std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCharCode" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCharCode" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: String.fromCharCode() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createStringConstant("");
@@ -4123,7 +4269,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {charCode};
@@ -4133,7 +4279,7 @@ public:
 
                     if (objIdent->name == "String" && propIdent->name == "fromCodePoint") {
                         // String.fromCodePoint(codePoint) - create string from Unicode code point (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCodePoint" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCodePoint" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: String.fromCodePoint() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createStringConstant("");
@@ -4165,7 +4311,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {codePoint};
@@ -4175,7 +4321,7 @@ public:
 
                     if (objIdent->name == "String" && propIdent->name == "raw") {
                         // String.raw(template, ...substitutions) - ES2015 template literal tag
-                        std::cerr << "DEBUG HIRGen: Detected static method call: String.raw" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: String.raw" << std::endl;
 
                         // Simplified implementation - String.raw is primarily used with template literals
                         // which are handled at compile time. For direct calls, return empty string.
@@ -4200,7 +4346,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         // For now, return empty string (String.raw is primarily used with tagged templates)
@@ -4213,7 +4359,7 @@ public:
                     // Symbol static methods (ES2015)
                     if (objIdent->name == "Symbol" && propIdent->name == "for") {
                         // Symbol.for(key) - get or create symbol in global registry
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Symbol.for" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Symbol.for" << std::endl;
 
                         HIRValue* keyArg = nullptr;
                         if (node.arguments.size() >= 1) {
@@ -4245,7 +4391,7 @@ public:
 
                     if (objIdent->name == "Symbol" && propIdent->name == "keyFor") {
                         // Symbol.keyFor(sym) - get key from global registry
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Symbol.keyFor" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Symbol.keyFor" << std::endl;
 
                         HIRValue* symArg = nullptr;
                         if (node.arguments.size() >= 1) {
@@ -4276,7 +4422,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "values") {
                         // Object.values(obj) - returns array of object's property values (ES2017)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.values" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.values" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Object.values() expects exactly 1 argument" << std::endl;
                             return;
@@ -4311,7 +4457,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj};
@@ -4321,7 +4467,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "keys") {
                         // Object.keys(obj) - returns array of object's property keys (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.keys" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.keys" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Object.keys() expects exactly 1 argument" << std::endl;
                             return;
@@ -4357,7 +4503,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj};
@@ -4367,7 +4513,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "entries") {
                         // Object.entries(obj) - returns array of [key, value] pairs (ES2017)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.entries" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.entries" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Object.entries() expects exactly 1 argument" << std::endl;
                             return;
@@ -4403,7 +4549,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj};
@@ -4413,7 +4559,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "assign") {
                         // Object.assign(target, source) - copies properties from source to target (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.assign" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.assign" << std::endl;
                         if (node.arguments.size() != 2) {
                             std::cerr << "ERROR: Object.assign() expects exactly 2 arguments" << std::endl;
                             return;
@@ -4450,7 +4596,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {target, source};
@@ -4460,7 +4606,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "hasOwn") {
                         // Object.hasOwn(obj, key) - checks if object has own property (ES2022)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.hasOwn" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.hasOwn" << std::endl;
                         if (node.arguments.size() != 2) {
                             std::cerr << "ERROR: Object.hasOwn() expects exactly 2 arguments" << std::endl;
                             return;
@@ -4497,7 +4643,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj, key};
@@ -4507,7 +4653,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "freeze") {
                         // Object.freeze(obj) - makes object immutable (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.freeze" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.freeze" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Object.freeze() expects exactly 1 argument" << std::endl;
                             return;
@@ -4540,7 +4686,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj};
@@ -4550,7 +4696,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "isFrozen") {
                         // Object.isFrozen(obj) - checks if object is frozen (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.isFrozen" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.isFrozen" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Object.isFrozen() expects exactly 1 argument" << std::endl;
                             return;
@@ -4583,7 +4729,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj};
@@ -4593,7 +4739,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "seal") {
                         // Object.seal(obj) - seals object, prevents add/delete properties (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.seal" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.seal" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Object.seal() expects exactly 1 argument" << std::endl;
                             return;
@@ -4626,7 +4772,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj};
@@ -4636,7 +4782,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "isSealed") {
                         // Object.isSealed(obj) - checks if object is sealed (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.isSealed" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.isSealed" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Object.isSealed() expects exactly 1 argument" << std::endl;
                             return;
@@ -4669,7 +4815,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {obj};
@@ -4679,7 +4825,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "is") {
                         // Object.is(value1, value2) - determines if two values are the same (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.is" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.is" << std::endl;
                         if (node.arguments.size() != 2) {
                             std::cerr << "ERROR: Object.is() expects exactly 2 arguments" << std::endl;
                             return;
@@ -4715,7 +4861,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {value1, value2};
@@ -4725,7 +4871,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "create") {
                         // Object.create(proto) - creates new object with specified prototype (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.create" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.create" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -4756,7 +4902,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "fromEntries") {
                         // Object.fromEntries(iterable) - creates object from key-value pairs (ES2019)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.fromEntries" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.fromEntries" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -4787,7 +4933,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "getOwnPropertyNames") {
                         // Object.getOwnPropertyNames(obj) - returns array of property names (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertyNames" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertyNames" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -4819,7 +4965,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "getOwnPropertySymbols") {
                         // Object.getOwnPropertySymbols(obj) - returns array of symbol properties (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertySymbols" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertySymbols" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -4851,7 +4997,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "getPrototypeOf") {
                         // Object.getPrototypeOf(obj) - returns prototype of object (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.getPrototypeOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.getPrototypeOf" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -4882,7 +5028,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "setPrototypeOf") {
                         // Object.setPrototypeOf(obj, proto) - sets prototype of object (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.setPrototypeOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.setPrototypeOf" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -4917,7 +5063,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "isExtensible") {
                         // Object.isExtensible(obj) - checks if object is extensible (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.isExtensible" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.isExtensible" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -4949,7 +5095,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "preventExtensions") {
                         // Object.preventExtensions(obj) - prevents extensions (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.preventExtensions" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.preventExtensions" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -4980,7 +5126,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "defineProperty") {
                         // Object.defineProperty(obj, prop, descriptor) - defines property (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.defineProperty" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.defineProperty" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5016,7 +5162,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "defineProperties") {
                         // Object.defineProperties(obj, props) - defines multiple properties (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.defineProperties" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.defineProperties" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5049,7 +5195,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "getOwnPropertyDescriptor") {
                         // Object.getOwnPropertyDescriptor(obj, prop) - gets property descriptor (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertyDescriptor" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertyDescriptor" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5082,7 +5228,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "getOwnPropertyDescriptors") {
                         // Object.getOwnPropertyDescriptors(obj) - gets all property descriptors (ES2017)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertyDescriptors" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.getOwnPropertyDescriptors" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5111,7 +5257,7 @@ public:
 
                     if (objIdent->name == "Object" && propIdent->name == "groupBy") {
                         // Object.groupBy(items, callbackFn) - groups items by key (ES2024)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Object.groupBy" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.groupBy" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5145,7 +5291,7 @@ public:
                     // Promise static methods (ES2015)
                     if (objIdent->name == "Promise" && propIdent->name == "resolve") {
                         // Promise.resolve(value) - creates a resolved promise
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.resolve" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.resolve" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -5178,7 +5324,7 @@ public:
 
                     if (objIdent->name == "Promise" && propIdent->name == "reject") {
                         // Promise.reject(reason) - creates a rejected promise
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.reject" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.reject" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -5211,7 +5357,7 @@ public:
 
                     if (objIdent->name == "Promise" && propIdent->name == "all") {
                         // Promise.all(iterable) - waits for all promises to resolve
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.all" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.all" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5243,7 +5389,7 @@ public:
 
                     if (objIdent->name == "Promise" && propIdent->name == "race") {
                         // Promise.race(iterable) - resolves/rejects with the first settled promise
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.race" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.race" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5275,7 +5421,7 @@ public:
 
                     if (objIdent->name == "Promise" && propIdent->name == "allSettled") {
                         // Promise.allSettled(iterable) - waits for all promises to settle
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.allSettled" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.allSettled" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5307,7 +5453,7 @@ public:
 
                     if (objIdent->name == "Promise" && propIdent->name == "any") {
                         // Promise.any(iterable) - resolves when any promise fulfills
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.any" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.any" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5339,7 +5485,7 @@ public:
 
                     if (objIdent->name == "Promise" && propIdent->name == "withResolvers") {
                         // Promise.withResolvers() - returns { promise, resolve, reject }
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Promise.withResolvers" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.withResolvers" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5364,7 +5510,7 @@ public:
 
                     if (objIdent->name == "Proxy" && propIdent->name == "revocable") {
                         // Proxy.revocable(target, handler) - creates revocable proxy
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Proxy.revocable" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Proxy.revocable" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -5406,7 +5552,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "apply") {
                         // Reflect.apply(target, thisArg, argumentsList)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.apply" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.apply" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, ptrType};
@@ -5439,7 +5585,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "construct") {
                         // Reflect.construct(target, argumentsList[, newTarget])
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.construct" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.construct" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, ptrType};
@@ -5472,7 +5618,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "defineProperty") {
                         // Reflect.defineProperty(target, propertyKey, attributes)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.defineProperty" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.defineProperty" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -5520,7 +5666,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "deleteProperty") {
                         // Reflect.deleteProperty(target, propertyKey)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.deleteProperty" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.deleteProperty" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -5559,7 +5705,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "get") {
                         // Reflect.get(target, propertyKey[, receiver])
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.get" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.get" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -5603,7 +5749,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "getOwnPropertyDescriptor") {
                         // Reflect.getOwnPropertyDescriptor(target, propertyKey)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.getOwnPropertyDescriptor" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.getOwnPropertyDescriptor" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -5641,7 +5787,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "getPrototypeOf") {
                         // Reflect.getPrototypeOf(target)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.getPrototypeOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.getPrototypeOf" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
@@ -5672,7 +5818,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "has") {
                         // Reflect.has(target, propertyKey)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.has" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.has" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -5711,7 +5857,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "isExtensible") {
                         // Reflect.isExtensible(target)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.isExtensible" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.isExtensible" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -5743,7 +5889,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "ownKeys") {
                         // Reflect.ownKeys(target)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.ownKeys" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.ownKeys" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
@@ -5774,7 +5920,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "preventExtensions") {
                         // Reflect.preventExtensions(target)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.preventExtensions" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.preventExtensions" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -5806,7 +5952,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "set") {
                         // Reflect.set(target, propertyKey, value[, receiver])
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.set" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.set" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -5861,7 +6007,7 @@ public:
 
                     if (objIdent->name == "Reflect" && propIdent->name == "setPrototypeOf") {
                         // Reflect.setPrototypeOf(target, prototype)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.setPrototypeOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Reflect.setPrototypeOf" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -5899,7 +6045,7 @@ public:
 
                     if (objIdent->name == "Date" && propIdent->name == "now") {
                         // Date.now() - returns current timestamp in milliseconds since Unix epoch (ES5)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Date.now" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Date.now" << std::endl;
                         if (node.arguments.size() != 0) {
                             std::cerr << "ERROR: Date.now() expects no arguments" << std::endl;
                             return;
@@ -5927,7 +6073,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {}; // no arguments
@@ -5937,7 +6083,7 @@ public:
 
                     if (objIdent->name == "Date" && propIdent->name == "parse") {
                         // Date.parse(dateString) - parse date string to timestamp (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Date.parse" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Date.parse" << std::endl;
                         if (node.arguments.size() != 1) {
                             std::cerr << "ERROR: Date.parse() expects 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -5969,7 +6115,7 @@ public:
 
                     if (objIdent->name == "Date" && propIdent->name == "UTC") {
                         // Date.UTC(year, month, day?, hour?, minute?, second?, ms?) - create UTC timestamp (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Date.UTC" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Date.UTC" << std::endl;
                         if (node.arguments.size() < 2) {
                             std::cerr << "ERROR: Date.UTC() expects at least 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
@@ -6015,7 +6161,7 @@ public:
                     // Intl static methods
                     if (objIdent->name == "Intl" && propIdent->name == "getCanonicalLocales") {
                         // Intl.getCanonicalLocales(locales) - canonicalize locale identifiers
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Intl.getCanonicalLocales" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Intl.getCanonicalLocales" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -6046,7 +6192,7 @@ public:
 
                     if (objIdent->name == "Intl" && propIdent->name == "supportedValuesOf") {
                         // Intl.supportedValuesOf(key) - get supported values for a key
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Intl.supportedValuesOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Intl.supportedValuesOf" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -6077,7 +6223,7 @@ public:
 
                     // Iterator.from(iterable) - create iterator from array/iterable (ES2025)
                     if (objIdent->name == "Iterator" && propIdent->name == "from") {
-                        std::cerr << "DEBUG HIRGen: Detected static method call: Iterator.from" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Iterator.from" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -6109,7 +6255,7 @@ public:
 
                     if (objIdent->name == "performance" && propIdent->name == "now") {
                         // performance.now() - returns high-resolution timestamp in milliseconds (Web Performance API)
-                        std::cerr << "DEBUG HIRGen: Detected static method call: performance.now" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: performance.now" << std::endl;
                         if (node.arguments.size() != 0) {
                             std::cerr << "ERROR: performance.now() expects no arguments" << std::endl;
                             return;
@@ -6137,7 +6283,7 @@ public:
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
                         std::vector<HIRValue*> args = {}; // no arguments
@@ -6150,7 +6296,7 @@ public:
                     // ============================================================
                     if (objIdent->name == "Atomics") {
                         std::string methodName = propIdent->name;
-                        std::cerr << "DEBUG HIRGen: Detected Atomics method call: Atomics." << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Atomics method call: Atomics." << methodName << std::endl;
 
                         if (methodName == "isLockFree") {
                             // Atomics.isLockFree(size)
@@ -6690,7 +6836,7 @@ public:
                     // ============================================================
                     if (objIdent->name == "BigInt") {
                         std::string methodName = propIdent->name;
-                        std::cerr << "DEBUG HIRGen: Detected BigInt static method: BigInt." << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected BigInt static method: BigInt." << methodName << std::endl;
 
                         if (methodName == "asIntN") {
                             // BigInt.asIntN(bits, bigint)
@@ -6787,7 +6933,7 @@ public:
                         
                         // Check if this is a static method
                         if (staticMethods_.find(mangledName) != staticMethods_.end()) {
-                            std::cerr << "DEBUG HIRGen: Static method call: " << mangledName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Static method call: " << mangledName << std::endl;
                             
                             // Generate arguments (NO 'this' for static methods)
                             std::vector<HIRValue*> args;
@@ -6826,7 +6972,7 @@ public:
                                      object->type->kind == hir::HIRType::Kind::String;
 
                 if (isStringMethod) {
-                    std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
 
                     // Generate arguments
                     std::vector<HIRValue*> args;
@@ -6855,7 +7001,7 @@ public:
                     } else if (methodName == "lastIndexOf") {
                         // str.lastIndexOf(searchString)
                         // Searches from end to start, returns last occurrence index
-                        std::cerr << "DEBUG HIRGen: Detected string method call: lastIndexOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: lastIndexOf" << std::endl;
                         runtimeFuncName = "nova_string_lastIndexOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
@@ -6868,7 +7014,7 @@ public:
                     } else if (methodName == "charCodeAt") {
                         // str.charCodeAt(index)
                         // Returns character code (ASCII/Unicode value) at index
-                        std::cerr << "DEBUG HIRGen: Detected string method call: charCodeAt" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: charCodeAt" << std::endl;
                         runtimeFuncName = "nova_string_charCodeAt";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
@@ -6877,7 +7023,7 @@ public:
                         // str.codePointAt(index)
                         // Returns Unicode code point at index (ES2015)
                         // Like charCodeAt but handles full Unicode including surrogate pairs
-                        std::cerr << "DEBUG HIRGen: Detected string method call: codePointAt" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: codePointAt" << std::endl;
                         runtimeFuncName = "nova_string_codePointAt";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
@@ -6885,7 +7031,7 @@ public:
                     } else if (methodName == "at") {
                         // str.at(index)
                         // Returns character code at index (supports negative indices)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: at" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: at" << std::endl;
                         runtimeFuncName = "nova_string_at";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
@@ -6893,7 +7039,7 @@ public:
                     } else if (methodName == "concat") {
                         // str.concat(otherStr)
                         // Concatenates two strings together
-                        std::cerr << "DEBUG HIRGen: Detected string method call: concat" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: concat" << std::endl;
                         runtimeFuncName = "nova_string_concat";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
@@ -6913,14 +7059,14 @@ public:
                     } else if (methodName == "trimStart" || methodName == "trimLeft") {
                         // str.trimStart() or str.trimLeft()
                         // Removes whitespace from the beginning of the string
-                        std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
                         runtimeFuncName = "nova_string_trimStart";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "trimEnd" || methodName == "trimRight") {
                         // str.trimEnd() or str.trimRight()
                         // Removes whitespace from the end of the string
-                        std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: " << methodName << std::endl;
                         runtimeFuncName = "nova_string_trimEnd";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -6959,7 +7105,7 @@ public:
                     } else if (methodName == "replaceAll") {
                         // str.replaceAll(search, replace) - ES2021
                         // Replaces ALL occurrences (not just first like replace())
-                        std::cerr << "DEBUG HIRGen: Detected string method call: replaceAll" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: replaceAll" << std::endl;
                         runtimeFuncName = "nova_string_replaceAll";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
@@ -6987,7 +7133,7 @@ public:
                         // Simplified implementation: returns count of matches
                         // Note: Use nova_string_match_substring for plain string patterns
                         // Use nova_string_match (in Regex.cpp) for regex patterns
-                        std::cerr << "DEBUG HIRGen: Detected string method call: match" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: match" << std::endl;
                         runtimeFuncName = "nova_string_match_substring";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
@@ -6995,63 +7141,63 @@ public:
                     } else if (methodName == "localeCompare") {
                         // str.localeCompare(other) - compare strings
                         // Returns: -1 if str < other, 0 if equal, 1 if str > other
-                        std::cerr << "DEBUG HIRGen: Detected string method call: localeCompare" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: localeCompare" << std::endl;
                         runtimeFuncName = "nova_string_localeCompare";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
                     } else if (methodName == "search") {
                         // str.search(regex) - find first match index
-                        std::cerr << "DEBUG HIRGen: Detected string method call: search" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: search" << std::endl;
                         runtimeFuncName = "nova_string_search";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));  // regex object
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
                     } else if (methodName == "toString") {
                         // str.toString() - returns the string itself (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: toString" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: toString" << std::endl;
                         runtimeFuncName = "nova_string_toString";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "valueOf") {
                         // str.valueOf() - returns primitive string value (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: valueOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: valueOf" << std::endl;
                         runtimeFuncName = "nova_string_valueOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "toLocaleLowerCase") {
                         // str.toLocaleLowerCase() - locale-aware lowercase (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: toLocaleLowerCase" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: toLocaleLowerCase" << std::endl;
                         runtimeFuncName = "nova_string_toLocaleLowerCase";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "toLocaleUpperCase") {
                         // str.toLocaleUpperCase() - locale-aware uppercase (ES1)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: toLocaleUpperCase" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: toLocaleUpperCase" << std::endl;
                         runtimeFuncName = "nova_string_toLocaleUpperCase";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "normalize") {
                         // str.normalize(form) - Unicode normalization (ES2015)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: normalize" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: normalize" << std::endl;
                         runtimeFuncName = "nova_string_normalize";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));  // form parameter
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "isWellFormed") {
                         // str.isWellFormed() - check if well-formed Unicode (ES2024)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: isWellFormed" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: isWellFormed" << std::endl;
                         runtimeFuncName = "nova_string_isWellFormed";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
                     } else if (methodName == "toWellFormed") {
                         // str.toWellFormed() - convert to well-formed Unicode (ES2024)
-                        std::cerr << "DEBUG HIRGen: Detected string method call: toWellFormed" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: toWellFormed" << std::endl;
                         runtimeFuncName = "nova_string_toWellFormed";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else {
-                        std::cerr << "DEBUG HIRGen: Unknown string method: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Unknown string method: " << methodName << std::endl;
                         lastValue_ = nullptr;
                         return;
                     }
@@ -7072,7 +7218,7 @@ public:
                         HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                         funcPtr->linkage = HIRFunction::Linkage::External;
                         runtimeFunc = funcPtr.get();
-                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                     }
 
                     // Create call to runtime function
@@ -7086,7 +7232,7 @@ public:
                                       object->type->kind == hir::HIRType::Kind::F64);
 
                 if (isNumberMethod) {
-                    std::cerr << "DEBUG HIRGen: Detected number method call: " << methodName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected number method call: " << methodName << std::endl;
 
                     // Generate arguments
                     std::vector<HIRValue*> args;
@@ -7105,7 +7251,7 @@ public:
                         // num.toFixed(digits)
                         // Formats number with fixed decimal places
                         // Returns string representation
-                        std::cerr << "DEBUG HIRGen: Detected number method call: toFixed" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected number method call: toFixed" << std::endl;
                         runtimeFuncName = "nova_number_toFixed";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // digits (i64)
@@ -7114,7 +7260,7 @@ public:
                         // num.toExponential(fractionDigits)
                         // Formats number in exponential notation (scientific notation)
                         // Returns string representation
-                        std::cerr << "DEBUG HIRGen: Detected number method call: toExponential" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected number method call: toExponential" << std::endl;
                         runtimeFuncName = "nova_number_toExponential";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // fractionDigits (i64)
@@ -7123,7 +7269,7 @@ public:
                         // num.toPrecision(precision)
                         // Formats number with specified precision (total significant digits)
                         // Returns string representation
-                        std::cerr << "DEBUG HIRGen: Detected number method call: toPrecision" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected number method call: toPrecision" << std::endl;
                         runtimeFuncName = "nova_number_toPrecision";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // precision (i64)
@@ -7132,7 +7278,7 @@ public:
                         // num.toString(radix)
                         // Converts number to string with optional radix (base 2-36)
                         // Returns string representation
-                        std::cerr << "DEBUG HIRGen: Detected number method call: toString" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected number method call: toString" << std::endl;
                         runtimeFuncName = "nova_number_toString";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // radix (i64)
@@ -7141,7 +7287,7 @@ public:
                         // num.valueOf()
                         // Returns the primitive value of a Number object
                         // No parameters beyond the number itself
-                        std::cerr << "DEBUG HIRGen: Detected number method call: valueOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected number method call: valueOf" << std::endl;
                         runtimeFuncName = "nova_number_valueOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         returnType = std::make_shared<HIRType>(HIRType::Kind::F64);  // returns F64
@@ -7149,12 +7295,12 @@ public:
                         // num.toLocaleString()
                         // Formats number with locale-specific separators (e.g., 1,234.56)
                         // Returns string representation
-                        std::cerr << "DEBUG HIRGen: Detected number method call: toLocaleString" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected number method call: toLocaleString" << std::endl;
                         runtimeFuncName = "nova_number_toLocaleString";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));  // number (as F64)
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
                     } else {
-                        std::cerr << "DEBUG HIRGen: Unknown number method: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Unknown number method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
                         return;
                     }
@@ -7175,7 +7321,7 @@ public:
                         HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                         funcPtr->linkage = HIRFunction::Linkage::External;
                         runtimeFunc = funcPtr.get();
-                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                     }
 
                     // Create call to runtime function
@@ -7188,7 +7334,7 @@ public:
                                       object->type->kind == hir::HIRType::Kind::Bool;
 
                 if (isBooleanMethod) {
-                    std::cerr << "DEBUG HIRGen: Detected boolean method call: " << methodName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected boolean method call: " << methodName << std::endl;
 
                     // Generate arguments
                     std::vector<HIRValue*> args;
@@ -7202,19 +7348,19 @@ public:
                     if (methodName == "toString") {
                         // bool.toString()
                         // Returns "true" or "false"
-                        std::cerr << "DEBUG HIRGen: Detected boolean method call: toString" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected boolean method call: toString" << std::endl;
                         runtimeFuncName = "nova_boolean_toString";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // boolean as i64
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // returns string
                     } else if (methodName == "valueOf") {
                         // bool.valueOf()
                         // Returns the primitive boolean value (0 or 1)
-                        std::cerr << "DEBUG HIRGen: Detected boolean method call: valueOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected boolean method call: valueOf" << std::endl;
                         runtimeFuncName = "nova_boolean_valueOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));  // boolean as i64
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns i64
                     } else {
-                        std::cerr << "DEBUG HIRGen: Unknown boolean method: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Unknown boolean method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
                         return;
                     }
@@ -7235,7 +7381,7 @@ public:
                         HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                         funcPtr->linkage = HIRFunction::Linkage::External;
                         runtimeFunc = funcPtr.get();
-                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                     }
 
                     // Create call to runtime function
@@ -7246,7 +7392,7 @@ public:
                 // Check if object is a BigInt (ES2020)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (bigIntVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected BigInt method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected BigInt method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -7322,7 +7468,7 @@ public:
                 // Check if object is a Date (ES1)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (dateVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Date method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Date method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -7588,7 +7734,7 @@ public:
                 // Check if object is an Error (ES1)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (errorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Error method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Error method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -7632,7 +7778,7 @@ public:
                 // Check if object is a SuppressedError (ES2024)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (suppressedErrorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected SuppressedError method/property call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected SuppressedError method/property call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -7682,7 +7828,7 @@ public:
                 // Check if object is a Symbol (ES2015)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (symbolVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Symbol method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Symbol method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -7735,7 +7881,7 @@ public:
                 // Check if object is an Intl.NumberFormat
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (numberFormatVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected NumberFormat method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected NumberFormat method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -7817,7 +7963,7 @@ public:
                 // Check if object is an Intl.DateTimeFormat
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (dateTimeFormatVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected DateTimeFormat method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected DateTimeFormat method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -7897,7 +8043,7 @@ public:
                 // Check if object is an Intl.Collator
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (collatorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Collator method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Collator method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -7956,7 +8102,7 @@ public:
                 // Check if object is an Intl.PluralRules
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (pluralRulesVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected PluralRules method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected PluralRules method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto dblType = std::make_shared<HIRType>(HIRType::Kind::F64);
@@ -8039,7 +8185,7 @@ public:
                 // Check if object is an Intl.RelativeTimeFormat
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (relativeTimeFormatVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected RelativeTimeFormat method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected RelativeTimeFormat method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto dblType = std::make_shared<HIRType>(HIRType::Kind::F64);
@@ -8126,7 +8272,7 @@ public:
                 // Check if object is an Intl.ListFormat
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (listFormatVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected ListFormat method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected ListFormat method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -8204,7 +8350,7 @@ public:
                 // Check if object is an Intl.DisplayNames
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (displayNamesVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected DisplayNames method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected DisplayNames method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -8258,7 +8404,7 @@ public:
                 // Check if object is an Intl.Locale
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (localeVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Locale method call or property: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Locale method call or property: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -8323,7 +8469,7 @@ public:
                 // Check if object is an Intl.Segmenter
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (segmenterVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Segmenter method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Segmenter method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -8377,7 +8523,7 @@ public:
                                 // Check if object is an Iterator (ES2025 Iterator Helpers)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (iteratorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Iterator method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Iterator method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -8679,7 +8825,7 @@ public:
                 // Check if object is a Map (ES2015)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (mapVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Map method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Map method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -8952,7 +9098,7 @@ public:
                 // Check if object is a Set (ES2015)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (setVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Set method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Set method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -9302,7 +9448,7 @@ public:
                 // Check if object is a WeakMap (ES2015)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (weakMapVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected WeakMap method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected WeakMap method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -9441,7 +9587,7 @@ public:
                 // Check if object is a WeakRef (ES2021)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (weakRefVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected WeakRef method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected WeakRef method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -9475,7 +9621,7 @@ public:
                 // Check if object is a WeakSet (ES2015)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (weakSetVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected WeakSet method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected WeakSet method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -9572,7 +9718,7 @@ public:
                 // Check if object is a URL (Web API)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (urlVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected URL method/property call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected URL method/property call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -9605,7 +9751,7 @@ public:
                 // Check if object is a URLSearchParams (Web API)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (urlSearchParamsVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected URLSearchParams method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected URLSearchParams method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -9799,7 +9945,7 @@ public:
                 // Check if object is a TextEncoder (Web API)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (textEncoderVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected TextEncoder method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected TextEncoder method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -9840,7 +9986,7 @@ public:
                 // Check if object is a TextDecoder (Web API)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (textDecoderVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected TextDecoder method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected TextDecoder method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -9885,7 +10031,7 @@ public:
                 // Check if object is a Headers (Web API)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (headersVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Headers method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Headers method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -10012,7 +10158,7 @@ public:
                 // Check if object is a Response (Web API)
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     if (responseVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Response method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Response method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -10066,7 +10212,7 @@ public:
                 if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                     auto typeIt = typedArrayTypes_.find(objIdent->name);
                     if (typeIt != typedArrayTypes_.end()) {
-                        std::cerr << "DEBUG HIRGen: Detected TypedArray method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected TypedArray method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -10231,7 +10377,7 @@ public:
                                  methodName == "findIndex" || methodName == "findLast" ||
                                  methodName == "findLastIndex" || methodName == "reduce" ||
                                  methodName == "reduceRight") {
-                            std::cerr << "DEBUG HIRGen: Detected TypedArray callback method: " << methodName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected TypedArray callback method: " << methodName << std::endl;
 
                             // Determine function signature based on method
                             std::string funcName = "nova_typedarray_" + methodName;
@@ -10278,7 +10424,7 @@ public:
 
                                 if (!lastFunctionName_.empty()) {
                                     // Arrow function callback
-                                    std::cerr << "DEBUG HIRGen: TypedArray callback function: " << lastFunctionName_ << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: TypedArray callback function: " << lastFunctionName_ << std::endl;
                                     HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
                                     args.push_back(funcNameValue);
                                     lastFunctionName_ = "";
@@ -10401,7 +10547,7 @@ public:
                                 methodName == "toSorted" || methodName == "toReversed" ||
                                 methodName == "with") {
                                 lastTypedArrayType_ = typedArrayTypes_[objIdent->name];
-                                std::cerr << "DEBUG HIRGen: TypedArray method " << methodName
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: TypedArray method " << methodName
                                           << " returns type: " << lastTypedArrayType_ << std::endl;
                             }
                             return;
@@ -10410,7 +10556,7 @@ public:
 
                     // Check if this is a DataView method call
                     if (dataViewVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected DataView method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected DataView method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -10514,7 +10660,7 @@ public:
 
                     // Check if this is a DisposableStack method call
                     if (disposableStackVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected DisposableStack method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected DisposableStack method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -10596,7 +10742,7 @@ public:
 
                                     if (!lastFunctionName_.empty()) {
                                         // Arrow function or function expression - pass name as string
-                                        std::cerr << "DEBUG HIRGen: DisposableStack callback function: " << lastFunctionName_ << std::endl;
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: DisposableStack callback function: " << lastFunctionName_ << std::endl;
                                         HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
                                         args.push_back(funcNameValue);
                                         lastFunctionName_ = "";
@@ -10621,7 +10767,7 @@ public:
                             // For move(), track that the result is also a DisposableStack
                             if (methodName == "move") {
                                 lastWasDisposableStack_ = true;
-                                std::cerr << "DEBUG HIRGen: DisposableStack.move() returns a new DisposableStack" << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: DisposableStack.move() returns a new DisposableStack" << std::endl;
                             }
                             return;
                         }
@@ -10629,7 +10775,7 @@ public:
 
                     // Check if this is an AsyncDisposableStack method call
                     if (asyncDisposableStackVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected AsyncDisposableStack method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected AsyncDisposableStack method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -10704,7 +10850,7 @@ public:
                                     node.arguments[callbackIdx]->accept(*this);
 
                                     if (!lastFunctionName_.empty()) {
-                                        std::cerr << "DEBUG HIRGen: AsyncDisposableStack callback function: " << lastFunctionName_ << std::endl;
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: AsyncDisposableStack callback function: " << lastFunctionName_ << std::endl;
                                         HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
                                         args.push_back(funcNameValue);
                                         lastFunctionName_ = "";
@@ -10727,7 +10873,7 @@ public:
                             // For move(), track that the result is also an AsyncDisposableStack
                             if (methodName == "move") {
                                 lastWasAsyncDisposableStack_ = true;
-                                std::cerr << "DEBUG HIRGen: AsyncDisposableStack.move() returns a new AsyncDisposableStack" << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: AsyncDisposableStack.move() returns a new AsyncDisposableStack" << std::endl;
                             }
                             return;
                         }
@@ -10735,7 +10881,7 @@ public:
 
                     // Check if this is a FinalizationRegistry method call (ES2021)
                     if (finalizationRegistryVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected FinalizationRegistry method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected FinalizationRegistry method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -10819,7 +10965,7 @@ public:
 
                     // Check if this is a Promise method call
                     if (promiseVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Promise method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Promise method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -10873,7 +11019,7 @@ public:
 
                                 if (!lastFunctionName_.empty()) {
                                     // Arrow function or function expression - pass name as string
-                                    std::cerr << "DEBUG HIRGen: Promise callback function: " << lastFunctionName_ << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Promise callback function: " << lastFunctionName_ << std::endl;
                                     HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
                                     args.push_back(funcNameValue);
                                     lastFunctionName_ = "";
@@ -10891,14 +11037,14 @@ public:
 
                             // then/catch/finally return a new Promise
                             lastWasPromise_ = true;
-                            std::cerr << "DEBUG HIRGen: Promise." << methodName << "() returns a new Promise" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Promise." << methodName << "() returns a new Promise" << std::endl;
                             return;
                         }
                     }
 
                     // Check if this is an AsyncGenerator method call (next, return, throw)
                     if (asyncGeneratorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected AsyncGenerator method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected AsyncGenerator method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -10956,14 +11102,14 @@ public:
                             lastWasIteratorResult_ = true;
                             lastWasPromise_ = true;
 
-                            std::cerr << "DEBUG HIRGen: AsyncGenerator." << methodName << "() called" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: AsyncGenerator." << methodName << "() called" << std::endl;
                             return;
                         }
                     }
 
                     // Check if this is a Generator method call (next, return, throw)
                     if (generatorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Generator method call: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Generator method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -11019,14 +11165,14 @@ public:
                             // Mark that this returns an IteratorResult
                             lastWasIteratorResult_ = true;
 
-                            std::cerr << "DEBUG HIRGen: Generator." << methodName << "() called" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Generator." << methodName << "() called" << std::endl;
                             return;
                         }
                     }
 
                     // Check if this is a Function method call (call, apply, bind, toString)
                     if (functionVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Detected Function method call: " << objIdent->name << "." << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Function method call: " << objIdent->name << "." << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -11052,7 +11198,7 @@ public:
                             }
 
                             lastValue_ = builder_->createCall(existingFunc.get(), args, "function_call_result");
-                            std::cerr << "DEBUG HIRGen: Function.call() executed" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function.call() executed" << std::endl;
                             return;
                         } else if (methodName == "apply") {
                             // func.apply(thisArg, argsArray)
@@ -11066,25 +11212,25 @@ public:
                             // For now, just call without args (proper apply needs array unpacking)
                             std::vector<HIRValue*> args;
                             lastValue_ = builder_->createCall(existingFunc.get(), args, "function_apply_result");
-                            std::cerr << "DEBUG HIRGen: Function.apply() executed" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function.apply() executed" << std::endl;
                             return;
                         } else if (methodName == "bind") {
                             // func.bind(thisArg, arg1, arg2, ...) - returns bound function
                             // Simplified implementation: just return the original function identifier
                             // In a full implementation, we would create a new bound function wrapper
                             lastValue_ = builder_->createIntConstant(1); // Placeholder for bound function
-                            std::cerr << "DEBUG HIRGen: Function.bind() executed (simplified - returns function ref)" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function.bind() executed (simplified - returns function ref)" << std::endl;
                             return;
                         } else if (methodName == "toString") {
                             // func.toString() - returns function source
                             std::string funcStr = "function " + objIdent->name + "() { [native code] }";
                             lastValue_ = builder_->createStringConstant(funcStr);
-                            std::cerr << "DEBUG HIRGen: Function.toString() executed" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function.toString() executed" << std::endl;
                             return;
                         } else if (methodName == "name") {
                             // func.name - function name property (accessed as method call for simplicity)
                             lastValue_ = builder_->createStringConstant(objIdent->name);
-                            std::cerr << "DEBUG HIRGen: Function.name accessed" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function.name accessed" << std::endl;
                             return;
                         } else if (methodName == "length") {
                             // func.length - parameter count
@@ -11094,7 +11240,7 @@ public:
                                 paramCount = it->second;
                             }
                             lastValue_ = builder_->createIntConstant(paramCount);
-                            std::cerr << "DEBUG HIRGen: Function.length accessed: " << paramCount << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function.length accessed: " << paramCount << std::endl;
                             return;
                         }
                     }
@@ -11114,7 +11260,7 @@ public:
                 }
 
                 if (isArrayMethod) {
-                    std::cerr << "DEBUG HIRGen: Detected array method call: " << methodName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: " << methodName << std::endl;
 
                     // Map array method names to runtime function names
                     std::string runtimeFuncName;
@@ -11149,7 +11295,7 @@ public:
                     } else if (methodName == "at") {
                         // array.at(index)
                         // Returns element at index (supports negative indices)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: at" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: at" << std::endl;
                         runtimeFuncName = "nova_value_array_at";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 index
@@ -11158,7 +11304,7 @@ public:
                     } else if (methodName == "with") {
                         // array.with(index, value) - ES2023
                         // Returns NEW array with element at index replaced (immutable)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: with" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: with" << std::endl;
                         runtimeFuncName = "nova_value_array_with";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 index
@@ -11171,7 +11317,7 @@ public:
                     } else if (methodName == "toReversed") {
                         // array.toReversed() - ES2023
                         // Returns NEW reversed array (immutable operation)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: toReversed" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: toReversed" << std::endl;
                         runtimeFuncName = "nova_value_array_toReversed";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         // Return proper array type: pointer to array of i64
@@ -11182,7 +11328,7 @@ public:
                     } else if (methodName == "toSorted") {
                         // array.toSorted() - ES2023
                         // Returns NEW sorted array (immutable operation)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: toSorted" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: toSorted" << std::endl;
                         runtimeFuncName = "nova_value_array_toSorted";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         // Return proper array type: pointer to array of i64
@@ -11193,7 +11339,7 @@ public:
                     } else if (methodName == "sort") {
                         // array.sort() - in-place sorting
                         // Sorts array in ascending order (modifies original)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: sort" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: sort" << std::endl;
                         runtimeFuncName = "nova_value_array_sort";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         // Return proper array type: pointer to array of i64
@@ -11204,7 +11350,7 @@ public:
                     } else if (methodName == "splice") {
                         // array.splice(start, deleteCount) - removes elements in place
                         // Modifies array by removing deleteCount elements starting at start
-                        std::cerr << "DEBUG HIRGen: Detected array method call: splice" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: splice" << std::endl;
                         runtimeFuncName = "nova_value_array_splice";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 start
@@ -11218,7 +11364,7 @@ public:
                         // array.copyWithin(target, start, end) - shallow copies part to another location (ES2015)
                         // Modifies array in place and returns it
                         // end is optional (defaults to array length)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: copyWithin" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: copyWithin" << std::endl;
                         runtimeFuncName = "nova_value_array_copyWithin";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 target
@@ -11233,7 +11379,7 @@ public:
                     } else if (methodName == "toSpliced") {
                         // array.toSpliced(start, deleteCount) - returns new array with elements removed (ES2023)
                         // Immutable version of splice() - does not modify original array
-                        std::cerr << "DEBUG HIRGen: Detected array method call: toSpliced" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: toSpliced" << std::endl;
                         runtimeFuncName = "nova_value_array_toSpliced";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 start
@@ -11246,7 +11392,7 @@ public:
                     } else if (methodName == "toString") {
                         // array.toString() - converts to comma-separated string
                         // Returns string representation like "1,2,3"
-                        std::cerr << "DEBUG HIRGen: Detected array method call: toString" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: toString" << std::endl;
                         runtimeFuncName = "nova_value_array_toString";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);           // returns string
@@ -11254,7 +11400,7 @@ public:
                     } else if (methodName == "flat") {
                         // array.flat() - flattens nested arrays one level deep (ES2019)
                         // Returns new array with sub-array elements concatenated
-                        std::cerr << "DEBUG HIRGen: Detected array method call: flat" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: flat" << std::endl;
                         runtimeFuncName = "nova_value_array_flat";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         // Return proper array type: pointer to array of i64
@@ -11266,7 +11412,7 @@ public:
                         // array.flatMap(callback) - maps then flattens one level (ES2019)
                         // Callback: (element) => transformed_value
                         // Returns new array with transformed and flattened elements
-                        std::cerr << "DEBUG HIRGen: Detected array method call: flatMap" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: flatMap" << std::endl;
                         runtimeFuncName = "nova_value_array_flatMap";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11290,7 +11436,7 @@ public:
                     } else if (methodName == "lastIndexOf") {
                         // array.lastIndexOf(value)
                         // Searches from end to start, returns last occurrence index
-                        std::cerr << "DEBUG HIRGen: Detected array method call: lastIndexOf" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: lastIndexOf" << std::endl;
                         runtimeFuncName = "nova_value_array_lastIndexOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
@@ -11351,7 +11497,7 @@ public:
                         // array.findIndex(callback)
                         // Callback: (element) => boolean
                         // Returns the index or -1 if not found
-                        std::cerr << "DEBUG HIRGen: Detected array method call: findIndex" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: findIndex" << std::endl;
                         runtimeFuncName = "nova_value_array_findIndex";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11361,7 +11507,7 @@ public:
                         // array.findLast(callback) - ES2023
                         // Callback: (element) => boolean
                         // Returns the last element matching condition (searches right to left)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: findLast" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: findLast" << std::endl;
                         runtimeFuncName = "nova_value_array_findLast";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11371,7 +11517,7 @@ public:
                         // array.findLastIndex(callback) - ES2023
                         // Callback: (element) => boolean
                         // Returns the last index matching condition (searches right to left)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: findLastIndex" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: findLastIndex" << std::endl;
                         runtimeFuncName = "nova_value_array_findLastIndex";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11381,7 +11527,7 @@ public:
                         // array.filter(callback)
                         // Callback: (element) => boolean
                         // Returns new array with matching elements
-                        std::cerr << "DEBUG HIRGen: Detected array method call: filter" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: filter" << std::endl;
                         runtimeFuncName = "nova_value_array_filter";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11394,7 +11540,7 @@ public:
                         // array.map(callback)
                         // Callback: (element) => transformed_value
                         // Returns new array with transformed elements
-                        std::cerr << "DEBUG HIRGen: Detected array method call: map" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: map" << std::endl;
                         runtimeFuncName = "nova_value_array_map";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11407,7 +11553,7 @@ public:
                         // array.some(callback)
                         // Callback: (element) => boolean
                         // Returns true if any element matches
-                        std::cerr << "DEBUG HIRGen: Detected array method call: some" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: some" << std::endl;
                         runtimeFuncName = "nova_value_array_some";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11417,7 +11563,7 @@ public:
                         // array.every(callback)
                         // Callback: (element) => boolean
                         // Returns true if all elements match
-                        std::cerr << "DEBUG HIRGen: Detected array method call: every" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: every" << std::endl;
                         runtimeFuncName = "nova_value_array_every";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11427,7 +11573,7 @@ public:
                         // array.forEach(callback)
                         // Callback: (element) => void
                         // Returns void (but we return 0 for consistency)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: forEach" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: forEach" << std::endl;
                         runtimeFuncName = "nova_value_array_forEach";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11437,7 +11583,7 @@ public:
                         // array.reduce(callback, initialValue)
                         // Callback: (accumulator, currentValue) => result (2 parameters!)
                         // Returns the final accumulated value
-                        std::cerr << "DEBUG HIRGen: Detected array method call: reduce" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: reduce" << std::endl;
                         runtimeFuncName = "nova_value_array_reduce";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11448,7 +11594,7 @@ public:
                         // array.reduceRight(callback, initialValue)
                         // Callback: (accumulator, currentValue) => result (2 parameters!)
                         // Processes from RIGHT to LEFT (backwards)
-                        std::cerr << "DEBUG HIRGen: Detected array method call: reduceRight" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: reduceRight" << std::endl;
                         runtimeFuncName = "nova_value_array_reduceRight";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
@@ -11456,7 +11602,7 @@ public:
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns accumulated value
                         hasReturnValue = true;
                     } else {
-                        std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Unknown array method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
                         return;
                     }
@@ -11475,7 +11621,7 @@ public:
                         if (!lastFunctionName_.empty() && (methodName == "find" || methodName == "findIndex" || methodName == "findLast" || methodName == "findLastIndex" || methodName == "filter" || methodName == "map" || methodName == "some" || methodName == "every" || methodName == "forEach" || methodName == "reduce" || methodName == "reduceRight")) {
                             // For callback methods, pass function name as string constant
                             // LLVM codegen will convert this to a function pointer
-                            std::cerr << "DEBUG HIRGen: Detected arrow function argument: " << lastFunctionName_ << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected arrow function argument: " << lastFunctionName_ << std::endl;
                             HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
                             args.push_back(funcNameValue);
                             lastFunctionName_ = "";  // Reset
@@ -11500,20 +11646,20 @@ public:
                         HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                         funcPtr->linkage = HIRFunction::Linkage::External;
                         runtimeFunc = funcPtr.get();
-                        std::cerr << "DEBUG HIRGen: Created external array function: " << runtimeFuncName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external array function: " << runtimeFuncName << std::endl;
                     }
 
                     // Create call to runtime function
-                    std::cerr << "DEBUG HIRGen: About to create call to " << runtimeFuncName
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: About to create call to " << runtimeFuncName
                               << ", hasReturnValue=" << hasReturnValue
                               << ", args.size=" << args.size() << std::endl;
                     if (hasReturnValue) {
                         lastValue_ = builder_->createCall(runtimeFunc, args, "array_method");
-                        std::cerr << "DEBUG HIRGen: Created call with return value" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created call with return value" << std::endl;
                     } else {
                         builder_->createCall(runtimeFunc, args, "array_method");
                         lastValue_ = builder_->createIntConstant(0); // void methods return 0
-                        std::cerr << "DEBUG HIRGen: Created void call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created void call" << std::endl;
                     }
                     return;
                 }
@@ -11524,7 +11670,7 @@ public:
                                     object->type->kind == hir::HIRType::Kind::Any;
 
                 if (isRegexMethod && (methodName == "test" || methodName == "exec")) {
-                    std::cerr << "DEBUG HIRGen: Detected regex method call: " << methodName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected regex method call: " << methodName << std::endl;
 
                     // Generate arguments
                     std::vector<HIRValue*> args;
@@ -11580,7 +11726,7 @@ public:
                         HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                         funcPtr->linkage = HIRFunction::Linkage::External;
                         runtimeFunc = funcPtr.get();
-                        std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                     }
 
                     // Create call to runtime function
@@ -11609,7 +11755,7 @@ public:
                         auto* structType = static_cast<hir::HIRStructType*>(object->type.get());
                         className = structType->name;
                         isClassMethod = true;
-                        std::cerr << "DEBUG HIRGen: Detected class method call: " << className << "::" << methodName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected class method call: " << className << "::" << methodName << std::endl;
                     }
                 }
 
@@ -11624,12 +11770,12 @@ public:
 
                     // Construct mangled function name: ClassName_methodName
                     std::string mangledName = className + "_" + methodName;
-                    std::cerr << "DEBUG HIRGen: Looking up method function: " << mangledName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Looking up method function: " << mangledName << std::endl;
 
                     // Lookup the method function
                     auto func = module_->getFunction(mangledName);
                     if (func) {
-                        std::cerr << "DEBUG HIRGen: Found method function, creating call" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Found method function, creating call" << std::endl;
                         lastValue_ = builder_->createCall(func.get(), args, "method_call");
                         return;
                     } else {
@@ -11682,7 +11828,7 @@ public:
             if (funcRefIt != functionReferences_.end()) {
                 // This is an indirect call through a function reference
                 std::string funcName = funcRefIt->second;
-                std::cerr << "DEBUG HIRGen: Indirect call through variable '" << id->name
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Indirect call through variable '" << id->name
                           << "' to function '" << funcName << "'" << std::endl;
                 auto func = module_->getFunction(funcName);
                 if (func) {
@@ -11697,7 +11843,7 @@ public:
 
             // Check if this is an async generator function call (ES2018)
             if (asyncGeneratorFuncs_.count(id->name) > 0) {
-                std::cerr << "DEBUG HIRGen: Detected async generator function call: " << id->name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected async generator function call: " << id->name << std::endl;
 
                 // Create async generator object with nova_async_generator_create(funcPtr, initialState)
                 auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -11737,13 +11883,13 @@ public:
                 lastWasAsyncGenerator_ = true;
                 lastWasGenerator_ = false;  // Not a regular generator
 
-                std::cerr << "DEBUG HIRGen: Created async generator object for " << id->name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created async generator object for " << id->name << std::endl;
                 return;
             }
 
             // Check if this is a generator function call (ES2015)
             if (generatorFuncs_.count(id->name) > 0) {
-                std::cerr << "DEBUG HIRGen: Detected generator function call: " << id->name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected generator function call: " << id->name << std::endl;
 
                 // Create generator object with nova_generator_create(funcPtr, initialState)
                 auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -11803,7 +11949,7 @@ public:
                         auto* slotIndex = builder_->createIntConstant(100 + static_cast<int>(i));
                         std::vector<HIRValue*> storeArgs = {genPtr, slotIndex, args[i]};
                         builder_->createCall(storeLocalFunc, storeArgs);
-                        std::cerr << "DEBUG HIRGen: Stored generator arg " << i << " at slot " << (100 + i) << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Stored generator arg " << i << " at slot " << (100 + i) << std::endl;
                     }
                 }
 
@@ -11812,7 +11958,7 @@ public:
                 // Mark for variable tracking
                 lastWasGenerator_ = true;
 
-                std::cerr << "DEBUG HIRGen: Created generator object for " << id->name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created generator object for " << id->name << std::endl;
                 return;
             }
 
@@ -11829,7 +11975,7 @@ public:
         if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
             if (objIdent->name == "globalThis") {
                 if (auto* propIdent = dynamic_cast<Identifier*>(node.property.get())) {
-                    std::cerr << "DEBUG HIRGen: globalThis." << propIdent->name << " property access" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: globalThis." << propIdent->name << " property access" << std::endl;
 
                     // Global constants
                     if (propIdent->name == "Infinity") {
@@ -11963,7 +12109,7 @@ public:
                     }
                 } else if (objIdent->name == "Symbol") {
                     // Symbol well-known symbols (ES2015+)
-                    std::cerr << "DEBUG HIRGen: Symbol property access: Symbol." << propIdent->name << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Symbol property access: Symbol." << propIdent->name << std::endl;
 
                     std::string runtimeFunc;
                     if (propIdent->name == "iterator") {
@@ -12025,7 +12171,7 @@ public:
                 if (enumIt != enumTable_.end()) {
                     auto memberIt = enumIt->second.find(propIdent->name);
                     if (memberIt != enumIt->second.end()) {
-                        std::cerr << "DEBUG HIRGen: Enum access " << objIdent->name << "." << propIdent->name << " = " << memberIt->second << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Enum access " << objIdent->name << "." << propIdent->name << " = " << memberIt->second << std::endl;
                         lastValue_ = builder_->createIntConstant(memberIt->second);
                         return;
                     }
@@ -12038,7 +12184,7 @@ public:
                         std::string propKey = objIdent->name + "_" + propIdent->name;
                         auto valueIt = staticPropertyValues_.find(propKey);
                         if (valueIt != staticPropertyValues_.end()) {
-                            std::cerr << "DEBUG HIRGen: Static property access " << propKey << " = " << valueIt->second << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Static property access " << propKey << " = " << valueIt->second << std::endl;
                             lastValue_ = builder_->createIntConstant(valueIt->second);
                             return;
                         }
@@ -12059,7 +12205,7 @@ public:
             // Check if this is runtime array element access (from keys(), values(), entries())
             if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
                 if (runtimeArrayVars_.count(objIdent->name) > 0) {
-                    std::cerr << "DEBUG HIRGen: Runtime array element access on " << objIdent->name << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Runtime array element access on " << objIdent->name << std::endl;
 
                     auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                     auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -12090,7 +12236,7 @@ public:
                 auto typeIt = typedArrayTypes_.find(objIdent->name);
                 if (typeIt != typedArrayTypes_.end()) {
                     std::string typedArrayType = typeIt->second;
-                    std::cerr << "DEBUG HIRGen: TypedArray element access on " << objIdent->name
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: TypedArray element access on " << objIdent->name
                               << " (type: " << typedArrayType << ")" << std::endl;
 
                     // Determine runtime function name
@@ -12150,7 +12296,7 @@ public:
                 if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
                     auto typeIt = typedArrayTypes_.find(objIdent->name);
                     if (typeIt != typedArrayTypes_.end()) {
-                        std::cerr << "DEBUG HIRGen: TypedArray property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: TypedArray property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -12193,7 +12339,7 @@ public:
 
                     // Check if this is runtime array property access (from keys(), values(), entries())
                     if (runtimeArrayVars_.count(objIdent->name) > 0 && propertyName == "length") {
-                        std::cerr << "DEBUG HIRGen: Runtime array length access on " << objIdent->name << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Runtime array length access on " << objIdent->name << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -12219,7 +12365,7 @@ public:
 
                     // Check if this is ArrayBuffer property access
                     if (arrayBufferVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: ArrayBuffer property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: ArrayBuffer property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -12246,7 +12392,7 @@ public:
 
                     // Check if this is DataView property access
                     if (dataViewVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: DataView property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: DataView property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -12285,7 +12431,7 @@ public:
 
                     // Check if this is Map property access (ES2015)
                     if (mapVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Map property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Map property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         if (propertyName == "size") {
                             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -12312,7 +12458,7 @@ public:
 
                     // Check if this is DisposableStack property access
                     if (disposableStackVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: DisposableStack property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: DisposableStack property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         if (propertyName == "disposed") {
                             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -12339,7 +12485,7 @@ public:
 
                     // Check if this is AsyncDisposableStack property access
                     if (asyncDisposableStackVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: AsyncDisposableStack property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: AsyncDisposableStack property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         if (propertyName == "disposed") {
                             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -12366,7 +12512,7 @@ public:
 
                     // Check if this is IteratorResult property access (.value or .done)
                     if (iteratorResultVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: IteratorResult property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: IteratorResult property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -12411,7 +12557,7 @@ public:
 
                     // Check if this is Error property access (.name, .message, .stack)
                     if (errorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Error property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Error property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -12446,7 +12592,7 @@ public:
 
                     // Check if this is SuppressedError property access (.error, .suppressed, .message, .name, .stack)
                     if (suppressedErrorVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: SuppressedError property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: SuppressedError property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -12485,7 +12631,7 @@ public:
 
                     // Check if this is Symbol property access (.description)
                     if (symbolVars_.count(objIdent->name) > 0) {
-                        std::cerr << "DEBUG HIRGen: Symbol property access: " << objIdent->name << "." << propertyName << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Symbol property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -12515,7 +12661,7 @@ public:
                 bool found = false;
                 hir::HIRStructType* structType = nullptr;
 
-                std::cerr << "DEBUG HIRGen: Accessing property '" << propertyName << "' on object" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Accessing property '" << propertyName << "' on object" << std::endl;
 
                 // Check if this is a 'this' property access
                 if (object == currentThis_ && currentClassStructType_) {
@@ -12524,31 +12670,31 @@ public:
                     std::cerr << "  DEBUG: Using currentClassStructType_ for 'this' property access" << std::endl;
                     std::cerr << "  DEBUG: Struct has " << structType->fields.size() << " fields" << std::endl;
                 } else if (object && object->type) {
-                    std::cerr << "DEBUG HIRGen: Object type kind=" << static_cast<int>(object->type->kind) << std::endl;
-                    std::cerr << "DEBUG HIRGen: Object type ptr=" << object->type.get() << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Object type kind=" << static_cast<int>(object->type->kind) << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Object type ptr=" << object->type.get() << std::endl;
 
                     // First check if object is directly a struct type
                     if (object->type->kind == hir::HIRType::Kind::Struct) {
                         structType = dynamic_cast<hir::HIRStructType*>(object->type.get());
                         if (structType) {
-                            std::cerr << "DEBUG HIRGen: Object is directly a struct with " << structType->fields.size() << " fields" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Object is directly a struct with " << structType->fields.size() << " fields" << std::endl;
                         }
                     }
                     // Otherwise try pointer to struct
                     else {
                         // Try to cast to HIRPointerType
                         hir::HIRPointerType* ptrTypeCast = dynamic_cast<hir::HIRPointerType*>(object->type.get());
-                        std::cerr << "DEBUG HIRGen: dynamic_cast result=" << ptrTypeCast << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: dynamic_cast result=" << ptrTypeCast << std::endl;
 
                         // Check if it's a pointer to struct
                         if (auto ptrType = ptrTypeCast) {
-                            std::cerr << "DEBUG HIRGen: Object is a pointer type" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Object is a pointer type" << std::endl;
                             if (ptrType->pointeeType) {
-                                std::cerr << "DEBUG HIRGen: Pointee type kind=" << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Pointee type kind=" << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
                             }
                             structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
                             if (structType) {
-                                std::cerr << "DEBUG HIRGen: Pointee is a struct with " << structType->fields.size() << " fields" << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Pointee is a struct with " << structType->fields.size() << " fields" << std::endl;
                             }
                         }
                     }
@@ -12574,7 +12720,7 @@ public:
                         if (getterClassIt->second.find(propertyName) != getterClassIt->second.end()) {
                             // This property has a getter - call the getter function
                             std::string getterName = className + "_get_" + propertyName;
-                            std::cerr << "DEBUG HIRGen: Calling getter " << getterName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Calling getter " << getterName << std::endl;
                             
                             auto getterFunc = module_->getFunction(getterName);
                             if (getterFunc) {
@@ -12588,12 +12734,12 @@ public:
 
                 if (found) {
                     // Create GetField instruction with the correct field index
-                    std::cerr << "DEBUG HIRGen: Found property '" << propertyName << "' at index " << fieldIndex << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Found property '" << propertyName << "' at index " << fieldIndex << std::endl;
                     lastValue_ = builder_->createGetField(object, fieldIndex, propertyName);
                 } else {
                     // Check for built-in string properties
                     if (object && object->type && object->type->kind == hir::HIRType::Kind::String && propertyName == "length") {
-                        std::cerr << "DEBUG HIRGen: Accessing built-in string.length property" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Accessing built-in string.length property" << std::endl;
 
                         // Try to find if this is a string literal constant
                         hir::HIRConstant* strConst = dynamic_cast<hir::HIRConstant*>(object);
@@ -12603,11 +12749,11 @@ public:
                             // For string literals, we can compute length at compile time
                             const std::string& strVal = std::get<std::string>(strConst->value);
                             int64_t length = static_cast<int64_t>(strVal.length());
-                            std::cerr << "DEBUG HIRGen: String literal '" << strVal << "' length = " << length << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: String literal '" << strVal << "' length = " << length << std::endl;
                             lastValue_ = builder_->createIntConstant(length);
                         } else {
                             // For dynamic strings (from concat, variables, etc.), call strlen runtime function
-                            std::cerr << "DEBUG HIRGen: Creating strlen call for dynamic string" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Creating strlen call for dynamic string" << std::endl;
 
                             // Create or get strlen intrinsic function
                             // We'll create a temporary HIRFunction for strlen
@@ -12625,7 +12771,7 @@ public:
 
                             // If not found, create it
                             if (!strlenFunc) {
-                                std::cerr << "DEBUG HIRGen: Creating strlen intrinsic function declaration" << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Creating strlen intrinsic function declaration" << std::endl;
 
                                 // Create function type: i64 strlen(i8*)
                                 std::vector<HIRTypePtr> paramTypes;
@@ -12641,7 +12787,7 @@ public:
                                 strlenFuncPtr->linkage = HIRFunction::Linkage::External;
 
                                 strlenFunc = strlenFuncPtr.get();
-                                std::cerr << "DEBUG HIRGen: Created strlen function with external linkage" << std::endl;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created strlen function with external linkage" << std::endl;
                             }
 
                             // Create call to strlen
@@ -12666,12 +12812,12 @@ public:
                         }
 
                         if (arrayType) {
-                            std::cerr << "DEBUG HIRGen: Accessing built-in array.length property" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Accessing built-in array.length property" << std::endl;
 
                             // Generate code to read length from metadata struct at runtime
                             // Metadata struct: { [24 x i8], i64 length, i64 capacity, ptr elements }
                             // Field index 1 is the length
-                            std::cerr << "DEBUG HIRGen: Generating GetField to read length from metadata" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Generating GetField to read length from metadata" << std::endl;
                             lastValue_ = builder_->createGetField(object, 1);
                         }
                     } else {
@@ -12966,7 +13112,7 @@ public:
         // The actual function reference will be tracked separately
         lastValue_ = builder_->createIntConstant(0);  // Placeholder value
 
-        std::cerr << "DEBUG HIRGen: Created arrow function '" << funcName << "' with "
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created arrow function '" << funcName << "' with "
                   << node.params.size() << " parameters" << std::endl;
     }
     
@@ -12978,7 +13124,7 @@ public:
         std::string className = node.name.empty() ?
             "__class_" + std::to_string(classExprCounter++) : node.name;
 
-        std::cerr << "DEBUG HIRGen: Processing class expression: " << className << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing class expression: " << className << std::endl;
 
         // Register class name for static method call detection
         classNames_.insert(className);
@@ -13173,11 +13319,11 @@ public:
         // Return placeholder value (class is registered by name)
         lastValue_ = builder_->createIntConstant(0);
 
-        std::cerr << "DEBUG HIRGen: Completed class expression: " << className << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Completed class expression: " << className << std::endl;
     }
     
     void visit(NewExpr& node) override {
-        std::cerr << "DEBUG HIRGen: Processing 'new' expression" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing 'new' expression" << std::endl;
 
         // Get class name from callee (should be an Identifier or MemberExpr for Intl.*)
         std::string className;
@@ -14476,7 +14622,7 @@ public:
     
     void visit(ThisExpr& node) override {
         (void)node;
-        std::cerr << "DEBUG HIRGen: Processing 'this' expression" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing 'this' expression" << std::endl;
         if (currentThis_) {
             lastValue_ = currentThis_;
             std::cerr << "  DEBUG: Using current 'this' context" << std::endl;
@@ -14509,7 +14655,7 @@ public:
         // quasis: ["Hello ", "!"]
         // expressions: [name]
 
-        std::cerr << "DEBUG HIRGen: Processing template literal with " << node.quasis.size()
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing template literal with " << node.quasis.size()
                   << " quasis and " << node.expressions.size() << " expressions" << std::endl;
 
         // If there are no expressions, this is just a simple string
@@ -14594,7 +14740,7 @@ public:
             // Increment yield state counter - this yield will be state N+1
             yieldStateCounter_++;
             int thisYieldState = yieldStateCounter_;
-            std::cerr << "DEBUG HIRGen: Yield #" << thisYieldState << " in generator" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Yield #" << thisYieldState << " in generator" << std::endl;
 
             // Set state BEFORE yielding so next() knows where to resume
             if (currentSetStateFunc_) {
@@ -14634,7 +14780,7 @@ public:
     void generateYieldDelegate(YieldExpr& node) {
         // yield* delegation - iterate inner generator and yield each value
         // Uses generator local storage to persist inner iterator across suspensions
-        std::cerr << "DEBUG HIRGen: Processing yield* delegation" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing yield* delegation" << std::endl;
 
         if (!currentGeneratorPtr_) {
             if (node.argument) {
@@ -14783,7 +14929,7 @@ public:
         // Increment yield state counter - this yield* will be a single state
         yieldStateCounter_++;
         int thisYieldState = yieldStateCounter_;
-        std::cerr << "DEBUG HIRGen: Yield* delegation state #" << thisYieldState << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Yield* delegation state #" << thisYieldState << std::endl;
 
         // Set state BEFORE yielding
         if (currentSetStateFunc_) {
@@ -14980,7 +15126,7 @@ public:
                     auto typeIt = typedArrayTypes_.find(objIdent->name);
                     if (typeIt != typedArrayTypes_.end()) {
                         std::string typedArrayType = typeIt->second;
-                        std::cerr << "DEBUG HIRGen: TypedArray element assignment on " << objIdent->name
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: TypedArray element assignment on " << objIdent->name
                                   << " (type: " << typedArrayType << ")" << std::endl;
 
                         // Determine runtime function name
@@ -15077,7 +15223,7 @@ public:
                         if (setterClassIt->second.find(propertyName) != setterClassIt->second.end()) {
                             // This property has a setter - call the setter function
                             std::string setterName = className + "_set_" + propertyName;
-                            std::cerr << "DEBUG HIRGen: Calling setter " << setterName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Calling setter " << setterName << std::endl;
                             
                             auto setterFunc = module_->getFunction(setterName);
                             if (setterFunc) {
@@ -15207,7 +15353,9 @@ public:
     }
     
     void visit(ExprStmt& node) override {
-        node.expression->accept(*this);
+        if (node.expression) {
+            node.expression->accept(*this);
+        }
     }
     
     void visit(VarDeclStmt& node) override {
@@ -15221,7 +15369,7 @@ public:
 
             // Check if this is a destructuring pattern
             if (decl.pattern) {
-                std::cerr << "DEBUG HIRGen: Processing destructuring pattern" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing destructuring pattern" << std::endl;
 
                 // Handle array destructuring: let [a, b, c] = arr;
                 if (auto* arrayPattern = dynamic_cast<ArrayPattern*>(decl.pattern.get())) {
@@ -15283,7 +15431,7 @@ public:
             if (!lastFunctionName_.empty()) {
                 // Register this variable as holding a function reference
                 functionReferences_[decl.name] = lastFunctionName_;
-                std::cerr << "DEBUG HIRGen: Registered function reference: " << decl.name
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered function reference: " << decl.name
                           << " -> " << lastFunctionName_ << std::endl;
                 lastFunctionName_.clear();  // Clear for next declaration
             }
@@ -15293,7 +15441,7 @@ public:
                 // Register this variable as holding a class reference
                 classReferences_[decl.name] = lastClassName_;
                 classNames_.insert(decl.name);  // Register the variable name as a class name
-                std::cerr << "DEBUG HIRGen: Registered class reference: " << decl.name
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered class reference: " << decl.name
                           << " -> " << lastClassName_ << std::endl;
                 lastClassName_.clear();  // Clear for next declaration
             }
@@ -15301,7 +15449,7 @@ public:
             // Check if this is a TypedArray assignment
             if (!lastTypedArrayType_.empty()) {
                 typedArrayTypes_[decl.name] = lastTypedArrayType_;
-                std::cerr << "DEBUG HIRGen: Registered TypedArray type: " << decl.name
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered TypedArray type: " << decl.name
                           << " -> " << lastTypedArrayType_ << std::endl;
                 lastTypedArrayType_.clear();  // Clear for next declaration
             }
@@ -15309,225 +15457,225 @@ public:
             // Check if this is an ArrayBuffer assignment
             if (lastWasArrayBuffer_) {
                 arrayBufferVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered ArrayBuffer variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered ArrayBuffer variable: " << decl.name << std::endl;
                 lastWasArrayBuffer_ = false;  // Clear for next declaration
             }
 
             // Check if this is a SharedArrayBuffer assignment (ES2017)
             if (lastWasSharedArrayBuffer_) {
                 sharedArrayBufferVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered SharedArrayBuffer variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered SharedArrayBuffer variable: " << decl.name << std::endl;
                 lastWasSharedArrayBuffer_ = false;  // Clear for next declaration
             }
 
             // Check if this is a BigInt assignment (ES2020)
             if (lastWasBigInt_) {
                 bigIntVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered BigInt variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered BigInt variable: " << decl.name << std::endl;
                 lastWasBigInt_ = false;  // Clear for next declaration
             }
 
             // Check if this is a DataView assignment
             if (lastWasDataView_) {
                 dataViewVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered DataView variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered DataView variable: " << decl.name << std::endl;
                 lastWasDataView_ = false;  // Clear for next declaration
             }
 
             // Check if this is a Date assignment
             if (lastWasDate_) {
                 dateVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Date variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Date variable: " << decl.name << std::endl;
                 lastWasDate_ = false;  // Clear for next declaration
             }
 
             // Check if this is a DisposableStack assignment
             if (lastWasDisposableStack_) {
                 disposableStackVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered DisposableStack variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered DisposableStack variable: " << decl.name << std::endl;
                 lastWasDisposableStack_ = false;  // Clear for next declaration
             }
 
             // Check if this is an AsyncDisposableStack assignment
             if (lastWasAsyncDisposableStack_) {
                 asyncDisposableStackVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered AsyncDisposableStack variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered AsyncDisposableStack variable: " << decl.name << std::endl;
                 lastWasAsyncDisposableStack_ = false;  // Clear for next declaration
             }
 
             // Check if this is a FinalizationRegistry assignment
             if (lastWasFinalizationRegistry_) {
                 finalizationRegistryVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered FinalizationRegistry variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered FinalizationRegistry variable: " << decl.name << std::endl;
                 lastWasFinalizationRegistry_ = false;  // Clear for next declaration
             }
 
             // Check if this is a Promise assignment
             if (lastWasPromise_) {
                 promiseVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Promise variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Promise variable: " << decl.name << std::endl;
                 lastWasPromise_ = false;  // Clear for next declaration
             }
 
             // Check if this is a Generator assignment
             if (lastWasGenerator_) {
                 generatorVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Generator variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Generator variable: " << decl.name << std::endl;
                 lastWasGenerator_ = false;  // Clear for next declaration
             }
 
             // Check if this is an Error assignment
             if (lastWasError_) {
                 errorVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Error variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Error variable: " << decl.name << std::endl;
                 lastWasError_ = false;  // Clear for next declaration
             }
 
             // Check if this is a SuppressedError assignment
             if (lastWasSuppressedError_) {
                 suppressedErrorVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered SuppressedError variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered SuppressedError variable: " << decl.name << std::endl;
                 lastWasSuppressedError_ = false;  // Clear for next declaration
             }
 
             // Check if this is a Symbol assignment
             if (lastWasSymbol_) {
                 symbolVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Symbol variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Symbol variable: " << decl.name << std::endl;
                 lastWasSymbol_ = false;  // Clear for next declaration
             }
 
             // Check if this is an AsyncGenerator assignment
             if (lastWasAsyncGenerator_) {
                 asyncGeneratorVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered AsyncGenerator variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered AsyncGenerator variable: " << decl.name << std::endl;
                 lastWasAsyncGenerator_ = false;  // Clear for next declaration
             }
 
             // Check if this is an IteratorResult assignment (from gen.next())
             if (lastWasIteratorResult_) {
                 iteratorResultVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered IteratorResult variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered IteratorResult variable: " << decl.name << std::endl;
                 lastWasIteratorResult_ = false;  // Clear for next declaration
             }
 
             // Check if this is a runtime array assignment (from keys(), values(), entries())
             if (lastWasRuntimeArray_) {
                 runtimeArrayVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered runtime array variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered runtime array variable: " << decl.name << std::endl;
                 lastWasRuntimeArray_ = false;  // Clear for next declaration
             }
 
             // Check if this is an Intl.* assignment
             if (lastWasNumberFormat_) {
                 numberFormatVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered NumberFormat variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered NumberFormat variable: " << decl.name << std::endl;
                 lastWasNumberFormat_ = false;
             }
             if (lastWasDateTimeFormat_) {
                 dateTimeFormatVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered DateTimeFormat variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered DateTimeFormat variable: " << decl.name << std::endl;
                 lastWasDateTimeFormat_ = false;
             }
             if (lastWasCollator_) {
                 collatorVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Collator variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Collator variable: " << decl.name << std::endl;
                 lastWasCollator_ = false;
             }
             if (lastWasPluralRules_) {
                 pluralRulesVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered PluralRules variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered PluralRules variable: " << decl.name << std::endl;
                 lastWasPluralRules_ = false;
             }
             if (lastWasRelativeTimeFormat_) {
                 relativeTimeFormatVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered RelativeTimeFormat variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered RelativeTimeFormat variable: " << decl.name << std::endl;
                 lastWasRelativeTimeFormat_ = false;
             }
             if (lastWasListFormat_) {
                 listFormatVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered ListFormat variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered ListFormat variable: " << decl.name << std::endl;
                 lastWasListFormat_ = false;
             }
             if (lastWasDisplayNames_) {
                 displayNamesVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered DisplayNames variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered DisplayNames variable: " << decl.name << std::endl;
                 lastWasDisplayNames_ = false;
             }
             if (lastWasLocale_) {
                 localeVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Locale variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Locale variable: " << decl.name << std::endl;
                 lastWasLocale_ = false;
             }
             if (lastWasSegmenter_) {
                 segmenterVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Segmenter variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Segmenter variable: " << decl.name << std::endl;
                 lastWasSegmenter_ = false;
             }
             if (lastWasIterator_) {
                 iteratorVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Iterator variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Iterator variable: " << decl.name << std::endl;
                 lastWasIterator_ = false;
             }
             if (lastWasMap_) {
                 mapVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Map variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Map variable: " << decl.name << std::endl;
                 lastWasMap_ = false;
             }
             if (lastWasSet_) {
                 setVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Set variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Set variable: " << decl.name << std::endl;
                 lastWasSet_ = false;
             }
             if (lastWasWeakMap_) {
                 weakMapVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered WeakMap variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered WeakMap variable: " << decl.name << std::endl;
                 lastWasWeakMap_ = false;
             }
             if (lastWasWeakRef_) {
                 weakRefVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered WeakRef variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered WeakRef variable: " << decl.name << std::endl;
                 lastWasWeakRef_ = false;
             }
             if (lastWasWeakSet_) {
                 weakSetVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered WeakSet variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered WeakSet variable: " << decl.name << std::endl;
                 lastWasWeakSet_ = false;
             }
             // Web API types tracking
             if (lastWasURL_) {
                 urlVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered URL variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered URL variable: " << decl.name << std::endl;
                 lastWasURL_ = false;
             }
             if (lastWasURLSearchParams_) {
                 urlSearchParamsVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered URLSearchParams variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered URLSearchParams variable: " << decl.name << std::endl;
                 lastWasURLSearchParams_ = false;
             }
             if (lastWasTextEncoder_) {
                 textEncoderVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered TextEncoder variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered TextEncoder variable: " << decl.name << std::endl;
                 lastWasTextEncoder_ = false;
             }
             if (lastWasTextDecoder_) {
                 textDecoderVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered TextDecoder variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered TextDecoder variable: " << decl.name << std::endl;
                 lastWasTextDecoder_ = false;
             }
             if (lastWasHeaders_) {
                 headersVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Headers variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Headers variable: " << decl.name << std::endl;
                 lastWasHeaders_ = false;
             }
             if (lastWasRequest_) {
                 requestVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Request variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Request variable: " << decl.name << std::endl;
                 lastWasRequest_ = false;
             }
             if (lastWasResponse_) {
                 responseVars_.insert(decl.name);
-                std::cerr << "DEBUG HIRGen: Registered Response variable: " << decl.name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Response variable: " << decl.name << std::endl;
                 lastWasResponse_ = false;
             }
 
@@ -15536,7 +15684,7 @@ public:
                 // Assign a slot index for this variable
                 int slotIndex = generatorNextLocalSlot_++;
                 generatorVarSlots_[decl.name] = slotIndex;
-                std::cerr << "DEBUG HIRGen: Generator variable '" << decl.name << "' assigned to slot " << slotIndex << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Generator variable '" << decl.name << "' assigned to slot " << slotIndex << std::endl;
 
                 // Store initial value to generator local slot
                 if (initValue) {
@@ -15639,7 +15787,7 @@ public:
     }
     
     void visit(WhileStmt& node) override {
-        std::cerr << "DEBUG: Entering WhileStmt generation" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Entering WhileStmt generation" << std::endl;
 
         // Include label in block names if we're inside a labeled statement
         std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
@@ -15650,23 +15798,23 @@ public:
         auto* bodyBlock = currentFunction_->createBasicBlock("while.body" + labelSuffix).get();
         auto* endBlock = currentFunction_->createBasicBlock("while.end" + labelSuffix).get();
         
-        std::cerr << "DEBUG: Created while loop blocks: cond=" << condBlock << ", body=" << bodyBlock << ", end=" << endBlock << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Created while loop blocks: cond=" << condBlock << ", body=" << bodyBlock << ", end=" << endBlock << std::endl;
         
         // Jump to condition
         builder_->createBr(condBlock);
         
         // Condition block
         builder_->setInsertPoint(condBlock);
-        std::cerr << "DEBUG: Evaluating while condition" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Evaluating while condition" << std::endl;
         node.test->accept(*this);
-        std::cerr << "DEBUG: While condition evaluated, lastValue_=" << lastValue_ << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: While condition evaluated, lastValue_=" << lastValue_ << std::endl;
         builder_->createCondBr(lastValue_, bodyBlock, endBlock);
         
         // Body block
         builder_->setInsertPoint(bodyBlock);
-        std::cerr << "DEBUG: Executing while body" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Executing while body" << std::endl;
         node.body->accept(*this);
-        std::cerr << "DEBUG: While body executed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: While body executed" << std::endl;
 
         // Check if the body block itself ends with a terminator instruction
         bool needsBranch = true;
@@ -15676,18 +15824,18 @@ public:
                 lastOpcode == hir::HIRInstruction::Opcode::Continue ||
                 lastOpcode == hir::HIRInstruction::Opcode::Return) {
                 needsBranch = false;
-                std::cerr << "DEBUG: Body block ends with terminator, not adding branch back to condition" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG: Body block ends with terminator, not adding branch back to condition" << std::endl;
             }
         }
 
         if (needsBranch) {
-            std::cerr << "DEBUG: Creating branch back to condition" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG: Creating branch back to condition" << std::endl;
             builder_->createBr(condBlock);
         }
         
         // End block
         builder_->setInsertPoint(endBlock);
-        std::cerr << "DEBUG: While loop generation completed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: While loop generation completed" << std::endl;
     }
     
     void visit(DoWhileStmt& node) override {
@@ -15736,7 +15884,7 @@ public:
     }
     
     void visit(ForStmt& node) override {
-        std::cerr << "DEBUG: Entering ForStmt generation" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Entering ForStmt generation" << std::endl;
 
         // Include label in block names if we're inside a labeled statement
         std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
@@ -15750,7 +15898,7 @@ public:
         auto* updateBlock = currentFunction_->createBasicBlock("for.update" + labelSuffix).get();
         auto* endBlock = currentFunction_->createBasicBlock("for.end" + labelSuffix).get();
         
-        std::cerr << "DEBUG: Created for loop blocks: init=" << initBlock << ", cond=" << condBlock 
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Created for loop blocks: init=" << initBlock << ", cond=" << condBlock 
                   << ", body=" << bodyBlock << ", update=" << updateBlock << ", end=" << endBlock << std::endl;
         
         // Branch to init block
@@ -15758,7 +15906,7 @@ public:
         
         // Init block - execute initializer
         builder_->setInsertPoint(initBlock);
-        std::cerr << "DEBUG: Executing for init" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Executing for init" << std::endl;
         if (node.init) {
             if (auto* varDeclStmt = dynamic_cast<VarDeclStmt*>(node.init.get())) {
                 varDeclStmt->accept(*this);
@@ -15769,29 +15917,29 @@ public:
                 node.init->accept(*this);
             }
         }
-        std::cerr << "DEBUG: For init executed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: For init executed" << std::endl;
         // Branch to condition
         builder_->createBr(condBlock);
         
         // Condition block
         builder_->setInsertPoint(condBlock);
-        std::cerr << "DEBUG: Evaluating for condition" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Evaluating for condition" << std::endl;
         if (node.test) {
             node.test->accept(*this);
             auto* condition = lastValue_;
-            std::cerr << "DEBUG: For condition evaluated, condition=" << condition << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG: For condition evaluated, condition=" << condition << std::endl;
             builder_->createCondBr(condition, bodyBlock, endBlock);
         } else {
             // No condition means infinite loop
-            std::cerr << "DEBUG: No for condition, creating infinite loop" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG: No for condition, creating infinite loop" << std::endl;
             builder_->createBr(bodyBlock);
         }
         
         // Body block
         builder_->setInsertPoint(bodyBlock);
-        std::cerr << "DEBUG: Executing for body" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Executing for body" << std::endl;
         node.body->accept(*this);
-        std::cerr << "DEBUG: For body executed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: For body executed" << std::endl;
 
         // Check if the body block itself ends with a terminator instruction
         // (break, continue, or return). If it does, don't add a branch.
@@ -15803,34 +15951,34 @@ public:
                 lastOpcode == hir::HIRInstruction::Opcode::Continue ||
                 lastOpcode == hir::HIRInstruction::Opcode::Return) {
                 needsBranch = false;
-                std::cerr << "DEBUG: Body block ends with terminator, not adding branch to update" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG: Body block ends with terminator, not adding branch to update" << std::endl;
             }
         }
 
         if (needsBranch) {
             // Always branch to update block to maintain proper CFG and enable loop detection
-            std::cerr << "DEBUG: Creating branch from body to update block" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG: Creating branch from body to update block" << std::endl;
             builder_->createBr(updateBlock);
         }
         
         // Update block
         builder_->setInsertPoint(updateBlock);
-        std::cerr << "DEBUG: Executing for update" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Executing for update" << std::endl;
         if (node.update) {
             node.update->accept(*this);
             // Result of update expression is ignored
         }
-        std::cerr << "DEBUG: For update executed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: For update executed" << std::endl;
         // Branch back to condition
         builder_->createBr(condBlock);
         
         // End block
         builder_->setInsertPoint(endBlock);
-        std::cerr << "DEBUG: For loop generation completed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: For loop generation completed" << std::endl;
     }
     
     void visit(ForInStmt& node) override {
-        std::cerr << "DEBUG: Generating for-in loop" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Generating for-in loop" << std::endl;
 
         // For-in loop: for (let key in array) { body }
         // Desugar to:
@@ -15857,7 +16005,7 @@ public:
 
         // Init block: evaluate the iterable expression and create iterator index
         builder_->setInsertPoint(initBlock);
-        std::cerr << "DEBUG: ForIn - evaluating iterable" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - evaluating iterable" << std::endl;
         node.right->accept(*this);  // Evaluate array expression
         auto* arrayValue = lastValue_;
 
@@ -15872,7 +16020,7 @@ public:
 
         // Condition block: __iter_idx < array.length
         builder_->setInsertPoint(condBlock);
-        std::cerr << "DEBUG: ForIn - checking condition" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - checking condition" << std::endl;
 
         // Load current index
         auto* currentIndex = builder_->createLoad(indexVar);
@@ -15886,7 +16034,7 @@ public:
 
         // Body block: let key = __iter_idx; body;
         builder_->setInsertPoint(bodyBlock);
-        std::cerr << "DEBUG: ForIn - executing body" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - executing body" << std::endl;
 
         // Load current index for the loop variable
         auto* indexForKey = builder_->createLoad(indexVar);
@@ -15922,7 +16070,7 @@ public:
 
         // Update block: __iter_idx = __iter_idx + 1
         builder_->setInsertPoint(updateBlock);
-        std::cerr << "DEBUG: ForIn - incrementing index" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - incrementing index" << std::endl;
 
         auto* currentIndexForIncr = builder_->createLoad(indexVar);
         auto* oneConst = builder_->createIntConstant(1);
@@ -15935,11 +16083,11 @@ public:
         // End block
         builder_->setInsertPoint(endBlock);
 
-        std::cerr << "DEBUG: ForIn loop generation completed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn loop generation completed" << std::endl;
     }
     
     void visit(ForOfStmt& node) override {
-        std::cerr << "DEBUG: Generating for-of loop" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Generating for-of loop" << std::endl;
 
         // Check if iterating over a generator or async generator
         bool isGeneratorIteration = false;
@@ -15948,10 +16096,10 @@ public:
             if (asyncGeneratorVars_.count(identExpr->name) > 0) {
                 isAsyncGeneratorIteration = true;
                 isGeneratorIteration = true;  // Async generators are also generators
-                std::cerr << "DEBUG: ForOf - iterating over async generator: " << identExpr->name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - iterating over async generator: " << identExpr->name << std::endl;
             } else if (generatorVars_.count(identExpr->name) > 0) {
                 isGeneratorIteration = true;
-                std::cerr << "DEBUG: ForOf - iterating over generator: " << identExpr->name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - iterating over generator: " << identExpr->name << std::endl;
             }
         }
 
@@ -16007,7 +16155,7 @@ public:
             }
 
             if (isAsyncGeneratorIteration) {
-                std::cerr << "DEBUG: ForOf - using async generator next()" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - using async generator next()" << std::endl;
             }
 
             auto* zeroConst = builder_->createIntConstant(0);
@@ -16112,7 +16260,7 @@ public:
             // End block
             builder_->setInsertPoint(endBlock);
 
-            std::cerr << "DEBUG: ForOf generator loop generation completed" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf generator loop generation completed" << std::endl;
             return;
         }
 
@@ -16141,7 +16289,7 @@ public:
 
         // Init block: evaluate the iterable expression and create iterator index
         builder_->setInsertPoint(initBlock);
-        std::cerr << "DEBUG: ForOf - evaluating iterable" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - evaluating iterable" << std::endl;
         node.right->accept(*this);  // Evaluate array expression
         auto* arrayValue = lastValue_;
 
@@ -16156,7 +16304,7 @@ public:
 
         // Condition block: __iter_idx < array.length
         builder_->setInsertPoint(condBlock);
-        std::cerr << "DEBUG: ForOf - checking condition" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - checking condition" << std::endl;
 
         // Load current index
         auto* currentIndex = builder_->createLoad(indexVar);
@@ -16172,7 +16320,7 @@ public:
         // Get array.length
         HIRValue* arrayLength = nullptr;
         if (isRuntimeArrayForLength) {
-            std::cerr << "DEBUG: ForOf - using runtime array length function" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - using runtime array length function" << std::endl;
             // Use nova_value_array_length for runtime arrays
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -16204,7 +16352,7 @@ public:
 
         // Body block: let item = array[__iter_idx]; body;
         builder_->setInsertPoint(bodyBlock);
-        std::cerr << "DEBUG: ForOf - executing body" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - executing body" << std::endl;
 
         // Load current index for array access
         auto* indexForAccess = builder_->createLoad(indexVar);
@@ -16217,7 +16365,7 @@ public:
         if (auto* identExpr = dynamic_cast<Identifier*>(node.right.get())) {
             if (runtimeArrayVars_.count(identExpr->name) > 0) {
                 isRuntimeArray = true;
-                std::cerr << "DEBUG: ForOf - using runtime array element access for " << identExpr->name << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - using runtime array element access for " << identExpr->name << std::endl;
             }
         }
 
@@ -16278,7 +16426,7 @@ public:
 
         // Update block: __iter_idx = __iter_idx + 1
         builder_->setInsertPoint(updateBlock);
-        std::cerr << "DEBUG: ForOf - incrementing index" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - incrementing index" << std::endl;
 
         auto* currentIndexForIncr = builder_->createLoad(indexVar);
         auto* oneConst = builder_->createIntConstant(1);
@@ -16291,7 +16439,7 @@ public:
         // End block
         builder_->setInsertPoint(endBlock);
 
-        std::cerr << "DEBUG: ForOf loop generation completed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf loop generation completed" << std::endl;
     }
     
     void visit(ReturnStmt& node) override {
@@ -16344,7 +16492,7 @@ public:
     
     void visit(BreakStmt& node) override {
         // Create break instruction with optional label
-        std::cerr << "DEBUG HIRGen: Processing break statement";
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing break statement";
         if (!node.label.empty()) {
             std::cerr << " with label: " << node.label;
         }
@@ -16363,7 +16511,7 @@ public:
 
     void visit(ContinueStmt& node) override {
         // Create continue instruction with optional label
-        std::cerr << "DEBUG HIRGen: Processing continue statement";
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing continue statement";
         if (!node.label.empty()) {
             std::cerr << " with label: " << node.label;
         }
@@ -16382,7 +16530,7 @@ public:
     
     void visit(ThrowStmt& node) override {
         // throw statement - call nova_throw runtime function
-        std::cerr << "DEBUG HIRGen: Processing throw statement" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing throw statement" << std::endl;
 
         // Evaluate the exception value
         node.argument->accept(*this);
@@ -16409,7 +16557,7 @@ public:
             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
             funcPtr->linkage = HIRFunction::Linkage::External;
             runtimeFunc = funcPtr.get();
-            std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
         }
 
         // Create call to nova_throw
@@ -16417,7 +16565,7 @@ public:
         builder_->createCall(runtimeFunc, args, "");
         // If we are inside a try block, jump to the catch block
         if (currentCatchBlock_) {
-            std::cerr << "DEBUG HIRGen: Throw jumping to catch block" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Throw jumping to catch block" << std::endl;
             builder_->createBr(currentCatchBlock_);
         }
         // If no catch block, nova_throw will handle uncaught exception and exit
@@ -16426,7 +16574,7 @@ public:
     void visit(TryStmt& node) override {
         // try-catch-finally implementation
         // For now, implements basic control flow without actual exception handling
-        std::cerr << "DEBUG HIRGen: Processing try-catch-finally statement" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing try-catch-finally statement" << std::endl;
 
         // Create blocks for try, catch, finally, and end
         auto tryBlock = currentFunction_->createBasicBlock("try");
@@ -16454,7 +16602,7 @@ public:
                 HIRFunctionPtr funcPtr = module_->createFunction(funcName, funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
                 runtimeFunc = funcPtr.get();
-                std::cerr << "DEBUG HIRGen: Created external function: " << funcName << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << funcName << std::endl;
             }
             std::vector<HIRValue*> args;
             builder_->createCall(runtimeFunc, args, "");
@@ -16501,7 +16649,7 @@ public:
                     HIRFunctionPtr funcPtr = module_->createFunction(funcName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
                     runtimeFunc = funcPtr.get();
-                    std::cerr << "DEBUG HIRGen: Created external function: " << funcName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << funcName << std::endl;
                 }
                 std::vector<HIRValue*> args;
                 exceptionValue = builder_->createCall(runtimeFunc, args, "exception_value");
@@ -16614,22 +16762,22 @@ public:
     
     void visit(LabeledStmt& node) override {
         // Labeled statement - store label for potential break/continue targets
-        std::cerr << "DEBUG HIRGen: Processing labeled statement: " << node.label << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing labeled statement: " << node.label << std::endl;
 
         // Track the label for potential labeled break/continue
         // The label applies to the next statement (usually a loop)
         std::string savedLabel = currentLabel_;
         currentLabel_ = node.label;
 
-        std::cerr << "DEBUG HIRGen: About to visit labeled statement body" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: About to visit labeled statement body" << std::endl;
         if (node.statement) {
             node.statement->accept(*this);
         } else {
-            std::cerr << "DEBUG HIRGen: WARNING - labeled statement has null body" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WARNING - labeled statement has null body" << std::endl;
         }
 
         currentLabel_ = savedLabel;
-        std::cerr << "DEBUG HIRGen: Exiting labeled statement: " << node.label << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Exiting labeled statement: " << node.label << std::endl;
     }
 
     void visit(WithStmt& node) override {
@@ -16756,7 +16904,7 @@ public:
         if (node.isGenerator && node.isAsync) {
             // AsyncGenerator (ES2018) - async function*
             asyncGeneratorFuncs_.insert(node.name);
-            std::cerr << "DEBUG HIRGen: Registered AsyncGenerator function: " << node.name << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered AsyncGenerator function: " << node.name << std::endl;
         } else if (node.isGenerator) {
             // Regular Generator (ES2015) - function*
             generatorFuncs_.insert(node.name);
@@ -16765,7 +16913,7 @@ public:
         // Track all functions for call/apply/bind support
         functionVars_.insert(node.name);
         functionParamCounts_[node.name] = static_cast<int64_t>(node.params.size());
-        std::cerr << "DEBUG HIRGen: Registered function: " << node.name << " with " << node.params.size() << " params" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered function: " << node.name << " with " << node.params.size() << " params" << std::endl;
 
         currentFunction_ = func.get();
 
@@ -16814,7 +16962,7 @@ public:
 
         // For generator functions, set up state machine
         if (node.isGenerator) {
-            std::cerr << "DEBUG HIRGen: Setting up generator state machine for " << node.name << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Setting up generator state machine for " << node.name << std::endl;
 
             // Reset state machine variables for this generator
             yieldStateCounter_ = 0;
@@ -16924,7 +17072,7 @@ public:
             for (size_t i = 0; i < node.params.size(); ++i) {
                 int slotIndex = 100 + static_cast<int>(i);
                 generatorVarSlots_[node.params[i]] = slotIndex;
-                std::cerr << "DEBUG HIRGen: Generator parameter '" << node.params[i]
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Generator parameter '" << node.params[i]
                           << "' mapped to slot " << slotIndex << std::endl;
             }
         }
@@ -16969,7 +17117,7 @@ public:
             // Now generate dispatch logic - we know all resume blocks
             // Go back to dispatch block and add the if-else chain
             if (generatorDispatchBlock_ && generatorStateValue_) {
-                std::cerr << "DEBUG HIRGen: Generating dispatch for " << yieldResumeBlocks_.size() << " resume blocks" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Generating dispatch for " << yieldResumeBlocks_.size() << " resume blocks" << std::endl;
 
                 // Save current insert point
                 auto* savedBlock = builder_->getInsertBlock();
@@ -17036,7 +17184,7 @@ public:
     }
     
     void visit(ClassDecl& node) override {
-        std::cerr << "DEBUG HIRGen: Processing class declaration: " << node.name << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing class declaration: " << node.name << std::endl;
 
         // Register class name for static method call detection
         classNames_.insert(node.name);
@@ -17133,7 +17281,7 @@ public:
             }
         }
 
-        std::cerr << "DEBUG HIRGen: Completed class declaration: " << node.name << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Completed class declaration: " << node.name << std::endl;
     }
 
     void generateConstructorFunction(const std::string& className,
@@ -17588,7 +17736,7 @@ public:
     
     void visit(EnumDecl& node) override {
         // Enum declaration - store enum values in enumTable_
-        std::cerr << "DEBUG HIRGen: Processing enum declaration: " << node.name << " with " << node.members.size() << " members" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing enum declaration: " << node.name << " with " << node.members.size() << " members" << std::endl;
 
         std::unordered_map<std::string, int64_t> members;
         int64_t nextValue = 0;
@@ -17598,20 +17746,20 @@ public:
 
             // If member has explicit initializer, evaluate it
             if (member.initializer) {
-                std::cerr << "DEBUG HIRGen: Member " << member.name << " has initializer" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Member " << member.name << " has initializer" << std::endl;
                 // For now, only support numeric literals as initializers
                 if (auto* numLit = dynamic_cast<NumberLiteral*>(member.initializer.get())) {
                     value = static_cast<int64_t>(numLit->value);
-                    std::cerr << "DEBUG HIRGen: NumberLiteral value = " << value << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: NumberLiteral value = " << value << std::endl;
                 } else {
-                    std::cerr << "DEBUG HIRGen: Initializer is NOT a NumberLiteral" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Initializer is NOT a NumberLiteral" << std::endl;
                 }
             }
 
             members[member.name] = value;
             nextValue = value + 1;  // Next auto-value continues from here
 
-            std::cerr << "DEBUG HIRGen: Enum member " << node.name << "." << member.name << " = " << value << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Enum member " << node.name << "." << member.name << " = " << value << std::endl;
         }
 
         enumTable_[node.name] = members;
@@ -17619,53 +17767,151 @@ public:
     
     void visit(ImportDecl& node) override {
         // Import declaration - module system
-        // For now, log the import for debugging. Full module support TBD.
-        std::cerr << "DEBUG HIRGen: Processing import from '" << node.source << "'" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing import from '" << node.source << "'" << std::endl;
 
+        // Check for nova: built-in modules
+        if (node.source.substr(0, 5) == "nova:") {
+            std::string moduleName = node.source.substr(5); // e.g., "fs", "test", "path", "os"
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Built-in module import: nova:" << moduleName << std::endl;
+
+            // Register namespace import
+            if (!node.namespaceImport.empty()) {
+                builtinModuleImports_[node.namespaceImport] = "nova:" + moduleName;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered namespace '" << node.namespaceImport << "' -> nova:" << moduleName << std::endl;
+            }
+
+            // Register named imports to their runtime functions
+            for (const auto& spec : node.specifiers) {
+                std::string runtimeFunc = getBuiltinFunctionName(moduleName, spec.imported);
+                builtinFunctionImports_[spec.local] = runtimeFunc;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered '" << spec.local << "' -> " << runtimeFunc << std::endl;
+            }
+
+            return; // Don't process further for built-in modules
+        }
+
+        // Regular module imports (for future implementation)
         if (!node.defaultImport.empty()) {
-            std::cerr << "DEBUG HIRGen: Import default as '" << node.defaultImport << "'" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import default as '" << node.defaultImport << "'" << std::endl;
         }
         if (!node.namespaceImport.empty()) {
-            std::cerr << "DEBUG HIRGen: Import namespace as '" << node.namespaceImport << "'" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import namespace as '" << node.namespaceImport << "'" << std::endl;
         }
         for (const auto& spec : node.specifiers) {
-            std::cerr << "DEBUG HIRGen: Import '" << spec.imported << "' as '" << spec.local << "'" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import '" << spec.imported << "' as '" << spec.local << "'" << std::endl;
         }
+    }
+
+    // Helper to get runtime function name for built-in module functions
+    std::string getBuiltinFunctionName(const std::string& module, const std::string& funcName) {
+        // Map module:function to nova_module_function
+        // nova:fs -> nova_fs_*
+        // nova:test -> nova_test_*
+        // nova:path -> nova_path_*
+        // nova:os -> nova_os_*
+        return "nova_" + module + "_" + funcName;
+    }
+
+    // Check if a function call is to a built-in module function
+    bool isBuiltinFunctionCall(const std::string& name) {
+        return builtinFunctionImports_.find(name) != builtinFunctionImports_.end();
+    }
+
+    // Get the runtime function name for a built-in import
+    std::string getBuiltinRuntimeFunction(const std::string& name) {
+        auto it = builtinFunctionImports_.find(name);
+        if (it != builtinFunctionImports_.end()) {
+            return it->second;
+        }
+        return "";
     }
 
     void visit(ExportDecl& node) override {
         // Export declaration - process any exported declaration
-        std::cerr << "DEBUG HIRGen: Processing export declaration" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing export declaration" << std::endl;
 
         if (node.isDefault) {
-            std::cerr << "DEBUG HIRGen: Export default" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Export default" << std::endl;
         }
 
         // If there's an exported declaration (e.g., export function foo() {}), process it
         if (node.exportedDecl) {
-            std::cerr << "DEBUG HIRGen: Processing exported declaration" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing exported declaration" << std::endl;
             node.exportedDecl->accept(*this);
         }
 
         // If there's a declaration expression (e.g., export default someExpr), evaluate it
         if (node.declaration) {
-            std::cerr << "DEBUG HIRGen: Processing export declaration expression" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing export declaration expression" << std::endl;
             node.declaration->accept(*this);
         }
 
         // Log re-exports
         if (!node.source.empty()) {
-            std::cerr << "DEBUG HIRGen: Re-export from '" << node.source << "'" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Re-export from '" << node.source << "'" << std::endl;
         }
 
         for (const auto& spec : node.specifiers) {
-            std::cerr << "DEBUG HIRGen: Export '" << spec.local << "' as '" << spec.exported << "'" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Export '" << spec.local << "' as '" << spec.exported << "'" << std::endl;
         }
     }
     
     void visit(Program& node) override {
-        for (auto& stmt : node.body) {
-            stmt->accept(*this);
+        // Collect function/class declarations first (hoisting)
+        std::vector<size_t> functionDeclIndices;
+        std::vector<size_t> topLevelIndices;
+
+        for (size_t i = 0; i < node.body.size(); ++i) {
+            auto& stmt = node.body[i];
+            if (!stmt) continue;
+            // Check if this is a function or class declaration
+            if (dynamic_cast<FunctionDecl*>(stmt.get()) ||
+                dynamic_cast<ClassDecl*>(stmt.get()) ||
+                dynamic_cast<InterfaceDecl*>(stmt.get()) ||
+                dynamic_cast<TypeAliasDecl*>(stmt.get()) ||
+                dynamic_cast<EnumDecl*>(stmt.get())) {
+                functionDeclIndices.push_back(i);
+            } else {
+                topLevelIndices.push_back(i);
+            }
+        }
+
+        // Process function/class declarations first (they can be used anywhere)
+        for (size_t idx : functionDeclIndices) {
+            node.body[idx]->accept(*this);
+        }
+
+        // If there are top-level statements (not just declarations), create an implicit main function
+        if (!topLevelIndices.empty()) {
+            // Create main function signature: int main()
+            std::vector<HIRTypePtr> paramTypes;
+            auto returnType = std::make_shared<HIRType>(HIRType::Kind::I32);
+
+            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+            HIRFunctionPtr mainFunc = module_->createFunction("main", funcType);
+            mainFunc->linkage = HIRFunction::Linkage::Public;
+
+            // Create entry block
+            auto entryBlock = mainFunc->createBasicBlock("entry");
+
+            // Set up the builder for main function
+            auto savedFunction = currentFunction_;
+            currentFunction_ = mainFunc.get();
+            builder_ = std::make_unique<HIRBuilder>(module_, mainFunc.get());
+            builder_->setInsertPoint(entryBlock.get());
+
+            // Process top-level statements inside main
+            for (size_t idx : topLevelIndices) {
+                node.body[idx]->accept(*this);
+            }
+
+            // Add return 0 at the end of main
+            auto* zeroValue = builder_->createIntConstant(0);
+            builder_->createReturn(zeroValue);
+
+            // Restore state
+            currentFunction_ = savedFunction;
+            builder_.reset();
         }
     }
     
@@ -17831,6 +18077,9 @@ private:
     // Response tracking (Web API)
     std::unordered_set<std::string> responseVars_;  // Set of variable names that are Responses
     bool lastWasResponse_ = false;  // Temporarily stores if last expression was Response
+    // Built-in module imports (nova:fs, nova:test, nova:path, nova:os)
+    std::unordered_map<std::string, std::string> builtinModuleImports_;  // namespace -> module name
+    std::unordered_map<std::string, std::string> builtinFunctionImports_;  // local name -> runtime function name
 };
 
 // Public API to generate HIR from AST

@@ -12,6 +12,9 @@
 #include "nova/Transpiler/Transpiler.h"
 #include "nova/PackageManager/PackageManager.h"
 
+// Debug output control - set to 1 to enable debug output
+#define NOVA_DEBUG 0
+
 using namespace nova;
 
 void printUsage() {
@@ -106,7 +109,7 @@ int main(int argc, char** argv) {
         printUsage();
         return 1;
     }
-    
+
     std::string command = argv[1];
 
     if (command == "--help" || command == "-h") {
@@ -732,7 +735,7 @@ int main(int argc, char** argv) {
         }
 
         if (verbose) std::cout << "⏳ Phase 9: LLVM Optimization Passes..." << std::endl;
-        std::cerr << "DEBUG: Running optimization passes with optLevel=" << optLevel << std::endl;
+        if (NOVA_DEBUG) std::cerr << "DEBUG: Running optimization passes with optLevel=" << optLevel << std::endl;
         codegen.runOptimizationPasses(optLevel);
 
         if (emitLLVM) {

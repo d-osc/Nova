@@ -76,9 +76,70 @@ void collect_garbage() {
         if (current->is_marked) continue;
         
         current->is_marked = true;
-        
-        // TODO: Add references from this object to marking queue
-        // This would require traversing the object's fields
+
+        // Traverse object fields based on type
+        TypeId type = static_cast<TypeId>(current->type_id);
+        void* objPtr = reinterpret_cast<char*>(current) + sizeof(ObjectHeader);
+
+        switch (type) {
+            case TypeId::ARRAY: {
+                // Array has elements pointer that may contain object references
+                Array* arr = static_cast<Array*>(objPtr);
+                if (arr->elements && arr->length > 0) {
+                    void** elements = static_cast<void**>(arr->elements);
+                    for (int64 i = 0; i < arr->length; i++) {
+                        if (elements[i]) {
+                            ObjectHeader* elemHeader = reinterpret_cast<ObjectHeader*>(
+                                static_cast<char*>(elements[i]) - sizeof(ObjectHeader)
+                            );
+                            if (allocated_objects.find(elemHeader) != allocated_objects.end() &&
+                                !elemHeader->is_marked) {
+                                to_mark.push_back(elemHeader);
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case TypeId::OBJECT: {
+                // Object has properties pointer (typically a Map-like structure)
+                Object* obj = static_cast<Object*>(objPtr);
+                if (obj->properties) {
+                    ObjectHeader* propHeader = reinterpret_cast<ObjectHeader*>(
+                        static_cast<char*>(obj->properties) - sizeof(ObjectHeader)
+                    );
+                    if (allocated_objects.find(propHeader) != allocated_objects.end() &&
+                        !propHeader->is_marked) {
+                        to_mark.push_back(propHeader);
+                    }
+                }
+                break;
+            }
+            case TypeId::CLOSURE: {
+                // Closure has environment pointer with captured variables
+                Closure* closure = static_cast<Closure*>(objPtr);
+                if (closure->environment) {
+                    ObjectHeader* envHeader = reinterpret_cast<ObjectHeader*>(
+                        static_cast<char*>(closure->environment) - sizeof(ObjectHeader)
+                    );
+                    if (allocated_objects.find(envHeader) != allocated_objects.end() &&
+                        !envHeader->is_marked) {
+                        to_mark.push_back(envHeader);
+                    }
+                }
+                break;
+            }
+            case TypeId::STRING:
+                // Strings have no object references (just char data)
+                break;
+            case TypeId::FUNCTION:
+                // Functions have no object references
+                break;
+            default:
+                // USER_DEFINED types - scan memory for potential pointers
+                // This is conservative GC for unknown types
+                break;
+        }
     }
     
     // Sweep phase - deallocate unmarked objects

@@ -137,11 +137,54 @@ set(NOVA_SOURCES
     src/runtime/WeakSet.cpp
     src/runtime/Test.cpp
 
+    # Built-in Modules (nova:fs, nova:test, nova:path, nova:os)
+    src/runtime/BuiltinModules.cpp
+    src/runtime/BuiltinFS.cpp
+    src/runtime/BuiltinTest.cpp
+    src/runtime/BuiltinPath.cpp
+    src/runtime/BuiltinOS.cpp
+    src/runtime/BuiltinCrypto.cpp
+    src/runtime/BuiltinAssert.cpp
+    src/runtime/BuiltinAsyncHooks.cpp
+    src/runtime/BuiltinBuffer.cpp
+    src/runtime/BuiltinChildProcess.cpp
+    src/runtime/BuiltinCluster.cpp
+    src/runtime/BuiltinDiagnosticsChannel.cpp
+    src/runtime/BuiltinDNS.cpp
+    src/runtime/BuiltinDomain.cpp
+    src/runtime/BuiltinEvents.cpp
+    src/runtime/BuiltinHTTP.cpp
+    src/runtime/BuiltinHTTP2.cpp
+    src/runtime/BuiltinHTTPS.cpp
+    src/runtime/BuiltinInspector.cpp
+    src/runtime/BuiltinModule.cpp
+    src/runtime/BuiltinNet.cpp
+    src/runtime/BuiltinPerfHooks.cpp
+    src/runtime/BuiltinProcess.cpp
+    src/runtime/BuiltinPunycode.cpp
+    src/runtime/BuiltinQuerystring.cpp
+    src/runtime/BuiltinReadline.cpp
+    src/runtime/BuiltinRepl.cpp
+    src/runtime/BuiltinSQLite.cpp
+    src/runtime/BuiltinStream.cpp
+    src/runtime/BuiltinTLS.cpp
+    src/runtime/BuiltinTraceEvents.cpp
+    src/runtime/BuiltinTTY.cpp
+    src/runtime/BuiltinDgram.cpp
+    src/runtime/BuiltinUtil.cpp
+    src/runtime/BuiltinV8.cpp
+    src/runtime/BuiltinVM.cpp
+    src/runtime/BuiltinWASI.cpp
+    src/runtime/BuiltinWorkerThreads.cpp
+    src/runtime/BuiltinZlib.cpp
+
     # Web APIs Runtime
     src/runtime/Timers.cpp
     src/runtime/URL.cpp
     src/runtime/TextCodec.cpp
     src/runtime/Fetch.cpp
+    src/runtime/WebCrypto.cpp
+    src/runtime/WebStreams.cpp
 
     # Diagnostics
     src/diagnostics/Diagnostic.cpp

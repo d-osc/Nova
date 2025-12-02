@@ -20,6 +20,11 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
+// OpenSSL support for HTTPS on POSIX
+#ifdef NOVA_HAS_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#endif
 #endif
 
 // ============================================================================
@@ -616,25 +621,29 @@ static void* doFetch(const char* url, const char* method, NovaHeaders* headers, 
 
 #else
 
+// POSIX implementation with optional OpenSSL support
 static void* doFetch(const char* url, const char* method, NovaHeaders* headers, const char* body) {
-    // Basic POSIX socket implementation
     if (!url) return nova_response_error();
 
     std::string urlStr = url;
     bool isHttps = urlStr.find("https://") == 0;
+    int defaultPort = isHttps ? 443 : 80;
+
+    // Parse URL
+    std::string hostAndPath;
     if (isHttps) {
-        // HTTPS not supported in basic POSIX implementation
-        return nova_response_error();
+        hostAndPath = urlStr.substr(8);  // Skip "https://"
+    } else {
+        hostAndPath = urlStr.substr(7);  // Skip "http://"
     }
 
-    std::string hostAndPath = urlStr.substr(7);  // Skip "http://"
     size_t pathStart = hostAndPath.find('/');
     std::string host = pathStart != std::string::npos ?
         hostAndPath.substr(0, pathStart) : hostAndPath;
     std::string path = pathStart != std::string::npos ?
         hostAndPath.substr(pathStart) : "/";
 
-    int port = 80;
+    int port = defaultPort;
     size_t colonPos = host.find(':');
     if (colonPos != std::string::npos) {
         port = std::stoi(host.substr(colonPos + 1));
@@ -666,10 +675,62 @@ static void* doFetch(const char* url, const char* method, NovaHeaders* headers, 
         return nova_response_error();
     }
 
+#ifdef NOVA_HAS_OPENSSL
+    SSL_CTX* sslCtx = nullptr;
+    SSL* ssl = nullptr;
+
+    if (isHttps) {
+        // Initialize OpenSSL
+        static bool sslInitialized = false;
+        if (!sslInitialized) {
+            SSL_library_init();
+            SSL_load_error_strings();
+            OpenSSL_add_all_algorithms();
+            sslInitialized = true;
+        }
+
+        // Create SSL context
+        sslCtx = SSL_CTX_new(TLS_client_method());
+        if (!sslCtx) {
+            close(sock);
+            return nova_response_error();
+        }
+
+        // Set verification mode (allow self-signed for flexibility)
+        SSL_CTX_set_verify(sslCtx, SSL_VERIFY_NONE, nullptr);
+
+        // Create SSL connection
+        ssl = SSL_new(sslCtx);
+        if (!ssl) {
+            SSL_CTX_free(sslCtx);
+            close(sock);
+            return nova_response_error();
+        }
+
+        SSL_set_fd(ssl, sock);
+        SSL_set_tlsext_host_name(ssl, host.c_str());  // SNI
+
+        if (SSL_connect(ssl) <= 0) {
+            SSL_free(ssl);
+            SSL_CTX_free(sslCtx);
+            close(sock);
+            return nova_response_error();
+        }
+    }
+#else
+    if (isHttps) {
+        // HTTPS requires OpenSSL - compile with -DNOVA_HAS_OPENSSL
+        close(sock);
+        fprintf(stderr, "HTTPS not available: compile with OpenSSL support (-DNOVA_HAS_OPENSSL)\n");
+        return nova_response_error();
+    }
+#endif
+
     // Build request
     std::ostringstream request;
     request << (method ? method : "GET") << " " << path << " HTTP/1.1\r\n";
     request << "Host: " << host << "\r\n";
+    request << "User-Agent: Nova/1.0\r\n";
 
     if (headers) {
         for (const auto& pair : *headers->headers) {
@@ -688,16 +749,43 @@ static void* doFetch(const char* url, const char* method, NovaHeaders* headers, 
     }
 
     std::string reqStr = request.str();
+
+#ifdef NOVA_HAS_OPENSSL
+    if (isHttps && ssl) {
+        SSL_write(ssl, reqStr.c_str(), reqStr.length());
+    } else {
+        send(sock, reqStr.c_str(), reqStr.length(), 0);
+    }
+#else
     send(sock, reqStr.c_str(), reqStr.length(), 0);
+#endif
 
     // Read response
     std::string response;
     char buffer[4096];
     ssize_t n;
+
+#ifdef NOVA_HAS_OPENSSL
+    if (isHttps && ssl) {
+        while ((n = SSL_read(ssl, buffer, sizeof(buffer) - 1)) > 0) {
+            buffer[n] = '\0';
+            response += buffer;
+        }
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        SSL_CTX_free(sslCtx);
+    } else {
+        while ((n = recv(sock, buffer, sizeof(buffer) - 1, 0)) > 0) {
+            buffer[n] = '\0';
+            response += buffer;
+        }
+    }
+#else
     while ((n = recv(sock, buffer, sizeof(buffer) - 1, 0)) > 0) {
         buffer[n] = '\0';
         response += buffer;
     }
+#endif
 
     close(sock);
 

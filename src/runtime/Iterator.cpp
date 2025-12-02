@@ -7,6 +7,9 @@
 #include <vector>
 #include <functional>
 
+// Debug output control - set to 1 to enable debug output
+#define NOVA_DEBUG 0
+
 extern "C" {
     // Array runtime functions
     void* nova_create_array(int64_t size);
@@ -42,7 +45,7 @@ struct NovaIterator {
 
 // Iterator.from(iterable) - Create iterator from array or iterable
 extern "C" void* nova_iterator_from(void* iterable) {
-    std::cerr << "DEBUG: nova_iterator_from called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_from called" << std::endl;
 
     auto* iter = new NovaIterator();
     iter->source = iterable;
@@ -118,7 +121,7 @@ struct MapIterator {
 };
 
 extern "C" void* nova_iterator_map(void* iterPtr, void* mapFunc) {
-    std::cerr << "DEBUG: nova_iterator_map called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_map called" << std::endl;
 
     if (!iterPtr) {
         return nova_iterator_create_empty();
@@ -145,7 +148,7 @@ extern "C" void* nova_iterator_map(void* iterPtr, void* mapFunc) {
 // ============= Iterator.prototype.filter(fn) =============
 
 extern "C" void* nova_iterator_filter(void* iterPtr, void* filterFunc) {
-    std::cerr << "DEBUG: nova_iterator_filter called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_filter called" << std::endl;
 
     if (!iterPtr) {
         return nova_iterator_create_empty();
@@ -172,7 +175,7 @@ extern "C" void* nova_iterator_filter(void* iterPtr, void* filterFunc) {
 // ============= Iterator.prototype.take(n) =============
 
 extern "C" void* nova_iterator_take(void* iterPtr, int64_t count) {
-    std::cerr << "DEBUG: nova_iterator_take called with count=" << count << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_take called with count=" << count << std::endl;
 
     if (!iterPtr || count <= 0) {
         return nova_iterator_create_empty();
@@ -199,7 +202,7 @@ extern "C" void* nova_iterator_take(void* iterPtr, int64_t count) {
 // ============= Iterator.prototype.drop(n) =============
 
 extern "C" void* nova_iterator_drop(void* iterPtr, int64_t count) {
-    std::cerr << "DEBUG: nova_iterator_drop called with count=" << count << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_drop called with count=" << count << std::endl;
 
     if (!iterPtr) {
         return nova_iterator_create_empty();
@@ -226,7 +229,7 @@ extern "C" void* nova_iterator_drop(void* iterPtr, int64_t count) {
 // ============= Iterator.prototype.flatMap(fn) =============
 
 extern "C" void* nova_iterator_flatmap(void* iterPtr, void* flatMapFunc) {
-    std::cerr << "DEBUG: nova_iterator_flatmap called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_flatmap called" << std::endl;
 
     if (!iterPtr) {
         return nova_iterator_create_empty();
@@ -253,7 +256,7 @@ extern "C" void* nova_iterator_flatmap(void* iterPtr, void* flatMapFunc) {
 // ============= Iterator.prototype.toArray() =============
 
 extern "C" void* nova_iterator_toarray(void* iterPtr) {
-    std::cerr << "DEBUG: nova_iterator_toarray called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_toarray called" << std::endl;
 
     void* result = nova_create_array(0);
 
@@ -289,7 +292,7 @@ extern "C" void* nova_iterator_toarray(void* iterPtr) {
 // ============= Iterator.prototype.reduce(fn, initialValue) =============
 
 extern "C" int64_t nova_iterator_reduce(void* iterPtr, void* reduceFunc, int64_t initialValue) {
-    std::cerr << "DEBUG: nova_iterator_reduce called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_reduce called" << std::endl;
 
     if (!iterPtr) {
         return initialValue;
@@ -315,7 +318,7 @@ extern "C" int64_t nova_iterator_reduce(void* iterPtr, void* reduceFunc, int64_t
 // ============= Iterator.prototype.forEach(fn) =============
 
 extern "C" void nova_iterator_foreach(void* iterPtr, void* forEachFunc) {
-    std::cerr << "DEBUG: nova_iterator_foreach called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_foreach called" << std::endl;
 
     if (!iterPtr) {
         return;
@@ -337,7 +340,7 @@ extern "C" void nova_iterator_foreach(void* iterPtr, void* forEachFunc) {
 // ============= Iterator.prototype.some(fn) =============
 
 extern "C" int64_t nova_iterator_some(void* iterPtr, void* someFunc) {
-    std::cerr << "DEBUG: nova_iterator_some called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_some called" << std::endl;
 
     if (!iterPtr) {
         return 0; // false
@@ -358,7 +361,7 @@ extern "C" int64_t nova_iterator_some(void* iterPtr, void* someFunc) {
 // ============= Iterator.prototype.every(fn) =============
 
 extern "C" int64_t nova_iterator_every(void* iterPtr, void* everyFunc) {
-    std::cerr << "DEBUG: nova_iterator_every called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_every called" << std::endl;
 
     if (!iterPtr) {
         return 1; // true (vacuous truth for empty iterator)
@@ -378,7 +381,7 @@ extern "C" int64_t nova_iterator_every(void* iterPtr, void* everyFunc) {
 // ============= Iterator.prototype.find(fn) =============
 
 extern "C" int64_t nova_iterator_find(void* iterPtr, void* findFunc) {
-    std::cerr << "DEBUG: nova_iterator_find called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG: nova_iterator_find called" << std::endl;
 
     if (!iterPtr) {
         return 0; // undefined

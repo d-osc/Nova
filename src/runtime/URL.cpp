@@ -93,6 +93,7 @@ static std::string percentDecode(const std::string& s) {
 extern "C" void* nova_urlsearchparams_create(const char* init);
 extern "C" void nova_url_destroy(void* urlPtr);
 extern "C" const char* nova_urlsearchparams_toString(void* paramsPtr);
+extern "C" void nova_urlsearchparams_destroy(void* paramsPtr);
 
 // ============================================================================
 // Helper: Parse URL
@@ -330,6 +331,170 @@ const char* nova_url_toString(void* urlPtr) {
 
 const char* nova_url_toJSON(void* urlPtr) {
     return nova_url_get_href(urlPtr);
+}
+
+// ============================================================================
+// URL Property Setters
+// ============================================================================
+
+// Helper to rebuild href after property change
+static void rebuildHref(NovaURL* url) {
+    std::ostringstream hrefBuilder;
+    hrefBuilder << url->protocol << "//";
+    if (url->username && strlen(url->username) > 0) {
+        hrefBuilder << url->username;
+        if (url->password && strlen(url->password) > 0) {
+            hrefBuilder << ":" << url->password;
+        }
+        hrefBuilder << "@";
+    }
+    hrefBuilder << url->host << url->pathname << url->search << url->hash;
+    delete[] url->href;
+    url->href = dupString(hrefBuilder.str());
+}
+
+void nova_url_set_href(void* urlPtr, const char* value) {
+    if (!urlPtr || !value) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    // Re-parse the entire URL
+    delete[] url->href;
+    delete[] url->protocol;
+    delete[] url->username;
+    delete[] url->password;
+    delete[] url->host;
+    delete[] url->hostname;
+    delete[] url->port;
+    delete[] url->pathname;
+    delete[] url->search;
+    delete[] url->hash;
+    delete[] url->origin;
+    parseURL(url, std::string(value));
+}
+
+void nova_url_set_protocol(void* urlPtr, const char* value) {
+    if (!urlPtr || !value) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    std::string proto = value;
+    if (proto.back() != ':') proto += ':';
+    delete[] url->protocol;
+    url->protocol = dupString(proto);
+    // Rebuild origin
+    delete[] url->origin;
+    url->origin = dupString(proto + "//" + url->host);
+    rebuildHref(url);
+}
+
+void nova_url_set_username(void* urlPtr, const char* value) {
+    if (!urlPtr) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    delete[] url->username;
+    url->username = dupString(value ? value : "");
+    rebuildHref(url);
+}
+
+void nova_url_set_password(void* urlPtr, const char* value) {
+    if (!urlPtr) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    delete[] url->password;
+    url->password = dupString(value ? value : "");
+    rebuildHref(url);
+}
+
+void nova_url_set_host(void* urlPtr, const char* value) {
+    if (!urlPtr || !value) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    std::string hostStr = value;
+    delete[] url->host;
+    url->host = dupString(hostStr);
+
+    // Parse hostname and port
+    size_t colonPos = hostStr.rfind(':');
+    if (colonPos != std::string::npos) {
+        delete[] url->hostname;
+        url->hostname = dupString(hostStr.substr(0, colonPos));
+        delete[] url->port;
+        url->port = dupString(hostStr.substr(colonPos + 1));
+    } else {
+        delete[] url->hostname;
+        url->hostname = dupString(hostStr);
+        delete[] url->port;
+        url->port = dupString("");
+    }
+    // Rebuild origin
+    delete[] url->origin;
+    url->origin = dupString(std::string(url->protocol) + "//" + url->host);
+    rebuildHref(url);
+}
+
+void nova_url_set_hostname(void* urlPtr, const char* value) {
+    if (!urlPtr || !value) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    delete[] url->hostname;
+    url->hostname = dupString(value);
+    // Rebuild host
+    std::string host = value;
+    if (url->port && strlen(url->port) > 0) {
+        host += ":" + std::string(url->port);
+    }
+    delete[] url->host;
+    url->host = dupString(host);
+    // Rebuild origin
+    delete[] url->origin;
+    url->origin = dupString(std::string(url->protocol) + "//" + url->host);
+    rebuildHref(url);
+}
+
+void nova_url_set_port(void* urlPtr, const char* value) {
+    if (!urlPtr) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    delete[] url->port;
+    url->port = dupString(value ? value : "");
+    // Rebuild host
+    std::string host = url->hostname;
+    if (value && strlen(value) > 0) {
+        host += ":" + std::string(value);
+    }
+    delete[] url->host;
+    url->host = dupString(host);
+    // Rebuild origin
+    delete[] url->origin;
+    url->origin = dupString(std::string(url->protocol) + "//" + url->host);
+    rebuildHref(url);
+}
+
+void nova_url_set_pathname(void* urlPtr, const char* value) {
+    if (!urlPtr) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    std::string path = value ? value : "/";
+    if (path.empty() || path[0] != '/') path = "/" + path;
+    delete[] url->pathname;
+    url->pathname = dupString(path);
+    rebuildHref(url);
+}
+
+void nova_url_set_search(void* urlPtr, const char* value) {
+    if (!urlPtr) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    std::string search = value ? value : "";
+    if (!search.empty() && search[0] != '?') search = "?" + search;
+    delete[] url->search;
+    url->search = dupString(search);
+    // Update searchParams
+    if (url->searchParams) {
+        nova_urlsearchparams_destroy(url->searchParams);
+    }
+    url->searchParams = nova_urlsearchparams_create(search.length() > 1 ? search.c_str() + 1 : "");
+    rebuildHref(url);
+}
+
+void nova_url_set_hash(void* urlPtr, const char* value) {
+    if (!urlPtr) return;
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+    std::string hash = value ? value : "";
+    if (!hash.empty() && hash[0] != '#') hash = "#" + hash;
+    delete[] url->hash;
+    url->hash = dupString(hash);
+    rebuildHref(url);
 }
 
 // ============================================================================
@@ -688,6 +853,328 @@ void nova_urlsearchparams_destroy(void* paramsPtr) {
     NovaURLSearchParams* params = static_cast<NovaURLSearchParams*>(paramsPtr);
     delete params->entries;
     delete params;
+}
+
+// ============================================================================
+// URLSearchParams.prototype.entries() - returns JSON array of [key, value] pairs
+// ============================================================================
+
+const char* nova_urlsearchparams_entries(void* paramsPtr) {
+    if (!paramsPtr) return "[]";
+
+    NovaURLSearchParams* params = static_cast<NovaURLSearchParams*>(paramsPtr);
+
+    static thread_local std::string result;
+    result = "[";
+
+    bool first = true;
+    for (const auto& entry : *params->entries) {
+        if (!first) result += ",";
+        result += "[\"" + entry.key + "\",\"" + entry.value + "\"]";
+        first = false;
+    }
+    result += "]";
+
+    return result.c_str();
+}
+
+// ============================================================================
+// URLSearchParams.prototype.forEach(callback)
+// ============================================================================
+
+typedef void (*URLSearchParamsForEachCallback)(const char* value, const char* key, void* params);
+
+void nova_urlsearchparams_forEach(void* paramsPtr, URLSearchParamsForEachCallback callback) {
+    if (!paramsPtr || !callback) return;
+
+    NovaURLSearchParams* params = static_cast<NovaURLSearchParams*>(paramsPtr);
+    for (const auto& entry : *params->entries) {
+        callback(entry.value.c_str(), entry.key.c_str(), paramsPtr);
+    }
+}
+
+// ============================================================================
+// Legacy URL module: url.format(urlObject)
+// ============================================================================
+
+const char* nova_url_format(void* urlPtr) {
+    return nova_url_get_href(urlPtr);
+}
+
+// Format from components
+const char* nova_url_format_components(const char* protocol, const char* hostname,
+                                        const char* port, const char* pathname,
+                                        const char* search, const char* hash) {
+    static thread_local std::string result;
+    result.clear();
+
+    if (protocol && strlen(protocol) > 0) {
+        result += protocol;
+        if (result.back() != ':') result += ':';
+        result += "//";
+    }
+
+    if (hostname && strlen(hostname) > 0) {
+        result += hostname;
+    }
+
+    if (port && strlen(port) > 0) {
+        result += ":" + std::string(port);
+    }
+
+    if (pathname && strlen(pathname) > 0) {
+        if (pathname[0] != '/') result += '/';
+        result += pathname;
+    } else {
+        result += '/';
+    }
+
+    if (search && strlen(search) > 0) {
+        if (search[0] != '?') result += '?';
+        result += search;
+    }
+
+    if (hash && strlen(hash) > 0) {
+        if (hash[0] != '#') result += '#';
+        result += hash;
+    }
+
+    return result.c_str();
+}
+
+// ============================================================================
+// Legacy URL module: url.resolve(from, to)
+// ============================================================================
+
+const char* nova_url_resolve(const char* from, const char* to) {
+    if (!from || !to) return "";
+
+    static thread_local std::string result;
+
+    std::string toStr = to;
+
+    // If 'to' is absolute, return it
+    if (toStr.find("://") != std::string::npos) {
+        result = toStr;
+        return result.c_str();
+    }
+
+    void* fromUrl = nova_url_create(from);
+    if (!fromUrl) {
+        result = toStr;
+        return result.c_str();
+    }
+
+    NovaURL* url = static_cast<NovaURL*>(fromUrl);
+
+    if (!toStr.empty() && toStr[0] == '/') {
+        // Absolute path
+        result = std::string(url->origin) + toStr;
+    } else {
+        // Relative path
+        std::string basePath = url->pathname;
+        size_t lastSlash = basePath.rfind('/');
+        if (lastSlash != std::string::npos) {
+            basePath = basePath.substr(0, lastSlash + 1);
+        } else {
+            basePath = "/";
+        }
+        result = std::string(url->origin) + basePath + toStr;
+    }
+
+    nova_url_destroy(fromUrl);
+    return result.c_str();
+}
+
+// ============================================================================
+// url.fileURLToPath(url)
+// ============================================================================
+
+const char* nova_url_fileURLToPath(const char* urlStr) {
+    if (!urlStr) return "";
+
+    static thread_local std::string result;
+
+    void* urlPtr = nova_url_create(urlStr);
+    if (!urlPtr) {
+        result = "";
+        return result.c_str();
+    }
+
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+
+    // Check if file: protocol
+    if (strcmp(url->protocol, "file:") != 0) {
+        nova_url_destroy(urlPtr);
+        result = "";
+        return result.c_str();
+    }
+
+    result = percentDecode(url->pathname);
+
+#ifdef _WIN32
+    // Convert /C:/path to C:/path on Windows
+    if (result.length() >= 3 && result[0] == '/' &&
+        isalpha(result[1]) && result[2] == ':') {
+        result = result.substr(1);
+    }
+    // Convert forward slashes to backslashes
+    for (char& c : result) {
+        if (c == '/') c = '\\';
+    }
+#endif
+
+    nova_url_destroy(urlPtr);
+    return result.c_str();
+}
+
+// ============================================================================
+// url.pathToFileURL(path)
+// ============================================================================
+
+const char* nova_url_pathToFileURL(const char* path) {
+    if (!path) return "";
+
+    static thread_local std::string result;
+    std::string pathStr = path;
+
+#ifdef _WIN32
+    // Convert backslashes to forward slashes
+    for (char& c : pathStr) {
+        if (c == '\\') c = '/';
+    }
+    // Add leading slash if Windows absolute path (C:/)
+    if (pathStr.length() >= 2 && isalpha(pathStr[0]) && pathStr[1] == ':') {
+        pathStr = "/" + pathStr;
+    }
+#endif
+
+    // Ensure leading slash
+    if (pathStr.empty() || pathStr[0] != '/') {
+        pathStr = "/" + pathStr;
+    }
+
+    result = "file://" + percentEncode(pathStr);
+    return result.c_str();
+}
+
+// ============================================================================
+// url.domainToASCII(domain) - Punycode encoding
+// ============================================================================
+
+const char* nova_url_domainToASCII(const char* domain) {
+    if (!domain) return "";
+    // Simple implementation - just lowercase for ASCII domains
+    static thread_local std::string result;
+    result = domain;
+    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return result.c_str();
+}
+
+// ============================================================================
+// url.domainToUnicode(domain) - Punycode decoding
+// ============================================================================
+
+const char* nova_url_domainToUnicode(const char* domain) {
+    if (!domain) return "";
+    // Simple implementation - return as-is for ASCII domains
+    static thread_local std::string result;
+    result = domain;
+    return result.c_str();
+}
+
+// ============================================================================
+// url.urlToHttpOptions(url)
+// Returns JSON object with http options
+// ============================================================================
+
+const char* nova_url_urlToHttpOptions(void* urlPtr) {
+    if (!urlPtr) return "{}";
+
+    NovaURL* url = static_cast<NovaURL*>(urlPtr);
+
+    static thread_local std::string result;
+    std::ostringstream json;
+    json << "{";
+    json << "\"protocol\":\"" << (url->protocol ? url->protocol : "") << "\",";
+    json << "\"hostname\":\"" << (url->hostname ? url->hostname : "") << "\",";
+    json << "\"hash\":\"" << (url->hash ? url->hash : "") << "\",";
+    json << "\"search\":\"" << (url->search ? url->search : "") << "\",";
+    json << "\"pathname\":\"" << (url->pathname ? url->pathname : "") << "\",";
+    json << "\"path\":\"" << (url->pathname ? url->pathname : "") << (url->search ? url->search : "") << "\",";
+    json << "\"href\":\"" << (url->href ? url->href : "") << "\"";
+
+    if (url->port && strlen(url->port) > 0) {
+        json << ",\"port\":" << url->port;
+    }
+    if (url->username && strlen(url->username) > 0) {
+        json << ",\"auth\":\"" << url->username;
+        if (url->password && strlen(url->password) > 0) {
+            json << ":" << url->password;
+        }
+        json << "\"";
+    }
+    json << "}";
+
+    result = json.str();
+    return result.c_str();
+}
+
+// From string
+const char* nova_url_urlToHttpOptions_str(const char* urlStr) {
+    if (!urlStr) return "{}";
+    void* urlPtr = nova_url_create(urlStr);
+    const char* result = nova_url_urlToHttpOptions(urlPtr);
+    nova_url_destroy(urlPtr);
+    return result;
+}
+
+// ============================================================================
+// Additional utility functions
+// ============================================================================
+
+// Encode URI component
+const char* nova_url_encodeURIComponent(const char* str) {
+    if (!str) return "";
+    static thread_local std::string result;
+    result = percentEncode(str);
+    return result.c_str();
+}
+
+// Decode URI component
+const char* nova_url_decodeURIComponent(const char* str) {
+    if (!str) return "";
+    static thread_local std::string result;
+    result = percentDecode(str);
+    return result.c_str();
+}
+
+// Encode URI (less strict than component)
+const char* nova_url_encodeURI(const char* str) {
+    if (!str) return "";
+    static thread_local std::string result;
+    std::ostringstream encoded;
+    for (unsigned char c : std::string(str)) {
+        // Don't encode: A-Z a-z 0-9 - _ . ~ ! ' ( ) * ; , / ? : @ & = + $ #
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~' ||
+            c == '!' || c == '\'' || c == '(' || c == ')' || c == '*' ||
+            c == ';' || c == ',' || c == '/' || c == '?' || c == ':' ||
+            c == '@' || c == '&' || c == '=' || c == '+' || c == '$' || c == '#') {
+            encoded << c;
+        } else {
+            encoded << '%' << std::uppercase << std::hex << (int)c;
+        }
+    }
+    result = encoded.str();
+    return result.c_str();
+}
+
+// Decode URI
+const char* nova_url_decodeURI(const char* str) {
+    if (!str) return "";
+    static thread_local std::string result;
+    result = percentDecode(str);
+    return result.c_str();
 }
 
 } // extern "C"

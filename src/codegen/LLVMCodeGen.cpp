@@ -1,4 +1,13 @@
 // LLVM Code Generator from MIR
+
+// Debug output control - set to 1 to enable debug output
+#define NOVA_DEBUG 0
+#if NOVA_DEBUG
+#define NOVA_DBG(x) std::cerr << x
+#else
+#define NOVA_DBG(x) do {} while(0)
+#endif
+
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable: 4100 4127 4244 4245 4267 4310 4324 4458 4459 4624)
@@ -66,11 +75,11 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
         
         // Disable constant folding to prevent runtime values from being folded
         // This is especially important for comparison operations in loops
-        std::cerr << "DEBUG LLVM: Disabling constant folding to preserve runtime comparisons" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Disabling constant folding to preserve runtime comparisons" << std::endl;
         
         
         // First pass: Create function declarations for all functions to support forward references
-        std::cerr << "DEBUG LLVM: First pass - creating function declarations" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: First pass - creating function declarations" << std::endl;
         for (const auto& mirFunc : mirModule.functions) {
             // Skip if already exists in functionMap
             if (functionMap.find(mirFunc->name) != functionMap.end()) {
@@ -102,10 +111,10 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
                 module.get()
             );
             functionMap[mirFunc->name] = llvmFunc;
-            std::cerr << "DEBUG LLVM: Declared function: " << mirFunc->name << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Declared function: " << mirFunc->name << std::endl;
         }
         
-        std::cerr << "DEBUG LLVM: Second pass - generating function bodies" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Second pass - generating function bodies" << std::endl;
         // Generate all functions
         for (const auto& mirFunc : mirModule.functions) {
             generateFunction(mirFunc.get());
@@ -122,7 +131,7 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
         }
         
         // Optimization passes are now enabled for basic optimizations
-        std::cerr << "DEBUG LLVM: Basic optimization passes are enabled" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Basic optimization passes are enabled" << std::endl;
         
         return true;
     } catch (const std::exception& e) {
@@ -140,7 +149,7 @@ void LLVMCodeGen::dumpIR() const {
     if (!EC) {
         module->print(dest, nullptr);
         dest.flush();
-        std::cerr << "DEBUG: LLVM IR dumped to debug_output.ll" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: LLVM IR dumped to debug_output.ll" << std::endl;
     }
 }
 
@@ -174,7 +183,7 @@ bool LLVMCodeGen::emitAssembly(const std::string& filename) {
 }
 
 bool LLVMCodeGen::emitLLVMIR(const std::string& filename) {
-    std::cerr << "DEBUG LLVM: emitLLVMIR ENTRY POINT - filename=" << filename << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: emitLLVMIR ENTRY POINT - filename=" << filename << std::endl;
     std::error_code EC;
     llvm::raw_fd_ostream dest(filename, EC, llvm::sys::fs::OF_None);
     
@@ -196,17 +205,17 @@ bool LLVMCodeGen::emitLLVMIR(const std::string& filename) {
     llvm::raw_fd_ostream debugDest("debug_output.ll", debugEC, llvm::sys::fs::OF_None);
     if (!debugEC) {
         // Debug: Print module information before dumping
-        std::cerr << "DEBUG LLVM: emitLLVMIR called - Module has " << module->size() << " functions" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: emitLLVMIR called - Module has " << module->size() << " functions" << std::endl;
         for (auto& func : *module) {
-            std::cerr << "DEBUG LLVM: emitLLVMIR - Function " << func.getName().str() << " has " << func.size() << " basic blocks" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: emitLLVMIR - Function " << func.getName().str() << " has " << func.size() << " basic blocks" << std::endl;
             for (auto& bb : func) {
-                std::cerr << "DEBUG LLVM: emitLLVMIR - Basic block " << bb.getName().str() << " has " << bb.size() << " instructions" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: emitLLVMIR - Basic block " << bb.getName().str() << " has " << bb.size() << " instructions" << std::endl;
             }
         }
         
         module->print(debugDest, nullptr);
         debugDest.flush();
-        std::cerr << "DEBUG: Raw LLVM IR dumped to debug_output.ll" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG: Raw LLVM IR dumped to debug_output.ll" << std::endl;
     }
     
     // Force the module to be written to disk immediately
@@ -235,19 +244,19 @@ bool LLVMCodeGen::emitBitcode(const std::string& filename) {
 }
 
 void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
-    std::cerr << "DEBUG LLVM: runOptimizationPasses called with optLevel=" << optLevel << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: runOptimizationPasses called with optLevel=" << optLevel << std::endl;
     if (optLevel == 0) {
-        std::cerr << "DEBUG LLVM: optLevel is 0, skipping optimization passes" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: optLevel is 0, skipping optimization passes" << std::endl;
         return;
     }
     
-    std::cerr << "DEBUG LLVM: Creating function pass manager" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating function pass manager" << std::endl;
     // Create function pass manager
     auto FPM = std::make_unique<llvm::legacy::FunctionPassManager>(module.get());
     
     // Add basic optimization passes based on level
     if (optLevel >= 1) {
-        std::cerr << "DEBUG LLVM: Adding basic optimization passes (optLevel >= 1)" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Adding basic optimization passes (optLevel >= 1)" << std::endl;
         // Basic optimizations that don't affect loop body operations
         FPM->add(llvm::createPromoteMemoryToRegisterPass());
         FPM->add(llvm::createInstructionCombiningPass());
@@ -255,25 +264,25 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         FPM->add(llvm::createGVNPass());
         FPM->add(llvm::createCFGSimplificationPass());
         // We're now allowing CFGSimplificationPass since it doesn't affect loop body operations
-        std::cerr << "DEBUG LLVM: Added CFGSimplificationPass for basic optimizations" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added CFGSimplificationPass for basic optimizations" << std::endl;
     }
     
     if (optLevel >= 2) {
-        std::cerr << "DEBUG LLVM: Adding intermediate optimization passes (optLevel >= 2)" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Adding intermediate optimization passes (optLevel >= 2)" << std::endl;
         // Intermediate optimizations - removed second InstructionCombiningPass as it causes
         // incorrect optimizations with generator pointer handling
         FPM->add(llvm::createDeadCodeEliminationPass());
         FPM->add(llvm::createCFGSimplificationPass());
-        std::cerr << "DEBUG LLVM: Added DeadCodeEliminationPass and CFGSimplificationPass" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added DeadCodeEliminationPass and CFGSimplificationPass" << std::endl;
     }
     
     if (optLevel >= 3) {
-        std::cerr << "DEBUG LLVM: Adding advanced optimization passes (optLevel >= 3)" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Adding advanced optimization passes (optLevel >= 3)" << std::endl;
         // Advanced optimizations
         FPM->add(llvm::createInstructionCombiningPass());
         FPM->add(llvm::createCFGSimplificationPass());
         FPM->add(llvm::createAlwaysInlinerLegacyPass());
-        std::cerr << "DEBUG LLVM: Added advanced optimizations and function inlining" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added advanced optimizations and function inlining" << std::endl;
     }
     
     FPM->doInitialization();
@@ -285,26 +294,26 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         }
     }
     
-    std::cerr << "DEBUG LLVM: Initializing function pass manager" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Initializing function pass manager" << std::endl;
     FPM->doInitialization();
     
-    std::cerr << "DEBUG LLVM: Running optimization passes on functions" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Running optimization passes on functions" << std::endl;
     // Run passes on all functions
     for (auto& func : module->functions()) {
         if (!func.isDeclaration()) {
-            std::cerr << "DEBUG LLVM: Running passes on function: " << func.getName().str() << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Running passes on function: " << func.getName().str() << std::endl;
             FPM->run(func);
         }
     }
     
     FPM->doFinalization();
     
-    std::cerr << "DEBUG LLVM: Optimization passes completed" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Optimization passes completed" << std::endl;
 }
 
 int LLVMCodeGen::executeMain() {
     // Initialize LLVM Execution Engine
-    std::cerr << "DEBUG LLVM: Initializing JIT execution engine" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Initializing JIT execution engine" << std::endl;
     
     // Verify the module
     if (llvm::verifyModule(*module, &llvm::errs())) {
@@ -327,7 +336,7 @@ int LLVMCodeGen::executeMain() {
     module->print(out, nullptr);
     out.close();
     
-    std::cerr << "DEBUG LLVM: LLVM IR saved to " << tempFile << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: LLVM IR saved to " << tempFile << std::endl;
     
     // Use llc to compile to assembly and then assemble with clang
     // This is a workaround for JIT not being available on this system
@@ -336,7 +345,7 @@ int LLVMCodeGen::executeMain() {
     
     // Compile LLVM IR to object file
     std::string llcCmd = "llc -filetype=obj -o \"" + objFile + "\" \"" + tempFile + "\"";
-    std::cerr << "DEBUG LLVM: Running: " << llcCmd << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Running: " << llcCmd << std::endl;
     int llcResult = system(llcCmd.c_str());
     if (llcResult != 0) {
         std::cerr << "❌ Error: llc compilation failed" << std::endl;
@@ -366,7 +375,7 @@ int LLVMCodeGen::executeMain() {
 #else
     linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"" + novacoreLib + "\" -lc -lstdc++";
 #endif
-    std::cerr << "DEBUG LLVM: Running: " << linkCmd << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Running: " << linkCmd << std::endl;
     int linkResult = system(linkCmd.c_str());
     if (linkResult != 0) {
         std::cerr << "❌ Error: Linking failed" << std::endl;
@@ -374,7 +383,7 @@ int LLVMCodeGen::executeMain() {
     }
     
     // Execute the compiled program
-    std::cerr << "DEBUG LLVM: Executing compiled program..." << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Executing compiled program..." << std::endl;
     int execResult = system((".\\\"" + exeFile + "\"").c_str());
     
     // Clean up temporary files
@@ -382,8 +391,8 @@ int LLVMCodeGen::executeMain() {
     remove(objFile.c_str());
     remove(exeFile.c_str());
     
-    std::cerr << "DEBUG LLVM: Program executed with exit code: " << execResult << std::endl;
-    std::cerr << "DEBUG LLVM: Temporary files cleaned up" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Program executed with exit code: " << execResult << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Temporary files cleaned up" << std::endl;
     return execResult;
 }
 
@@ -470,29 +479,29 @@ llvm::Type* LLVMCodeGen::convertType(mir::MIRType* type) {
 }
 
 llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
-    std::cerr << "DEBUG LLVM: convertOperand called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: convertOperand called" << std::endl;
     if (!operand) {
-        std::cerr << "DEBUG LLVM: operand is null" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: operand is null" << std::endl;
         return nullptr;
     }
     
     if (operand->kind == mir::MIROperand::Kind::Copy) {
-        std::cerr << "DEBUG LLVM: Processing Copy operand" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Copy operand" << std::endl;
         auto* copyOp = static_cast<mir::MIRCopyOperand*>(operand);
-        std::cerr << "DEBUG LLVM: Looking for place " << copyOp->place.get() << " in valueMap (size: " << valueMap.size() << ")" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Looking for place " << copyOp->place.get() << " in valueMap (size: " << valueMap.size() << ")" << std::endl;
         
         // Print all entries in valueMap for debugging
         for (const auto& pair : valueMap) {
-            std::cerr << "DEBUG LLVM: valueMap entry: place=" << pair.first << ", value=" << pair.second << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: valueMap entry: place=" << pair.first << ", value=" << pair.second << std::endl;
         }
         
         auto it = valueMap.find(copyOp->place.get());
         if (it != valueMap.end()) {
-            std::cerr << "DEBUG LLVM: Found place in valueMap" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found place in valueMap" << std::endl;
             // Always load from alloca to prevent constant folding
             // This ensures we get the current value from memory
             if (llvm::isa<llvm::AllocaInst>(it->second)) {
-                std::cerr << "DEBUG LLVM: Loading from alloca" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loading from alloca" << std::endl;
                 llvm::Type* loadType = convertType(copyOp->place->type.get());
 
                 // Get the actual alloca type
@@ -509,7 +518,7 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                 return loadInst;
             } else {
                 // Fallback for non-alloca values (e.g., direct call results like malloc)
-                std::cerr << "DEBUG LLVM: WARNING - Value is not an alloca, creating variable to prevent constant folding" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Value is not an alloca, creating variable to prevent constant folding" << std::endl;
                 llvm::AllocaInst* tempAlloca = builder->CreateAlloca(it->second->getType(), nullptr, "temp_var");
                 builder->CreateStore(it->second, tempAlloca);
 
@@ -517,17 +526,17 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                 auto typeIt = arrayTypeMap.find(it->second);
                 if (typeIt != arrayTypeMap.end()) {
                     arrayTypeMap[tempAlloca] = typeIt->second;
-                    std::cerr << "DEBUG LLVM: Propagated type from original value to temp alloca" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Propagated type from original value to temp alloca" << std::endl;
                 }
 
                 llvm::LoadInst* loadInst = builder->CreateLoad(it->second->getType(), tempAlloca, "temp_load");
                 return loadInst;
             }
         }
-        std::cerr << "DEBUG LLVM: Place not found in valueMap" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Place not found in valueMap" << std::endl;
         return nullptr;
     } else if (operand->kind == mir::MIROperand::Kind::Move) {
-        std::cerr << "DEBUG LLVM: Processing Move operand" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Move operand" << std::endl;
         // Load from place (move is same as copy for now)
         auto* moveOp = static_cast<mir::MIRMoveOperand*>(operand);
         auto it = valueMap.find(moveOp->place.get());
@@ -536,20 +545,20 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                                      it->second, "load");
         }
     } else if (operand->kind == mir::MIROperand::Kind::Constant) {
-        std::cerr << "DEBUG LLVM: Processing Constant operand" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Constant operand" << std::endl;
         // Create constant
         auto* constOp = static_cast<mir::MIRConstOperand*>(operand);
         if (constOp->constKind == mir::MIRConstOperand::ConstKind::Int) {
             int64_t intVal = std::get<int64_t>(constOp->value);
-            std::cerr << "DEBUG LLVM: Creating int constant: " << intVal << std::endl;
-            std::cerr << "DEBUG LLVM: constOp->type.get() = " << constOp->type.get() << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating int constant: " << intVal << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: constOp->type.get() = " << constOp->type.get() << std::endl;
             if (!constOp->type) {
                 std::cerr << "ERROR: constOp->type is null!" << std::endl;
                 return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), intVal, true);
             }
-            std::cerr << "DEBUG LLVM: About to call convertType" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: About to call convertType" << std::endl;
             llvm::Type* llvmType = convertType(constOp->type.get());
-            std::cerr << "DEBUG LLVM: convertType returned: " << llvmType << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: convertType returned: " << llvmType << std::endl;
             return llvm::ConstantInt::get(llvmType, intVal, true);
         } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::Float) {
             double floatVal = std::get<double>(constOp->value);
@@ -557,14 +566,14 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                                         floatVal);
         } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::Bool) {
             bool boolVal = std::get<bool>(constOp->value);
-            std::cerr << "DEBUG LLVM: Creating bool constant: " << (boolVal ? "true" : "false") << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating bool constant: " << (boolVal ? "true" : "false") << std::endl;
             // For boolean constants in binary operations, we need to match the type
             // Use i64 for consistency with boolean variables in memory
             return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 
                                          boolVal ? 1 : 0);
         } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
             std::string strVal = std::get<std::string>(constOp->value);
-            std::cerr << "DEBUG LLVM: Creating string constant: " << strVal << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating string constant: " << strVal << std::endl;
             // Create global string constant
             llvm::Constant* strConstant = llvm::ConstantDataArray::getString(*context, strVal, true);
             // Create global variable for the string
@@ -578,34 +587,34 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
         }
     }
     
-    std::cerr << "DEBUG LLVM: Unknown operand kind" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Unknown operand kind" << std::endl;
     return nullptr;
 }
 
 llvm::Value* LLVMCodeGen::convertRValue(mir::MIRRValue* rvalue) {
-    std::cerr << "DEBUG LLVM: convertRValue called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: convertRValue called" << std::endl;
     if (!rvalue) {
-        std::cerr << "DEBUG LLVM: rvalue is null" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: rvalue is null" << std::endl;
         return nullptr;
     }
     
 switch (rvalue->kind) {
         case mir::MIRRValue::Kind::Use: {
-            std::cerr << "DEBUG LLVM: Processing Use rvalue" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Use rvalue" << std::endl;
             auto* useRVal = static_cast<mir::MIRUseRValue*>(rvalue);
-            std::cerr << "DEBUG LLVM: Converting use operand" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting use operand" << std::endl;
             llvm::Value* result = convertOperand(useRVal->operand.get());
-            std::cerr << "DEBUG LLVM: Use operand converted to value: " << result << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Use operand converted to value: " << result << std::endl;
             return result;
         }
         
         case mir::MIRRValue::Kind::BinaryOp: {
-            std::cerr << "DEBUG LLVM: Processing BinaryOp rvalue" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing BinaryOp rvalue" << std::endl;
             auto* binOp = static_cast<mir::MIRBinaryOpRValue*>(rvalue);
-            std::cerr << "DEBUG LLVM: Converting operands" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting operands" << std::endl;
             llvm::Value* lhs = convertOperand(binOp->lhs.get());
             llvm::Value* rhs = convertOperand(binOp->rhs.get());
-            std::cerr << "DEBUG LLVM: Generating binary operation" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating binary operation" << std::endl;
             return generateBinaryOp(binOp->op, lhs, rhs);
         }        case mir::MIRRValue::Kind::UnaryOp: {
             auto* unOp = static_cast<mir::MIRUnaryOpRValue*>(rvalue);
@@ -621,17 +630,17 @@ switch (rvalue->kind) {
         }
 
         case mir::MIRRValue::Kind::Aggregate: {
-            std::cerr << "DEBUG LLVM: Processing Aggregate rvalue" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Aggregate rvalue" << std::endl;
             auto* aggOp = static_cast<mir::MIRAggregateRValue*>(rvalue);
             return generateAggregate(aggOp);
         }
 
         case mir::MIRRValue::Kind::Ref: {
             // Ref kind is used for GetElement temporarily
-            std::cerr << "DEBUG LLVM: Processing Ref rvalue (possibly GetElement)" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Ref rvalue (possibly GetElement)" << std::endl;
             auto* getElemOp = dynamic_cast<mir::MIRGetElementRValue*>(rvalue);
             if (getElemOp) {
-                std::cerr << "DEBUG LLVM: Confirmed GetElement operation" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Confirmed GetElement operation" << std::endl;
                 return generateGetElement(getElemOp);
             }
             return nullptr;
@@ -665,9 +674,9 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                 llvm::Type::getInt64Ty(*context)   // Field 1
             };
             llvm::StructType::create(*context, fieldTypes, structName);
-            std::cerr << "DEBUG LLVM: Created struct type " << structName << " with " << fieldTypes.size() << " fields" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created struct type " << structName << " with " << fieldTypes.size() << " fields" << std::endl;
         } else {
-            std::cerr << "DEBUG LLVM: Struct type " << structName << " already exists" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Struct type " << structName << " already exists" << std::endl;
         }
     }
 
@@ -700,7 +709,7 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     if (it != functionMap.end()) {
         // Use existing declaration
         llvmFunc = it->second;
-        std::cerr << "DEBUG LLVM: Using existing declaration for function: " << function->name << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Using existing declaration for function: " << function->name << std::endl;
     } else {
         // Create function (fallback for runtime functions)
         llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
@@ -711,7 +720,7 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
             module.get()
         );
         functionMap[function->name] = llvmFunc;
-        std::cerr << "DEBUG LLVM: Created new function: " << function->name << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created new function: " << function->name << std::endl;
     }
     currentFunction = llvmFunc;
     currentReturnValue = nullptr;  // Reset return value for this function
@@ -722,58 +731,60 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     
     // Create alloca for each variable that might change value
     // This prevents constant folding by using memory instead of SSA
-    std::cerr << "DEBUG LLVM: Creating alloca for variables to prevent constant folding" << std::endl;
-    std::cerr << "DEBUG LLVM: Function has " << function->basicBlocks.size() << " basic blocks" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating alloca for variables to prevent constant folding" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Function has " << function->basicBlocks.size() << " basic blocks" << std::endl;
 
     for (size_t bbIdx = 0; bbIdx < function->basicBlocks.size(); ++bbIdx) {
         const auto& bb = function->basicBlocks[bbIdx];
-        std::cerr << "DEBUG LLVM: Processing block " << bbIdx << " with " << bb->statements.size() << " statements" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing block " << bbIdx << " with " << bb->statements.size() << " statements" << std::endl;
 
         for (size_t stmtIdx = 0; stmtIdx < bb->statements.size(); ++stmtIdx) {
             const auto& stmt = bb->statements[stmtIdx];
-            std::cerr << "DEBUG LLVM: Checking statement " << stmtIdx << " kind=" << static_cast<int>(stmt->kind) << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Checking statement " << stmtIdx << " kind=" << static_cast<int>(stmt->kind) << std::endl;
 
             if (stmt->kind == mir::MIRStatement::Kind::Assign) {
                 auto* assign = static_cast<mir::MIRAssignStatement*>(stmt.get());
-                std::cerr << "DEBUG LLVM: Found assign statement, place=" << assign->place.get() << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found assign statement, place=" << assign->place.get() << std::endl;
 
                 if (assign->place) {
-                    std::cerr << "DEBUG LLVM: Converting type for place..." << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting type for place..." << std::endl;
                     llvm::Type* varType = convertType(assign->place->type.get());
-                    std::cerr << "DEBUG LLVM: Type converted successfully, type=";
-                    varType->print(llvm::errs());
-                    std::cerr << std::endl;
+                    if(NOVA_DEBUG) {
+                        std::cerr << "DEBUG LLVM: Type converted successfully, type=";
+                        varType->print(llvm::errs());
+                        std::cerr << std::endl;
+                    }
 
                     // Skip void types - cannot create alloca for void
                     if (varType->isVoidTy()) {
-                        std::cerr << "DEBUG LLVM: Skipping void type variable, using i64 placeholder" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Skipping void type variable, using i64 placeholder" << std::endl;
                         varType = llvm::Type::getInt64Ty(*context);
                     }
 
                     // For debugging, check if the type is a pointer type
                     if (varType->isPointerTy()) {
-                        std::cerr << "DEBUG LLVM: WARNING - Creating alloca for pointer type variable " << assign->place.get() << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Creating alloca for pointer type variable " << assign->place.get() << std::endl;
                     }
 
                     // Check if this place already has an alloca
                     if (valueMap.find(assign->place.get()) != valueMap.end()) {
-                        std::cerr << "DEBUG LLVM: Variable already has alloca, skipping" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Variable already has alloca, skipping" << std::endl;
                         continue;
                     }
 
-                    std::cerr << "DEBUG LLVM: Creating alloca instruction..." << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating alloca instruction..." << std::endl;
                     std::cerr.flush();
                     llvm::AllocaInst* alloca = builder->CreateAlloca(varType, nullptr, "var");
-                    std::cerr << "DEBUG LLVM: Alloca created, adding to valueMap..." << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Alloca created, adding to valueMap..." << std::endl;
                     std::cerr.flush();
                     valueMap[assign->place.get()] = alloca;
-                    std::cerr << "DEBUG LLVM: Created alloca for variable " << assign->place.get() << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created alloca for variable " << assign->place.get() << std::endl;
                 }
             }
         }
-        std::cerr << "DEBUG LLVM: Finished processing block " << bbIdx << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Finished processing block " << bbIdx << std::endl;
     }
-    std::cerr << "DEBUG LLVM: Finished creating all allocas" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Finished creating all allocas" << std::endl;
     
     // Map parameters (create allocas for them too)
     auto argIt = llvmFunc->arg_begin();
@@ -795,7 +806,7 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                 llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
                 if (structType) {
                     arrayTypeMap[argAlloca] = structType;
-                    std::cerr << "DEBUG LLVM: Associated struct type " << structName << " with 'this' parameter in method " << funcName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Associated struct type " << structName << " with 'this' parameter in method " << funcName << std::endl;
                 }
             }
         }
@@ -820,18 +831,18 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
         
         llvm::BasicBlock* llvmBB = llvm::BasicBlock::Create(*context, bbLabel, llvmFunc);
         blockMap[bb.get()] = llvmBB;
-        std::cerr << "DEBUG LLVM: Created basic block " << bbLabel << " with " << bb->statements.size() << " statements" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created basic block " << bbLabel << " with " << bb->statements.size() << " statements" << std::endl;
         
         // If this is the body block of a loop, make sure it's not empty
         if (bb->statements.empty() && (bbLabel.find("body") != std::string::npos || 
                                       bbLabel.find("bb2") != std::string::npos)) {
-            std::cerr << "DEBUG LLVM: WARNING - Empty body block found: " << bbLabel << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Empty body block found: " << bbLabel << std::endl;
             
             // Create a dummy instruction to ensure the block is not empty
             builder->SetInsertPoint(llvmBB);
             llvm::Value* dummyVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
             builder->CreateAdd(dummyVal, dummyVal, "dummy_add");
-            std::cerr << "DEBUG LLVM: Added dummy instruction to empty block" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added dummy instruction to empty block" << std::endl;
         }
     }
     
@@ -851,7 +862,7 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                 // Set insertion point to entry block and create branch
                 builder->SetInsertPoint(targetEntryBB);
                 builder->CreateBr(firstBB);
-                std::cerr << "DEBUG LLVM: Created branch from entry to " << firstBB->getName().str() << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created branch from entry to " << firstBB->getName().str() << std::endl;
                 break;
             }
         }
@@ -859,84 +870,84 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     
     // Generate code for each basic block
     for (const auto& bb : function->basicBlocks) {
-        std::cerr << "DEBUG LLVM: Processing block " << bb->label << " with " << bb->statements.size() << " statements" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing block " << bb->label << " with " << bb->statements.size() << " statements" << std::endl;
         generateBasicBlock(bb.get(), blockMap[bb.get()]);
-        std::cerr << "DEBUG LLVM: Block " << bb->label << " processed" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Block " << bb->label << " processed" << std::endl;
     }
     
     return llvmFunc;
 }
 
 void LLVMCodeGen::generateBasicBlock(mir::MIRBasicBlock* bb, llvm::BasicBlock* llvmBB) {
-    std::cerr << "DEBUG LLVM: Generating basic block: " << bb->label << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating basic block: " << bb->label << std::endl;
     
     // Clear the insertion point to avoid any conflicts
     builder->ClearInsertionPoint();
     builder->SetInsertPoint(llvmBB);
     
     // Generate statements
-    std::cerr << "DEBUG LLVM: Generating " << bb->statements.size() << " statements" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating " << bb->statements.size() << " statements" << std::endl;
     for (const auto& stmt : bb->statements) {
         generateStatement(stmt.get());
     }
-    std::cerr << "DEBUG LLVM: Statements generated" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Statements generated" << std::endl;
     
     // Debug: Check if we have any instructions in the block
     if (llvmBB->empty()) {
-        std::cerr << "DEBUG LLVM: WARNING - Basic block is empty after statement generation" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Basic block is empty after statement generation" << std::endl;
         
         // Create a dummy instruction to ensure the block is not empty
         builder->SetInsertPoint(llvmBB);
         llvm::Value* dummyVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
         builder->CreateAdd(dummyVal, dummyVal, "dummy_add");
-        std::cerr << "DEBUG LLVM: Added dummy instruction to empty block" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added dummy instruction to empty block" << std::endl;
     } else {
-        std::cerr << "DEBUG LLVM: Basic block has " << llvmBB->size() << " instructions" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Basic block has " << llvmBB->size() << " instructions" << std::endl;
     }
     
     // Generate terminator
     if (bb->terminator) {
-        std::cerr << "DEBUG LLVM: Generating terminator" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating terminator" << std::endl;
         generateTerminator(bb->terminator.get());
-        std::cerr << "DEBUG LLVM: Terminator generated" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Terminator generated" << std::endl;
     } else {
-        std::cerr << "DEBUG LLVM: No terminator found, creating unreachable" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: No terminator found, creating unreachable" << std::endl;
         builder->CreateUnreachable();
     }
     
     // Debug: Check final instruction count
-    std::cerr << "DEBUG LLVM: Basic block now has " << llvmBB->size() << " instructions after terminator" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Basic block now has " << llvmBB->size() << " instructions after terminator" << std::endl;
 }
 
 void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
-    std::cerr << "DEBUG LLVM: generateStatement called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: generateStatement called" << std::endl;
     if (!stmt) {
-        std::cerr << "DEBUG LLVM: Statement is null" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Statement is null" << std::endl;
         return;
     }
     
     switch (stmt->kind) {
         case mir::MIRStatement::Kind::Assign: {
-            std::cerr << "DEBUG LLVM: Generating assign statement" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating assign statement" << std::endl;
             auto* assign = static_cast<mir::MIRAssignStatement*>(stmt);
-            std::cerr << "DEBUG LLVM: Converting rvalue" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting rvalue" << std::endl;
             llvm::Value* value = convertRValue(assign->rvalue.get());
-            std::cerr << "DEBUG LLVM: RValue converted, value=" << value << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: RValue converted, value=" << value << std::endl;
             
             // Store the value in the alloca for this variable
             if (value) {
-                std::cerr << "DEBUG LLVM: Looking for alloca for variable " << assign->place.get() << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Looking for alloca for variable " << assign->place.get() << std::endl;
                 auto it = valueMap.find(assign->place.get());
                 if (it != valueMap.end()) {
                     if (llvm::isa<llvm::AllocaInst>(it->second)) {
-                        std::cerr << "DEBUG LLVM: Storing value in alloca" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Storing value in alloca" << std::endl;
                         builder->CreateStore(value, it->second);
 
                         // If the value is an array pointer, propagate the array type to the variable's alloca
                         auto arrayTypeIt = arrayTypeMap.find(value);
                         if (arrayTypeIt != arrayTypeMap.end()) {
                             arrayTypeMap[it->second] = arrayTypeIt->second;
-                            std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from value" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from value" << std::endl;
 
                             // Also propagate nested struct types for all fields
                             if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayTypeIt->second)) {
@@ -945,7 +956,7 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                                     auto nestedIt = nestedStructTypeMap.find(nestedKey);
                                     if (nestedIt != nestedStructTypeMap.end()) {
                                         nestedStructTypeMap[std::make_pair(it->second, fieldIdx)] = nestedIt->second;
-                                        std::cerr << "DEBUG LLVM: Propagated nested struct type for field " << fieldIdx << std::endl;
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Propagated nested struct type for field " << fieldIdx << std::endl;
                                     }
                                 }
                             }
@@ -956,7 +967,7 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                                 auto sourceArrayTypeIt = arrayTypeMap.find(loadSource);
                                 if (sourceArrayTypeIt != arrayTypeMap.end()) {
                                     arrayTypeMap[it->second] = sourceArrayTypeIt->second;
-                                    std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from source" << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from source" << std::endl;
 
                                     // Also propagate nested struct types for all fields
                                     if (auto* structType = llvm::dyn_cast<llvm::StructType>(sourceArrayTypeIt->second)) {
@@ -965,7 +976,7 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                                             auto nestedIt = nestedStructTypeMap.find(nestedKey);
                                             if (nestedIt != nestedStructTypeMap.end()) {
                                                 nestedStructTypeMap[std::make_pair(it->second, fieldIdx)] = nestedIt->second;
-                                                std::cerr << "DEBUG LLVM: Propagated nested struct type for field " << fieldIdx << " from source" << std::endl;
+                                                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Propagated nested struct type for field " << fieldIdx << " from source" << std::endl;
                                             }
                                         }
                                     }
@@ -973,13 +984,13 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                             }
                         }
                     } else {
-                        std::cerr << "DEBUG LLVM: WARNING - No alloca found, creating one" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - No alloca found, creating one" << std::endl;
                         llvm::AllocaInst* alloca = builder->CreateAlloca(value->getType(), nullptr, "var_alloca");
                         builder->CreateStore(value, alloca);
                         valueMap[assign->place.get()] = alloca;
                     }
                 } else {
-                    std::cerr << "DEBUG LLVM: ERROR - Variable not found in valueMap" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: ERROR - Variable not found in valueMap" << std::endl;
                     // Create alloca and store value
                     llvm::AllocaInst* alloca = builder->CreateAlloca(value->getType(), nullptr, "missing_var");
                     builder->CreateStore(value, alloca);
@@ -1006,15 +1017,15 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
 }
 
 void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
-    std::cerr << "DEBUG LLVM: generateTerminator called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: generateTerminator called" << std::endl;
     if (!terminator) {
-        std::cerr << "DEBUG LLVM: Terminator is null" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Terminator is null" << std::endl;
         return;
     }
     
     switch (terminator->kind) {
         case mir::MIRTerminator::Kind::Return: {
-            std::cerr << "DEBUG LLVM: Generating return terminator" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating return terminator" << std::endl;
             // Check if the function has a non-void return type
             llvm::Function* currentFunc = builder->GetInsertBlock()->getParent();
             llvm::Type* retType = currentFunc->getReturnType();
@@ -1026,12 +1037,14 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 if (currentReturnValue) {
                     // Check if the return value type matches the function return type
                     if (currentReturnValue->getType() != retType) {
-                        std::cerr << "DEBUG LLVM: Return type mismatch, attempting to convert" << std::endl;
-                        std::cerr << "DEBUG LLVM: Expected type: ";
-                        retType->print(llvm::errs());
-                        std::cerr << ", Got: ";
-                        currentReturnValue->getType()->print(llvm::errs());
-                        std::cerr << std::endl;
+                        if(NOVA_DEBUG) {
+                            std::cerr << "DEBUG LLVM: Return type mismatch, attempting to convert" << std::endl;
+                            std::cerr << "DEBUG LLVM: Expected type: ";
+                            retType->print(llvm::errs());
+                            std::cerr << ", Got: ";
+                            currentReturnValue->getType()->print(llvm::errs());
+                            std::cerr << std::endl;
+                        }
                         
                         // If we're returning a pointer but function expects i64, do a cast
                         if (currentReturnValue->getType()->isPointerTy() && retType->isIntegerTy(64)) {
@@ -1043,7 +1056,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
                         // If we're returning i1 (boolean) but function expects i64, extend it
                         else if (currentReturnValue->getType()->isIntegerTy(1) && retType->isIntegerTy(64)) {
-                            std::cerr << "DEBUG LLVM: Converting i1 return value to i64" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting i1 return value to i64" << std::endl;
                             currentReturnValue = builder->CreateZExt(currentReturnValue, retType, "bool_to_i64");
                         }
                     }
@@ -1067,50 +1080,52 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
         }
         
         case mir::MIRTerminator::Kind::Goto: {
-            std::cerr << "DEBUG LLVM: Generating goto terminator" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating goto terminator" << std::endl;
             auto* gotoTerm = static_cast<mir::MIRGotoTerminator*>(terminator);
-            std::cerr << "DEBUG LLVM: Goto target: " << gotoTerm->target << " with label: " << (gotoTerm->target ? gotoTerm->target->label : "null") << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Goto target: " << gotoTerm->target << " with label: " << (gotoTerm->target ? gotoTerm->target->label : "null") << std::endl;
             llvm::BasicBlock* targetBB = blockMap[gotoTerm->target];
             if (!targetBB) {
-                std::cerr << "DEBUG LLVM: ERROR - Target block not found in blockMap" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: ERROR - Target block not found in blockMap" << std::endl;
                 // Try to find the block by label
                 for (const auto& pair : blockMap) {
                     if (pair.first->label == gotoTerm->target->label) {
-                        std::cerr << "DEBUG LLVM: Found block with matching label: " << pair.first->label << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found block with matching label: " << pair.first->label << std::endl;
                         targetBB = pair.second;
                         break;
                     }
                 }
             }
             if (targetBB) {
-                std::cerr << "DEBUG LLVM: Creating branch to target block" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating branch to target block" << std::endl;
                 builder->CreateBr(targetBB);
             } else {
-                std::cerr << "DEBUG LLVM: ERROR - Could not find target block even by label" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: ERROR - Could not find target block even by label" << std::endl;
             }
             break;
         }
         
         case mir::MIRTerminator::Kind::SwitchInt: {
-            std::cerr << "DEBUG LLVM: Generating switch terminator" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating switch terminator" << std::endl;
             auto* switchTerm = static_cast<mir::MIRSwitchIntTerminator*>(terminator);
             
             // Debug: Print the discriminant
-            std::cerr << "DEBUG LLVM: Discriminant: " << switchTerm->discriminant.get() << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Discriminant: " << switchTerm->discriminant.get() << std::endl;
             if (switchTerm->discriminant->kind == mir::MIROperand::Kind::Copy) {
                 auto* copyOp = static_cast<mir::MIRCopyOperand*>(switchTerm->discriminant.get());
-                std::cerr << "DEBUG LLVM: Copy operand place: " << copyOp->place.get() << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Copy operand place: " << copyOp->place.get() << std::endl;
             }
             
             llvm::Value* value = convertOperand(switchTerm->discriminant.get());
             llvm::BasicBlock* defaultBB = blockMap[switchTerm->otherwise];
             
             // Debug: Print the original value
-            std::cerr << "DEBUG LLVM: Original value: ";
-            value->print(llvm::errs());
-            std::cerr << ", type: ";
-            value->getType()->print(llvm::errs());
-            std::cerr << std::endl;
+            if(NOVA_DEBUG) {
+                std::cerr << "DEBUG LLVM: Original value: ";
+                value->print(llvm::errs());
+                std::cerr << ", type: ";
+                value->getType()->print(llvm::errs());
+                std::cerr << std::endl;
+            }
             
             // For boolean conditions, use a conditional branch instead of a switch
             if (switchTerm->targets.size() == 1 && switchTerm->targets[0].value == 1) {
@@ -1121,26 +1136,28 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 if (value->getType()->isIntegerTy(1)) {
                     // Value is already a boolean, use it directly
                     cond = value;
-                    std::cerr << "DEBUG LLVM: Value is already boolean, using directly" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Value is already boolean, using directly" << std::endl;
                 } else if (value->getType()->isPointerTy()) {
                     // For pointer types (strings), compare with null pointer
                     cond = builder->CreateICmpNE(value, 
                         llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(value->getType())));
-                    std::cerr << "DEBUG LLVM: Converted pointer to boolean (null check)" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converted pointer to boolean (null check)" << std::endl;
                 } else {
                     // Convert the value to i1 (boolean) type for the condition
                     cond = builder->CreateICmpNE(value, 
                         llvm::ConstantInt::get(value->getType(), 0));
-                    std::cerr << "DEBUG LLVM: Converted to boolean" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converted to boolean" << std::endl;
                 }
                 
-                std::cerr << "DEBUG LLVM: Creating conditional branch with condition: ";
-                cond->print(llvm::errs());
-                std::cerr << std::endl;
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: Creating conditional branch with condition: ";
+                    cond->print(llvm::errs());
+                    std::cerr << std::endl;
+                }
                 
                 // Check if the condition is a constant
                 if (llvm::isa<llvm::ConstantInt>(cond)) {
-                    std::cerr << "DEBUG LLVM: WARNING - Condition is a constant!" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Condition is a constant!" << std::endl;
                 }
                 
                 builder->CreateCondBr(cond, trueBB, defaultBB);
@@ -1167,35 +1184,35 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
         }
         
         case mir::MIRTerminator::Kind::Call: {
-            std::cerr << "DEBUG LLVM: Processing Call terminator" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Call terminator" << std::endl;
             auto* callTerm = static_cast<mir::MIRCallTerminator*>(terminator);
 
             // Get the function to call
             llvm::Function* callee = nullptr;
 
             // Debug: Check what kind of operand we have
-            std::cerr << "DEBUG LLVM: Call func operand kind: " << static_cast<int>(callTerm->func->kind) << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Call func operand kind: " << static_cast<int>(callTerm->func->kind) << std::endl;
 
             // Check if func operand is a string constant (function name)
             if (auto* constOp = dynamic_cast<mir::MIRConstOperand*>(callTerm->func.get())) {
-                std::cerr << "DEBUG LLVM: func operand IS a const operand, constKind: " << static_cast<int>(constOp->constKind) << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: func operand IS a const operand, constKind: " << static_cast<int>(constOp->constKind) << std::endl;
                 if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
                     std::string funcName = std::get<std::string>(constOp->value);
-                    std::cerr << "DEBUG LLVM: Looking for function: " << funcName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Looking for function: " << funcName << std::endl;
 
                     auto it = functionMap.find(funcName);
                     if (it != functionMap.end()) {
                         callee = it->second;
-                        std::cerr << "DEBUG LLVM: Found function in functionMap" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found function in functionMap" << std::endl;
                     } else {
                         // Function not found in map - may be an external/intrinsic function
                         // Try to find it in the LLVM module
                         callee = module->getFunction(funcName);
-                        std::cerr << "DEBUG LLVM: Tried module->getFunction, result: " << callee << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Tried module->getFunction, result: " << callee << std::endl;
 
                         if (!callee && funcName == "malloc") {
                             // Create malloc declaration: ptr @malloc(i64)
-                            std::cerr << "DEBUG LLVM: Creating external malloc declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external malloc declaration" << std::endl;
                             llvm::FunctionType* mallocType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::Type::getInt64Ty(*context)},
@@ -1207,12 +1224,12 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 "malloc",
                                 module.get()
                             );
-                            std::cerr << "DEBUG LLVM: Created malloc declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created malloc declaration" << std::endl;
                         }
 
                         if (!callee && funcName == "strlen") {
                             // Create strlen declaration: i64 @strlen(ptr)
-                            std::cerr << "DEBUG LLVM: Creating external strlen declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external strlen declaration" << std::endl;
                             llvm::FunctionType* strlenType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1224,13 +1241,518 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 "strlen",
                                 module.get()
                             );
-                            std::cerr << "DEBUG LLVM: Created strlen declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created strlen declaration" << std::endl;
                         }
 
-                        // Create declarations for string method runtime functions
+                        // Create declarations for nova: module runtime functions
+                        // nova:fs module functions (Node.js compatible)
+
+                        // Functions returning ptr (string): readFileSync, realpathSync, readlinkSync, readdirSync, mkdtempSync
+                        if (!callee && (funcName == "nova_fs_readFileSync" || funcName == "nova_fs_realpathSync" ||
+                                        funcName == "nova_fs_readlinkSync" || funcName == "nova_fs_readdirSync" ||
+                                        funcName == "nova_fs_mkdtempSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration (ptr)" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // Functions returning ptr with 2 ptr args: readFileSyncEncoding
+                        if (!callee && funcName == "nova_fs_readFileSyncEncoding") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // Functions returning ptr (Stats object): statSync, lstatSync
+                        if (!callee && (funcName == "nova_fs_statSync" || funcName == "nova_fs_lstatSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration (stats)" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // Functions returning i32 with 1 ptr arg: existsSync, unlinkSync, mkdirSync, rmdirSync, rmSync
+                        if (!callee && (funcName == "nova_fs_existsSync" || funcName == "nova_fs_unlinkSync" ||
+                                        funcName == "nova_fs_mkdirSync" || funcName == "nova_fs_rmdirSync" ||
+                                        funcName == "nova_fs_rmSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration (i32)" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // Functions returning i32 with 2 ptr args: writeFileSync, appendFileSync, copyFileSync, cpSync, renameSync, linkSync, symlinkSync
+                        if (!callee && (funcName == "nova_fs_writeFileSync" || funcName == "nova_fs_appendFileSync" ||
+                                        funcName == "nova_fs_copyFileSync" || funcName == "nova_fs_cpSync" ||
+                                        funcName == "nova_fs_renameSync" || funcName == "nova_fs_linkSync" ||
+                                        funcName == "nova_fs_symlinkSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration (i32, 2 ptr)" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.accessSync(path, mode) - i32 @(ptr, i32)
+                        if (!callee && funcName == "nova_fs_accessSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.truncateSync(path, len) - i32 @(ptr, i64)
+                        if (!callee && funcName == "nova_fs_truncateSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.chmodSync(path, mode) - i32 @(ptr, i32)
+                        if (!callee && funcName == "nova_fs_chmodSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.chownSync(path, uid, gid), fs.lchownSync(path, uid, gid) - i32 @(ptr, i32, i32)
+                        if (!callee && (funcName == "nova_fs_chownSync" || funcName == "nova_fs_lchownSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt32Ty(*context), llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.utimesSync(path, atime, mtime) - i32 @(ptr, double, double)
+                        if (!callee && funcName == "nova_fs_utimesSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getDoubleTy(*context), llvm::Type::getDoubleTy(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.openSync(path, flags) - i32 @(ptr, ptr)
+                        if (!callee && funcName == "nova_fs_openSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.closeSync(fd), fs.fsyncSync(fd) - i32 @(i32)
+                        if (!callee && (funcName == "nova_fs_closeSync" || funcName == "nova_fs_fsyncSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.ftruncateSync(fd, len) - i32 @(i32, i64)
+                        if (!callee && funcName == "nova_fs_ftruncateSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.fstatSync(fd) - ptr @(i32)
+                        if (!callee && funcName == "nova_fs_fstatSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.fchmodSync(fd, mode) - i32 @(i32, i32)
+                        if (!callee && funcName == "nova_fs_fchmodSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.fchownSync(fd, uid, gid) - i32 @(i32, i32, i32)
+                        if (!callee && funcName == "nova_fs_fchownSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::Type::getInt32Ty(*context), llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.fdatasyncSync(fd) - i32 @(i32)
+                        if (!callee && funcName == "nova_fs_fdatasyncSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.futimesSync(fd, atime, mtime) - i32 @(i32, double, double)
+                        if (!callee && funcName == "nova_fs_futimesSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::Type::getDoubleTy(*context), llvm::Type::getDoubleTy(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.readSync(fd, buffer, length, position) - i64 @(i32, ptr, i64, i64)
+                        if (!callee && funcName == "nova_fs_readSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context), llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.writeSync(fd, buffer, length, position) - i64 @(i32, ptr, i64, i64)
+                        if (!callee && funcName == "nova_fs_writeSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::PointerType::getUnqual(*context), llvm::Type::getInt64Ty(*context), llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // Stats helper functions returning i64: nova_fs_stats_size, nova_fs_stats_mode
+                        if (!callee && (funcName == "nova_fs_stats_size" || funcName == "nova_fs_stats_mode")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // Stats helper functions returning double: nova_fs_stats_mtimeMs, etc.
+                        if (!callee && (funcName == "nova_fs_stats_mtimeMs" || funcName == "nova_fs_stats_atimeMs" ||
+                                        funcName == "nova_fs_stats_ctimeMs" || funcName == "nova_fs_stats_birthtimeMs")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // Stats helper functions returning i32: nova_fs_stats_isFile, isDirectory, etc.
+                        if (!callee && (funcName == "nova_fs_stats_isFile" || funcName == "nova_fs_stats_isDirectory" ||
+                                        funcName == "nova_fs_stats_isSymbolicLink" || funcName == "nova_fs_stats_isBlockDevice" ||
+                                        funcName == "nova_fs_stats_isCharacterDevice" || funcName == "nova_fs_stats_isFIFO" ||
+                                        funcName == "nova_fs_stats_isSocket")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // nova_fs_stats_free - void @(ptr)
+                        if (!callee && funcName == "nova_fs_stats_free") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.constants - i32 @()
+                        if (!callee && (funcName == "nova_fs_constants_F_OK" || funcName == "nova_fs_constants_R_OK" ||
+                                        funcName == "nova_fs_constants_W_OK" || funcName == "nova_fs_constants_X_OK" ||
+                                        funcName == "nova_fs_constants_COPYFILE_EXCL" || funcName == "nova_fs_constants_COPYFILE_FICLONE" ||
+                                        funcName == "nova_fs_constants_COPYFILE_FICLONE_FORCE" ||
+                                        funcName == "nova_fs_constants_O_RDONLY" || funcName == "nova_fs_constants_O_WRONLY" ||
+                                        funcName == "nova_fs_constants_O_RDWR" || funcName == "nova_fs_constants_O_CREAT" ||
+                                        funcName == "nova_fs_constants_O_EXCL" || funcName == "nova_fs_constants_O_TRUNC" ||
+                                        funcName == "nova_fs_constants_O_APPEND")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.opendirSync(path) - ptr @(ptr)
+                        if (!callee && (funcName == "nova_fs_opendirSync" || funcName == "nova_fs_statfsSync" ||
+                                        funcName == "nova_fs_globSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.dir_readSync(dir), dirent_name - ptr @(ptr)
+                        if (!callee && (funcName == "nova_fs_dir_readSync" || funcName == "nova_fs_dir_readSyncDirent" ||
+                                        funcName == "nova_fs_dirent_name")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.dir_closeSync, dirent helpers - i32 @(ptr)
+                        if (!callee && (funcName == "nova_fs_dir_closeSync" ||
+                                        funcName == "nova_fs_dirent_isFile" ||
+                                        funcName == "nova_fs_dirent_isDirectory" ||
+                                        funcName == "nova_fs_dirent_isSymbolicLink" ||
+                                        funcName == "nova_fs_unwatchFile")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.dirent_free, statfs_free - void @(ptr)
+                        if (!callee && (funcName == "nova_fs_dirent_free" || funcName == "nova_fs_statfs_free")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.statfs helpers - i64 @(ptr)
+                        if (!callee && (funcName == "nova_fs_statfs_bsize" || funcName == "nova_fs_statfs_blocks" ||
+                                        funcName == "nova_fs_statfs_bfree" || funcName == "nova_fs_statfs_bavail")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.globSyncOptions(pattern, cwd) - ptr @(ptr, ptr)
+                        if (!callee && funcName == "nova_fs_globSyncOptions") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.lchmodSync(path, mode) - i32 @(ptr, i32)
+                        if (!callee && funcName == "nova_fs_lchmodSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.lutimesSync(path, atime, mtime) - i32 @(ptr, double, double)
+                        if (!callee && funcName == "nova_fs_lutimesSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::Type::getDoubleTy(*context), llvm::Type::getDoubleTy(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.readvSync(fd, buffers, lengths, count, position) - i64 @(i32, ptr, ptr, i32, i64)
+                        if (!callee && funcName == "nova_fs_readvSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context), llvm::Type::getInt32Ty(*context), llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.writevSync(fd, buffers, lengths, count, position) - i64 @(i32, ptr, ptr, i32, i64)
+                        if (!callee && funcName == "nova_fs_writevSync") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::Type::getInt32Ty(*context), llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context), llvm::Type::getInt32Ty(*context), llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // fs.realpathSyncNative(path), mkdtempDisposableSync(prefix) - ptr @(ptr)
+                        if (!callee && (funcName == "nova_fs_realpathSyncNative" || funcName == "nova_fs_mkdtempDisposableSync")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // nova:path module functions
+                        if (!callee && (funcName == "nova_path_dirname" || funcName == "nova_path_basename" ||
+                                        funcName == "nova_path_extname" || funcName == "nova_path_normalize" ||
+                                        funcName == "nova_path_resolve")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_path_isAbsolute") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_path_isAbsolute declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_path_relative") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_path_relative declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
+                        // nova:os module functions
+                        if (!callee && (funcName == "nova_os_platform" || funcName == "nova_os_arch" ||
+                                        funcName == "nova_os_homedir" || funcName == "nova_os_tmpdir" ||
+                                        funcName == "nova_os_hostname" || funcName == "nova_os_cwd")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_os_getenv") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_os_getenv declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && (funcName == "nova_os_chdir" || funcName == "nova_os_cpus")) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external " << funcName << " declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                funcName == "nova_os_cpus" ? std::vector<llvm::Type*>{} : std::vector<llvm::Type*>{llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_os_setenv") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_os_setenv declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt32Ty(*context),
+                                {llvm::PointerType::getUnqual(*context), llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_os_exit") {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_os_exit declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::Type::getInt32Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
+                        }
+
                         if (!callee && funcName == "nova_string_substring") {
                             // ptr @nova_string_substring(ptr, i64, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_substring declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_substring declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1248,7 +1770,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_indexOf") {
                             // i64 @nova_string_indexOf(ptr, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_indexOf declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_indexOf declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1265,7 +1787,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_lastIndexOf") {
                             // i64 @nova_string_lastIndexOf(ptr, ptr) - searches from end
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_lastIndexOf declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_lastIndexOf declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (index or -1)
                                 {llvm::PointerType::getUnqual(*context),
@@ -1282,7 +1804,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_match") {
                             // i64 @nova_string_match(ptr, ptr) - counts substring occurrences
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_match declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_match declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (count of matches)
                                 {llvm::PointerType::getUnqual(*context),
@@ -1299,7 +1821,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_localeCompare") {
                             // i64 @nova_string_localeCompare(ptr, ptr) - compares strings
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_localeCompare declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_localeCompare declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (-1, 0, 1)
                                 {llvm::PointerType::getUnqual(*context),
@@ -1316,7 +1838,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_charAt") {
                             // ptr @nova_string_charAt(ptr, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_charAt declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_charAt declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1333,7 +1855,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_charCodeAt") {
                             // i64 @nova_string_charCodeAt(ptr, i64) - returns character code
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_charCodeAt declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_charCodeAt declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (character code)
                                 {llvm::PointerType::getUnqual(*context),
@@ -1350,7 +1872,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_codePointAt") {
                             // i64 @nova_string_codePointAt(ptr, i64) - returns Unicode code point (ES2015)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_codePointAt declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_codePointAt declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (code point)
                                 {llvm::PointerType::getUnqual(*context),
@@ -1367,7 +1889,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_at") {
                             // i64 @nova_string_at(ptr, i64) - returns character code at index (supports negative)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_at declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_at declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (character code)
                                 {llvm::PointerType::getUnqual(*context),
@@ -1384,7 +1906,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_fromCharCode") {
                             // ptr @nova_string_fromCharCode(i64) - returns string from character code
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_fromCharCode declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_fromCharCode declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns ptr (string)
                                 {llvm::Type::getInt64Ty(*context)},
@@ -1400,7 +1922,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_fromCodePoint") {
                             // ptr @nova_string_fromCodePoint(i64) - returns string from Unicode code point (ES2015)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_fromCodePoint declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_fromCodePoint declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns ptr (string)
                                 {llvm::Type::getInt64Ty(*context)},
@@ -1416,7 +1938,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_concat") {
                             // ptr @nova_string_concat(ptr, ptr) - concatenates two strings
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_concat declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_concat declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns ptr (string)
                                 {llvm::PointerType::getUnqual(*context),
@@ -1433,7 +1955,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_toLowerCase") {
                             // ptr @nova_string_toLowerCase(ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_toLowerCase declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_toLowerCase declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1449,7 +1971,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_toUpperCase") {
                             // ptr @nova_string_toUpperCase(ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_toUpperCase declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_toUpperCase declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1465,7 +1987,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_trim") {
                             // ptr @nova_string_trim(ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_trim declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_trim declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1481,7 +2003,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_trimStart") {
                             // ptr @nova_string_trimStart(ptr) - removes leading whitespace
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_trimStart declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_trimStart declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1497,7 +2019,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_trimEnd") {
                             // ptr @nova_string_trimEnd(ptr) - removes trailing whitespace
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_trimEnd declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_trimEnd declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1513,7 +2035,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_startsWith") {
                             // i64 @nova_string_startsWith(ptr, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_startsWith declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_startsWith declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1530,7 +2052,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_endsWith") {
                             // i64 @nova_string_endsWith(ptr, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_endsWith declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_endsWith declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1547,7 +2069,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_repeat") {
                             // ptr @nova_string_repeat(ptr, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_repeat declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_repeat declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1564,7 +2086,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_includes") {
                             // i64 @nova_string_includes(ptr, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_includes declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_includes declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1581,7 +2103,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_slice") {
                             // ptr @nova_string_slice(ptr, i64, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_slice declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_slice declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1599,7 +2121,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_replace") {
                             // ptr @nova_string_replace(ptr, ptr, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_replace declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_replace declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1617,7 +2139,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_replaceAll") {
                             // ptr @nova_string_replaceAll(ptr, ptr, ptr) - ES2021
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_replaceAll declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_replaceAll declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1635,7 +2157,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_padStart") {
                             // ptr @nova_string_padStart(ptr, i64, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_padStart declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_padStart declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1653,7 +2175,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_string_padEnd") {
                             // ptr @nova_string_padEnd(ptr, i64, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_string_padEnd declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_padEnd declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1674,7 +2196,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_push") {
                             // void @nova_value_array_push(ptr, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_push declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_push declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1691,7 +2213,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_pop") {
                             // i64 @nova_value_array_pop(ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_pop declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_pop declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1707,7 +2229,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_shift") {
                             // i64 @nova_value_array_shift(ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_shift declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_shift declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1723,7 +2245,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_unshift") {
                             // void @nova_value_array_unshift(ptr, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_unshift declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_unshift declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1740,7 +2262,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_at") {
                             // i64 @nova_value_array_at(ptr, i64) - returns element at index (supports negative indices)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_at declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_at declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -1757,7 +2279,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_with") {
                             // ptr @nova_value_array_with(ptr, i64, i64) - ES2023, returns new array with element replaced
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_with declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_with declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context),
@@ -1775,7 +2297,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_toReversed") {
                             // ptr @nova_value_array_toReversed(ptr) - ES2023, returns new reversed array
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_toReversed declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_toReversed declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1791,7 +2313,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_toSorted") {
                             // ptr @nova_value_array_toSorted(ptr) - ES2023, returns new sorted array
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_toSorted declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_toSorted declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1807,7 +2329,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_sort") {
                             // ptr @nova_value_array_sort(ptr) - in-place sort, returns same array
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_sort declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_sort declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to same array
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1823,7 +2345,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_splice") {
                             // ptr @nova_value_array_splice(ptr, i64, i64) - removes elements, returns same array
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_splice declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_splice declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to same array
                                 {llvm::PointerType::getUnqual(*context),
@@ -1841,7 +2363,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_copyWithin") {
                             // ptr @nova_value_array_copyWithin(ptr, i64, i64, i64) - copies part to another location
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_copyWithin declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_copyWithin declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to same array
                                 {llvm::PointerType::getUnqual(*context),  // array pointer
@@ -1860,7 +2382,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_toSpliced") {
                             // ptr @nova_value_array_toSpliced(ptr, i64, i64) - returns new array with elements removed (ES2023)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_toSpliced declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_toSpliced declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context),  // array pointer
@@ -1878,7 +2400,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_toString") {
                             // ptr @nova_value_array_toString(ptr) - returns comma-separated string
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_toString declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_toString declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to string
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1894,7 +2416,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_flat") {
                             // ptr @nova_value_array_flat(ptr) - flattens nested arrays one level deep
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_flat declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_flat declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context)},
@@ -1910,7 +2432,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_flatMap") {
                             // ptr @nova_value_array_flatMap(ptr, ptr) - maps then flattens (ES2019)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_flatMap declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_flatMap declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context),  // array pointer
@@ -1927,7 +2449,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_array_from") {
                             // ptr @nova_array_from(ptr) - static method creates array from array-like
-                            std::cerr << "DEBUG LLVM: Creating external nova_array_from declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_array_from declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context)}, // array pointer
@@ -1943,7 +2465,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_array_of") {
                             // ptr @nova_array_of(i64, ...) - variadic static method creates array from elements
-                            std::cerr << "DEBUG LLVM: Creating external nova_array_of declaration (variadic)" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_array_of declaration (variadic)" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),      // Returns pointer to new array
                                 {llvm::Type::getInt64Ty(*context)},          // First param: count
@@ -1959,7 +2481,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_values") {
                             // ptr @nova_object_values(ptr) - returns array of object's property values (ES2017)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_values declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_values declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to array
                                 {llvm::PointerType::getUnqual(*context)}, // Object pointer
@@ -1975,7 +2497,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_keys") {
                             // ptr @nova_object_keys(ptr) - returns array of object's property keys (ES2015)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_keys declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_keys declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to array
                                 {llvm::PointerType::getUnqual(*context)}, // Object pointer
@@ -1991,7 +2513,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_entries") {
                             // ptr @nova_object_entries(ptr) - returns array of [key, value] pairs (ES2017)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_entries declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_entries declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to array
                                 {llvm::PointerType::getUnqual(*context)}, // Object pointer
@@ -2007,7 +2529,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_assign") {
                             // ptr @nova_object_assign(ptr, ptr) - copies properties from source to target (ES2015)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_assign declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_assign declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to target object
                                 {llvm::PointerType::getUnqual(*context),  // Target object pointer
@@ -2024,7 +2546,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_hasOwn") {
                             // i64 @nova_object_hasOwn(ptr, ptr) - checks if object has own property (ES2022)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_hasOwn declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_hasOwn declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),        // Returns boolean (i64)
                                 {llvm::PointerType::getUnqual(*context),  // Object pointer
@@ -2041,7 +2563,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_freeze") {
                             // ptr @nova_object_freeze(ptr) - makes object immutable (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_freeze declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_freeze declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to frozen object
                                 {llvm::PointerType::getUnqual(*context)}, // Object pointer
@@ -2057,7 +2579,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_isFrozen") {
                             // i64 @nova_object_isFrozen(ptr) - checks if object is frozen (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_isFrozen declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_isFrozen declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),        // Returns boolean (i64)
                                 {llvm::PointerType::getUnqual(*context)}, // Object pointer
@@ -2073,7 +2595,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_seal") {
                             // ptr @nova_object_seal(ptr) - seals object, prevents add/delete properties (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_seal declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_seal declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to sealed object
                                 {llvm::PointerType::getUnqual(*context)}, // Object pointer
@@ -2089,7 +2611,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_isSealed") {
                             // i64 @nova_object_isSealed(ptr) - checks if object is sealed (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_isSealed declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_isSealed declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),        // Returns boolean (i64)
                                 {llvm::PointerType::getUnqual(*context)}, // Object pointer
@@ -2105,7 +2627,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_object_is") {
                             // i64 @nova_object_is(i64, i64) - determines if two values are the same (ES2015)
-                            std::cerr << "DEBUG LLVM: Creating external nova_object_is declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_object_is declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),        // Returns boolean (i64)
                                 {llvm::Type::getInt64Ty(*context),       // value1 (i64)
@@ -2122,7 +2644,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_date_now") {
                             // i64 @nova_date_now() - returns current timestamp in milliseconds (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_date_now declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_date_now declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),        // Returns timestamp (i64)
                                 {},                                       // No parameters
@@ -2138,7 +2660,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_performance_now") {
                             // double @nova_performance_now() - returns high-resolution timestamp (Web Performance API)
-                            std::cerr << "DEBUG LLVM: Creating external nova_performance_now declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_performance_now declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),        // Returns double (high-res milliseconds)
                                 {},                                        // No parameters
@@ -2154,7 +2676,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_math_min") {
                             // i64 @nova_math_min(i64, i64) - returns the smaller of two values (ES1)
-                            std::cerr << "DEBUG LLVM: Creating external nova_math_min declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_math_min declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),          // Returns i64
                                 {llvm::Type::getInt64Ty(*context),         // First value (a)
@@ -2171,7 +2693,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_math_max") {
                             // i64 @nova_math_max(i64, i64) - returns the larger of two values (ES1)
-                            std::cerr << "DEBUG LLVM: Creating external nova_math_max declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_math_max declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),          // Returns i64
                                 {llvm::Type::getInt64Ty(*context),         // First value (a)
@@ -2188,7 +2710,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_json_stringify_number") {
                             // ptr @nova_json_stringify_number(i64) - converts number to JSON string (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_json_stringify_number declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_json_stringify_number declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::Type::getInt64Ty(*context)},        // Number value
@@ -2204,7 +2726,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_json_stringify_string") {
                             // ptr @nova_json_stringify_string(ptr) - converts string to JSON string with quotes (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_json_stringify_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_json_stringify_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::PointerType::getUnqual(*context)},  // String value
@@ -2220,7 +2742,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_json_stringify_bool") {
                             // ptr @nova_json_stringify_bool(i64) - converts boolean to JSON string (ES5)
-                            std::cerr << "DEBUG LLVM: Creating external nova_json_stringify_bool declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_json_stringify_bool declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::Type::getInt64Ty(*context)},        // Boolean value (as i64)
@@ -2236,7 +2758,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_encodeURIComponent") {
                             // ptr @nova_encodeURIComponent(ptr) - encodes a URI component (ES3)
-                            std::cerr << "DEBUG LLVM: Creating external nova_encodeURIComponent declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_encodeURIComponent declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::PointerType::getUnqual(*context)},  // String value
@@ -2252,7 +2774,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_decodeURIComponent") {
                             // ptr @nova_decodeURIComponent(ptr) - decodes a URI component (ES3)
-                            std::cerr << "DEBUG LLVM: Creating external nova_decodeURIComponent declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_decodeURIComponent declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::PointerType::getUnqual(*context)},  // String value
@@ -2268,7 +2790,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_btoa") {
                             // ptr @nova_btoa(ptr) - encodes a string to base64 (Web API)
-                            std::cerr << "DEBUG LLVM: Creating external nova_btoa declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_btoa declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::PointerType::getUnqual(*context)},  // String value
@@ -2284,7 +2806,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_atob") {
                             // ptr @nova_atob(ptr) - decodes a base64 string (Web API)
-                            std::cerr << "DEBUG LLVM: Creating external nova_atob declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_atob declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::PointerType::getUnqual(*context)},  // String value
@@ -2300,7 +2822,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_encodeURI") {
                             // ptr @nova_encodeURI(ptr) - encodes a full URI (ES3)
-                            std::cerr << "DEBUG LLVM: Creating external nova_encodeURI declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_encodeURI declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::PointerType::getUnqual(*context)},  // String value
@@ -2316,7 +2838,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_decodeURI") {
                             // ptr @nova_decodeURI(ptr) - decodes a full URI (ES3)
-                            std::cerr << "DEBUG LLVM: Creating external nova_decodeURI declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_decodeURI declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),    // Returns string pointer
                                 {llvm::PointerType::getUnqual(*context)},  // String value
@@ -2332,7 +2854,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_throw") {
                             // void @nova_throw(i64) - throws an exception
-                            std::cerr << "DEBUG LLVM: Creating external nova_throw declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_throw declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),    // Returns void
                                 {llvm::Type::getInt64Ty(*context)}, // Exception value (i64)
@@ -2348,7 +2870,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
 
                         if (!callee && funcName == "nova_try_begin") {
-                            std::cerr << "DEBUG LLVM: Creating external nova_try_begin declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_try_begin declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),
                                 {},
@@ -2363,7 +2885,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
 
                         if (!callee && funcName == "nova_try_end") {
-                            std::cerr << "DEBUG LLVM: Creating external nova_try_end declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_try_end declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),
                                 {},
@@ -2378,7 +2900,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
 
                         if (!callee && funcName == "nova_get_exception") {
-                            std::cerr << "DEBUG LLVM: Creating external nova_get_exception declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_get_exception declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {},
@@ -2393,7 +2915,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
 
                         if (!callee && funcName == "nova_clear_exception") {
-                            std::cerr << "DEBUG LLVM: Creating external nova_clear_exception declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_clear_exception declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),
                                 {},
@@ -2408,7 +2930,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
                         if (!callee && funcName == "nova_number_toFixed") {
                             // ptr @nova_number_toFixed(double, i64) - formats number with fixed decimal places
-                            std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_number_toFixed declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns string pointer
                                 {llvm::Type::getDoubleTy(*context),      // Number (as double/F64)
@@ -2425,7 +2947,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_number_toExponential") {
                             // ptr @nova_number_toExponential(double, i64) - formats number in exponential notation
-                            std::cerr << "DEBUG LLVM: Creating external nova_number_toExponential declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_number_toExponential declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns string pointer
                                 {llvm::Type::getDoubleTy(*context),      // Number (as double/F64)
@@ -2442,7 +2964,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_number_toPrecision") {
                             // ptr @nova_number_toPrecision(double, i64) - formats number with specified precision
-                            std::cerr << "DEBUG LLVM: Creating external nova_number_toPrecision declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_number_toPrecision declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns string pointer
                                 {llvm::Type::getDoubleTy(*context),      // Number (as double/F64)
@@ -2459,7 +2981,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_number_toString") {
                             // ptr @nova_number_toString(double, i64) - converts number to string with optional radix
-                            std::cerr << "DEBUG LLVM: Creating external nova_number_toString declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_number_toString declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns string pointer
                                 {llvm::Type::getDoubleTy(*context),      // Number (as double/F64)
@@ -2476,7 +2998,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_number_valueOf") {
                             // double @nova_number_valueOf(double) - returns primitive value
-                            std::cerr << "DEBUG LLVM: Creating external nova_number_valueOf declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_number_valueOf declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),       // Returns double (F64)
                                 {llvm::Type::getDoubleTy(*context)},     // Number (as double/F64)
@@ -2492,7 +3014,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_number_parseInt") {
                             // i64 @nova_number_parseInt(ptr, i64) - parses string to integer
-                            std::cerr << "DEBUG LLVM: Creating external nova_number_parseInt declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_number_parseInt declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),          // Returns i64
                                 {llvm::PointerType::getUnqual(*context),   // String pointer
@@ -2509,7 +3031,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_number_parseFloat") {
                             // double @nova_number_parseFloat(ptr) - parses string to floating-point number
-                            std::cerr << "DEBUG LLVM: Creating external nova_number_parseFloat declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_number_parseFloat declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),         // Returns double (F64)
                                 {llvm::PointerType::getUnqual(*context)},  // String pointer
@@ -2525,7 +3047,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_global_isNaN") {
                             // i64 @nova_global_isNaN(double) - tests if value is NaN
-                            std::cerr << "DEBUG LLVM: Creating external nova_global_isNaN declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_global_isNaN declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),        // Returns i64 (bool as int)
                                 {llvm::Type::getDoubleTy(*context)},     // Value to test (F64)
@@ -2541,7 +3063,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_global_isFinite") {
                             // i64 @nova_global_isFinite(double) - tests if value is finite
-                            std::cerr << "DEBUG LLVM: Creating external nova_global_isFinite declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_global_isFinite declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),        // Returns i64 (bool as int)
                                 {llvm::Type::getDoubleTy(*context)},     // Value to test (F64)
@@ -2557,7 +3079,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_global_parseInt") {
                             // i64 @nova_global_parseInt(ptr, i64) - parses string to integer
-                            std::cerr << "DEBUG LLVM: Creating external nova_global_parseInt declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_global_parseInt declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),           // Returns i64
                                 {llvm::PointerType::getUnqual(*context),    // String pointer
@@ -2574,7 +3096,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_global_parseFloat") {
                             // double @nova_global_parseFloat(ptr) - parses string to float
-                            std::cerr << "DEBUG LLVM: Creating external nova_global_parseFloat declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_global_parseFloat declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),          // Returns double (F64)
                                 {llvm::PointerType::getUnqual(*context)},   // String pointer
@@ -2590,7 +3112,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_log_string") {
                             // void @nova_console_log_string(ptr) - outputs string to stdout
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_log_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_log_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer
@@ -2606,7 +3128,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_log_number") {
                             // void @nova_console_log_number(i64) - outputs number to stdout
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_log_number declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_log_number declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),        // Returns void
                                 {llvm::Type::getInt64Ty(*context)},     // Number (i64)
@@ -2622,7 +3144,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_error_string") {
                             // void @nova_console_error_string(ptr) - outputs string to stderr
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_error_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_error_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer
@@ -2638,7 +3160,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_error_number") {
                             // void @nova_console_error_number(i64) - outputs number to stderr
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_error_number declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_error_number declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),        // Returns void
                                 {llvm::Type::getInt64Ty(*context)},     // Number (i64)
@@ -2654,7 +3176,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_warn_string") {
                             // void @nova_console_warn_string(ptr) - outputs warning string to stderr
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_warn_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_warn_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer
@@ -2670,7 +3192,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_warn_number") {
                             // void @nova_console_warn_number(i64) - outputs number to stderr
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_warn_number declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_warn_number declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),        // Returns void
                                 {llvm::Type::getInt64Ty(*context)},     // Number (i64)
@@ -2686,7 +3208,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_info_string") {
                             // void @nova_console_info_string(ptr) - outputs info string to stdout
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_info_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_info_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer
@@ -2702,7 +3224,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_info_number") {
                             // void @nova_console_info_number(i64) - outputs number to stdout
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_info_number declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_info_number declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),        // Returns void
                                 {llvm::Type::getInt64Ty(*context)},     // Number (i64)
@@ -2718,7 +3240,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_debug_string") {
                             // void @nova_console_debug_string(ptr) - outputs debug string to stdout
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_debug_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_debug_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer
@@ -2734,7 +3256,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_debug_number") {
                             // void @nova_console_debug_number(i64) - outputs number to stdout
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_debug_number declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_debug_number declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),        // Returns void
                                 {llvm::Type::getInt64Ty(*context)},     // Number (i64)
@@ -2750,7 +3272,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_clear") {
                             // void @nova_console_clear() - clears the console
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_clear declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_clear declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),  // Returns void
                                 {},                                // No parameters
@@ -2766,7 +3288,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_time_string") {
                             // void @nova_console_time_string(ptr) - starts timer with label
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_time_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_time_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer (label)
@@ -2782,7 +3304,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_timeEnd_string") {
                             // void @nova_console_timeEnd_string(ptr) - ends timer and prints elapsed
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_timeEnd_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_timeEnd_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer (label)
@@ -2798,7 +3320,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_assert") {
                             // void @nova_console_assert(i64, ptr) - prints error if condition is false
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_assert declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_assert declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),           // Returns void
                                 {llvm::Type::getInt64Ty(*context),         // Condition (i64)
@@ -2815,7 +3337,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_count_string") {
                             // void @nova_console_count_string(ptr) - increments and prints counter
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_count_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_count_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer (label)
@@ -2831,7 +3353,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_countReset_string") {
                             // void @nova_console_countReset_string(ptr) - resets counter to zero
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_countReset_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_countReset_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer (label)
@@ -2847,7 +3369,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_table_array") {
                             // void @nova_console_table_array(ptr) - displays array in table format
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_table_array declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_table_array declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // ValueArray* pointer
@@ -2863,7 +3385,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_group_string") {
                             // void @nova_console_group_string(ptr) - starts group with label
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_group_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_group_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer (label)
@@ -2879,7 +3401,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_group_default") {
                             // void @nova_console_group_default() - starts group without label
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_group_default declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_group_default declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {},                                       // No parameters
@@ -2895,7 +3417,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_groupEnd") {
                             // void @nova_console_groupEnd() - ends current group
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_groupEnd declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_groupEnd declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {},                                       // No parameters
@@ -2911,7 +3433,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_trace_string") {
                             // void @nova_console_trace_string(ptr) - prints stack trace with message
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_trace_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_trace_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer (message)
@@ -2927,7 +3449,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_trace_default") {
                             // void @nova_console_trace_default() - prints stack trace without message
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_trace_default declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_trace_default declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {},                                       // No parameters
@@ -2943,7 +3465,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_dir_number") {
                             // void @nova_console_dir_number(i64) - displays number value
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_dir_number declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_dir_number declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::Type::getInt64Ty(*context)},      // int64 value
@@ -2959,7 +3481,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_dir_string") {
                             // void @nova_console_dir_string(ptr) - displays string value
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_dir_string declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_dir_string declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // String pointer
@@ -2975,7 +3497,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_console_dir_array") {
                             // void @nova_console_dir_array(ptr) - displays array value
-                            std::cerr << "DEBUG LLVM: Creating external nova_console_dir_array declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_dir_array declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),         // Returns void
                                 {llvm::PointerType::getUnqual(*context)}, // Array pointer
@@ -2991,7 +3513,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_includes") {
                             // i64 @nova_value_array_includes(ptr, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_includes declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -3008,7 +3530,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_indexOf") {
                             // i64 @nova_value_array_indexOf(ptr, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_indexOf declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_indexOf declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -3025,7 +3547,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_lastIndexOf") {
                             // i64 @nova_value_array_lastIndexOf(ptr, i64) - searches from end
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_lastIndexOf declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_lastIndexOf declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (index or -1)
                                 {llvm::PointerType::getUnqual(*context),
@@ -3042,7 +3564,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_reverse") {
                             // ptr @nova_value_array_reverse(ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_reverse declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_reverse declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context)},
@@ -3058,7 +3580,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_fill") {
                             // ptr @nova_value_array_fill(ptr, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_fill declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_fill declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -3075,7 +3597,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_concat") {
                             // ptr @nova_value_array_concat(ptr, ptr)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_concat declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_concat declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -3092,7 +3614,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_slice") {
                             // ptr @nova_value_array_slice(ptr, i64, i64)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_slice declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_slice declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -3110,7 +3632,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_find") {
                             // i64 @nova_value_array_find(ptr, ptr) - array and callback function pointer
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_find declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_find declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
@@ -3127,7 +3649,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_findIndex") {
                             // i64 @nova_value_array_findIndex(ptr, ptr) - array and callback function pointer, returns index
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_findIndex declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_findIndex declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (index or -1)
                                 {llvm::PointerType::getUnqual(*context),
@@ -3144,7 +3666,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_findLast") {
                             // i64 @nova_value_array_findLast(ptr, ptr) - array and callback, returns element (ES2023)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_findLast declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_findLast declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (element or 0)
                                 {llvm::PointerType::getUnqual(*context),
@@ -3161,7 +3683,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_findLastIndex") {
                             // i64 @nova_value_array_findLastIndex(ptr, ptr) - array and callback, returns index (ES2023)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_findLastIndex declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_findLastIndex declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (index or -1)
                                 {llvm::PointerType::getUnqual(*context),
@@ -3178,7 +3700,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_filter") {
                             // ptr @nova_value_array_filter(ptr, ptr) - array and callback function pointer, returns new array
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_filter declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_filter declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context),
@@ -3195,7 +3717,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_map") {
                             // ptr @nova_value_array_map(ptr, ptr) - array and callback function pointer, returns new array
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_map declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_map declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::PointerType::getUnqual(*context),  // Returns pointer to new array
                                 {llvm::PointerType::getUnqual(*context),
@@ -3212,7 +3734,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_some") {
                             // i64 @nova_value_array_some(ptr, ptr) - array and callback function pointer, returns boolean
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_some declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_some declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (boolean)
                                 {llvm::PointerType::getUnqual(*context),
@@ -3229,7 +3751,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_every") {
                             // i64 @nova_value_array_every(ptr, ptr) - array and callback function pointer, returns boolean
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_every declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_every declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64 (boolean)
                                 {llvm::PointerType::getUnqual(*context),
@@ -3246,7 +3768,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_forEach") {
                             // void @nova_value_array_forEach(ptr, ptr) - array and callback function pointer, returns void
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_forEach declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_forEach declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getVoidTy(*context),  // Returns void
                                 {llvm::PointerType::getUnqual(*context),
@@ -3263,7 +3785,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_reduce") {
                             // i64 @nova_value_array_reduce(ptr, ptr, i64) - array, callback function pointer, and initial value, returns i64
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_reduce declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_reduce declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64
                                 {llvm::PointerType::getUnqual(*context),
@@ -3281,7 +3803,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "nova_value_array_reduceRight") {
                             // i64 @nova_value_array_reduceRight(ptr, ptr, i64) - array, callback, initial value, returns i64 (processes right-to-left)
-                            std::cerr << "DEBUG LLVM: Creating external nova_value_array_reduceRight declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_reduceRight declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),  // Returns i64
                                 {llvm::PointerType::getUnqual(*context),
@@ -3300,7 +3822,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         // Math functions
                         if (!callee && funcName == "log") {
                             // double @log(double) - C library natural logarithm function
-                            std::cerr << "DEBUG LLVM: Creating external log declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external log declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3316,7 +3838,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "exp") {
                             // double @exp(double) - C library exponential function
-                            std::cerr << "DEBUG LLVM: Creating external exp declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external exp declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3332,7 +3854,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "log10") {
                             // double @log10(double) - C library base 10 logarithm function
-                            std::cerr << "DEBUG LLVM: Creating external log10 declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external log10 declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3348,7 +3870,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "log2") {
                             // double @log2(double) - C library base 2 logarithm function
-                            std::cerr << "DEBUG LLVM: Creating external log2 declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external log2 declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3364,7 +3886,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "sin") {
                             // double @sin(double) - C library sine function
-                            std::cerr << "DEBUG LLVM: Creating external sin declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external sin declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3380,7 +3902,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "cos") {
                             // double @cos(double) - C library cosine function
-                            std::cerr << "DEBUG LLVM: Creating external cos declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external cos declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3396,7 +3918,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "tan") {
                             // double @tan(double) - C library tangent function
-                            std::cerr << "DEBUG LLVM: Creating external tan declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external tan declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3412,7 +3934,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "atan") {
                             // double @atan(double) - C library arctangent function
-                            std::cerr << "DEBUG LLVM: Creating external atan declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external atan declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3428,7 +3950,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "asin") {
                             // double @asin(double) - C library arcsine function
-                            std::cerr << "DEBUG LLVM: Creating external asin declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external asin declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3444,7 +3966,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "acos") {
                             // double @acos(double) - C library arccosine function
-                            std::cerr << "DEBUG LLVM: Creating external acos declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external acos declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3460,7 +3982,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "atan2") {
                             // double @atan2(double, double) - C library two-argument arctangent function
-                            std::cerr << "DEBUG LLVM: Creating external atan2 declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external atan2 declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context), llvm::Type::getDoubleTy(*context)},  // Takes two doubles
@@ -3476,7 +3998,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "sinh") {
                             // double @sinh(double) - C library hyperbolic sine function
-                            std::cerr << "DEBUG LLVM: Creating external sinh declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external sinh declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3492,7 +4014,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "cosh") {
                             // double @cosh(double) - C library hyperbolic cosine function
-                            std::cerr << "DEBUG LLVM: Creating external cosh declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external cosh declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3508,7 +4030,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "tanh") {
                             // double @tanh(double) - C library hyperbolic tangent function
-                            std::cerr << "DEBUG LLVM: Creating external tanh declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external tanh declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3524,7 +4046,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "asinh") {
                             // double @asinh(double) - C library inverse hyperbolic sine function
-                            std::cerr << "DEBUG LLVM: Creating external asinh declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external asinh declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3540,7 +4062,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "acosh") {
                             // double @acosh(double) - C library inverse hyperbolic cosine function
-                            std::cerr << "DEBUG LLVM: Creating external acosh declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external acosh declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3556,7 +4078,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "atanh") {
                             // double @atanh(double) - C library inverse hyperbolic tangent function
-                            std::cerr << "DEBUG LLVM: Creating external atanh declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external atanh declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3572,7 +4094,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "expm1") {
                             // double @expm1(double) - C library function returns e^x - 1
-                            std::cerr << "DEBUG LLVM: Creating external expm1 declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external expm1 declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3588,7 +4110,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
                         if (!callee && funcName == "log1p") {
                             // double @log1p(double) - C library function returns ln(1 + x)
-                            std::cerr << "DEBUG LLVM: Creating external log1p declaration" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external log1p declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getDoubleTy(*context),  // Returns double
                                 {llvm::Type::getDoubleTy(*context)},  // Takes double
@@ -3701,39 +4223,39 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
             }
             
             if (callee) {
-                std::cerr << "DEBUG LLVM: Have callee, processing arguments..." << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Have callee, processing arguments..." << std::endl;
                 // Convert arguments with type checking
                 std::vector<llvm::Value*> args;
                 auto paramIt = callee->arg_begin();
 
-                std::cerr << "DEBUG LLVM: callTerm->args.size() = " << callTerm->args.size() << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: callTerm->args.size() = " << callTerm->args.size() << std::endl;
                 int argIdx = 0;
                 std::string calleeName = callee->getName().str();
                 for (const auto& arg : callTerm->args) {
-                    std::cerr << "DEBUG LLVM: Processing argument " << argIdx << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing argument " << argIdx << std::endl;
                     llvm::Value* argValue = convertOperand(arg.get());
-                    std::cerr << "DEBUG LLVM: Argument converted, argValue = " << argValue << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Argument converted, argValue = " << argValue << std::endl;
 
                     // Special handling for callback arguments: convert string constant to function pointer
                     if ((calleeName == "nova_value_array_find" || calleeName == "nova_value_array_findIndex" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map" || calleeName == "nova_value_array_some" || calleeName == "nova_value_array_every" || calleeName == "nova_value_array_forEach" || calleeName == "nova_value_array_reduce" || calleeName == "nova_value_array_reduceRight") && argIdx == 1) {
                         // Second argument should be a function pointer, but comes as string constant
                         if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
-                            std::cerr << "DEBUG LLVM: Detected string constant for callback argument" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected string constant for callback argument" << std::endl;
 
                             // Try to extract the function name from the string constant
                             if (globalStr->hasInitializer()) {
                                 if (auto* constData = llvm::dyn_cast<llvm::ConstantDataArray>(globalStr->getInitializer())) {
                                     if (constData->isCString()) {
                                         std::string funcName = constData->getAsCString().str();
-                                        std::cerr << "DEBUG LLVM: Extracted function name from string: " << funcName << std::endl;
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Extracted function name from string: " << funcName << std::endl;
 
                                         // Look up the actual function
                                         llvm::Function* callbackFunc = module->getFunction(funcName);
                                         if (callbackFunc) {
-                                            std::cerr << "DEBUG LLVM: Found callback function, using function pointer" << std::endl;
+                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found callback function, using function pointer" << std::endl;
                                             argValue = callbackFunc;  // Use function pointer instead of string
                                         } else {
-                                            std::cerr << "DEBUG LLVM: WARNING - Function not found: " << funcName << std::endl;
+                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Function not found: " << funcName << std::endl;
                                         }
                                     }
                                 }
@@ -3745,22 +4267,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     if ((calleeName == "nova_generator_create" || calleeName == "nova_async_generator_create") && argIdx == 0) {
                         // First argument should be a function pointer, but comes as string constant
                         if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
-                            std::cerr << "DEBUG LLVM: Detected string constant for generator function" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected string constant for generator function" << std::endl;
 
                             // Try to extract the function name from the string constant
                             if (globalStr->hasInitializer()) {
                                 if (auto* constData = llvm::dyn_cast<llvm::ConstantDataArray>(globalStr->getInitializer())) {
                                     if (constData->isCString()) {
                                         std::string funcName = constData->getAsCString().str();
-                                        std::cerr << "DEBUG LLVM: Extracted generator function name: " << funcName << std::endl;
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Extracted generator function name: " << funcName << std::endl;
 
                                         // Look up the actual function
                                         llvm::Function* genFunc = module->getFunction(funcName);
                                         if (genFunc) {
-                                            std::cerr << "DEBUG LLVM: Found generator function, using function pointer" << std::endl;
+                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found generator function, using function pointer" << std::endl;
                                             argValue = genFunc;  // Use function pointer instead of string
                                         } else {
-                                            std::cerr << "DEBUG LLVM: WARNING - Generator function not found: " << funcName << std::endl;
+                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Generator function not found: " << funcName << std::endl;
                                         }
                                     }
                                 }
@@ -3776,20 +4298,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             llvm::Type* actualType = argValue->getType();
 
                             if (actualType != expectedType) {
-                                std::cerr << "DEBUG LLVM: Type mismatch in function call, converting from ";
-                                actualType->print(llvm::errs());
-                                std::cerr << " to ";
-                                expectedType->print(llvm::errs());
-                                std::cerr << std::endl;
+                                if(NOVA_DEBUG) {
+                                    std::cerr << "DEBUG LLVM: Type mismatch in function call, converting from ";
+                                    actualType->print(llvm::errs());
+                                    std::cerr << " to ";
+                                    expectedType->print(llvm::errs());
+                                    std::cerr << std::endl;
+                                }
 
                                 // Handle pointer to integer conversion
                                 if (actualType->isPointerTy() && expectedType->isIntegerTy()) {
-                                    std::cerr << "DEBUG LLVM: Converting pointer to integer" << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting pointer to integer" << std::endl;
                                     argValue = builder->CreatePtrToInt(argValue, expectedType);
                                 }
                                 // Handle integer to pointer conversion
                                 else if (actualType->isIntegerTy() && expectedType->isPointerTy()) {
-                                    std::cerr << "DEBUG LLVM: Converting integer to pointer" << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting integer to pointer" << std::endl;
                                     argValue = builder->CreateIntToPtr(argValue, expectedType);
                                 }
                                 // Handle integer size mismatch
@@ -3798,23 +4322,23 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                     auto expectedIntType = static_cast<llvm::IntegerType*>(expectedType);
 
                                     if (actualIntType->getBitWidth() < expectedIntType->getBitWidth()) {
-                                        std::cerr << "DEBUG LLVM: Extending integer from " << actualIntType->getBitWidth()
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Extending integer from " << actualIntType->getBitWidth()
                                                   << " to " << expectedIntType->getBitWidth() << std::endl;
                                         argValue = builder->CreateSExt(argValue, expectedType);
                                     } else if (actualIntType->getBitWidth() > expectedIntType->getBitWidth()) {
-                                        std::cerr << "DEBUG LLVM: Truncating integer from " << actualIntType->getBitWidth()
+                                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Truncating integer from " << actualIntType->getBitWidth()
                                                   << " to " << expectedIntType->getBitWidth() << std::endl;
                                         argValue = builder->CreateTrunc(argValue, expectedType);
                                     }
                                 }
                                 // Handle integer to float/double conversion
                                 else if (actualType->isIntegerTy() && (expectedType->isFloatTy() || expectedType->isDoubleTy())) {
-                                    std::cerr << "DEBUG LLVM: Converting integer to floating point" << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting integer to floating point" << std::endl;
                                     argValue = builder->CreateSIToFP(argValue, expectedType, "int_to_fp");
                                 }
                                 // Handle float/double to integer conversion
                                 else if ((actualType->isFloatTy() || actualType->isDoubleTy()) && expectedType->isIntegerTy()) {
-                                    std::cerr << "DEBUG LLVM: Converting floating point to integer" << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting floating point to integer" << std::endl;
                                     argValue = builder->CreateFPToSI(argValue, expectedType, "fp_to_int");
                                 }
                             }
@@ -3823,29 +4347,29 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             ++paramIt;
                         } else if (callee->isVarArg()) {
                             // For variadic functions, add remaining arguments as-is
-                            std::cerr << "DEBUG LLVM: Adding variadic argument " << (argIdx-1) << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Adding variadic argument " << (argIdx-1) << std::endl;
                             args.push_back(argValue);
                         }
                     }
                 }
 
                 // Create call
-                std::cerr << "DEBUG LLVM: About to create call with " << args.size() << " arguments" << std::endl;
-                std::cerr << "DEBUG LLVM: callee = " << callee << std::endl;
-                std::cerr << "DEBUG LLVM: callee name = " << callee->getName().str() << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: About to create call with " << args.size() << " arguments" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: callee = " << callee << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: callee name = " << callee->getName().str() << std::endl;
                 llvm::Value* result = builder->CreateCall(callee, args);
-                std::cerr << "DEBUG LLVM: CreateCall succeeded, result = " << result << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: CreateCall succeeded, result = " << result << std::endl;
 
                 // Handle return value type conversion (e.g., double to I64 for Math functions)
                 if (result && result->getType()->isFloatingPointTy()) {
-                    std::cerr << "DEBUG LLVM: Converting floating point return value to i64" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting floating point return value to i64" << std::endl;
                     result = builder->CreateFPToSI(result, llvm::Type::getInt64Ty(*context), "fp_result_to_i64");
                 }
 
                 // Special handling for array functions that return new arrays
                 // calleeName already declared above at line 1658
                 if (calleeName == "nova_value_array_concat" || calleeName == "nova_value_array_slice" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map" || calleeName == "nova_value_array_toReversed" || calleeName == "nova_value_array_toSorted" || calleeName == "nova_value_array_flat" || calleeName == "nova_value_array_flatMap" || calleeName == "nova_array_from" || calleeName == "nova_array_of" || calleeName == "nova_value_array_with" || calleeName == "nova_value_array_toSpliced" || calleeName == "nova_value_array_reverse" || calleeName == "nova_value_array_sort" || calleeName == "nova_value_array_splice" || calleeName == "nova_value_array_fill" || calleeName == "nova_value_array_copyWithin") {
-                    std::cerr << "DEBUG LLVM: Detected array-returning function: " << calleeName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array-returning function: " << calleeName << std::endl;
                     // Create ValueArrayMeta type and register it for the result
                     // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }
                     std::vector<llvm::Type*> metaFields = {
@@ -3856,14 +4380,14 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     };
                     llvm::StructType* arrayMetaType = llvm::StructType::get(*context, metaFields);
                     arrayTypeMap[result] = arrayMetaType;
-                    std::cerr << "DEBUG LLVM: Registered array metadata type for result of " << calleeName << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Registered array metadata type for result of " << calleeName << std::endl;
                 }
 
                 // Special handling for malloc in constructors
-                std::cerr << "DEBUG LLVM: Checking for malloc in constructor..." << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Checking for malloc in constructor..." << std::endl;
                 // If this is a malloc call in a constructor, track the struct type
                 if (auto* constOp = dynamic_cast<mir::MIRConstOperand*>(callTerm->func.get())) {
-                    std::cerr << "DEBUG LLVM: Got constOp" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Got constOp" << std::endl;
                     if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
                         std::string funcName = std::get<std::string>(constOp->value);
                         if (funcName == "malloc") {
@@ -3893,7 +4417,7 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             funcName == "nova_value_array_flatMap" ||
                             funcName == "nova_array_from" ||
                             funcName == "nova_array_of") {
-                            std::cerr << "DEBUG LLVM: Detected array-returning function: " << funcName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array-returning function: " << funcName << std::endl;
                             // Create ValueArrayMeta type and register it for the result
                             // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }
                             std::vector<llvm::Type*> metaFields = {
@@ -3904,27 +4428,27 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             };
                             llvm::StructType* arrayMetaType = llvm::StructType::get(*context, metaFields);
                             arrayTypeMap[result] = arrayMetaType;
-                            std::cerr << "DEBUG LLVM: Registered array metadata type for result of " << funcName << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Registered array metadata type for result of " << funcName << std::endl;
                         }
                     }
                 }
 
                 // Store result in destination
-                std::cerr << "DEBUG LLVM: Storing result in destination..." << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Storing result in destination..." << std::endl;
 
                 // Skip storing result if function returns void
                 bool isVoid = result->getType()->isVoidTy();
-                std::cerr << "DEBUG LLVM: Result type is void: " << isVoid << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Result type is void: " << isVoid << std::endl;
 
                 if (callTerm->destination && !isVoid) {
-                    std::cerr << "DEBUG LLVM: Has destination and result is not void" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Has destination and result is not void" << std::endl;
                     // Check if destination already has an alloca
                     auto it = valueMap.find(callTerm->destination.get());
                     if (it != valueMap.end() && llvm::isa<llvm::AllocaInst>(it->second)) {
-                        std::cerr << "DEBUG LLVM: Destination exists, storing in existing alloca" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Destination exists, storing in existing alloca" << std::endl;
                         // Store result in existing alloca
                         builder->CreateStore(result, it->second);
-                        std::cerr << "DEBUG LLVM: Store completed" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Store completed" << std::endl;
 
                         // Propagate type information from result to alloca
                         auto typeIt = arrayTypeMap.find(result);
@@ -3944,19 +4468,19 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
                     }
                 }
-                std::cerr << "DEBUG LLVM: Result storage completed" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Result storage completed" << std::endl;
             } else {
-                std::cerr << "DEBUG LLVM: No destination for result" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: No destination for result" << std::endl;
             }
 
             // Branch to target
-            std::cerr << "DEBUG LLVM: About to create branch to target" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: About to create branch to target" << std::endl;
             if (callTerm->target) {
                 llvm::BasicBlock* targetBB = blockMap[callTerm->target];
                 builder->CreateBr(targetBB);
-                std::cerr << "DEBUG LLVM: Branch created successfully" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Branch created successfully" << std::endl;
             }
-            std::cerr << "DEBUG LLVM: Call terminator processing complete" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Call terminator processing complete" << std::endl;
             break;
         }
         
@@ -3969,13 +4493,13 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
 
 llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
                                           llvm::Value* lhs, llvm::Value* rhs) {
-    std::cerr << "DEBUG LLVM: generateBinaryOp called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: generateBinaryOp called" << std::endl;
     if (!lhs || !rhs) {
-        std::cerr << "DEBUG LLVM: Null operand in generateBinaryOp" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Null operand in generateBinaryOp" << std::endl;
         return nullptr;
     }
     
-    std::cerr << "DEBUG LLVM: Creating binary operation with op=" << static_cast<int>(op) << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating binary operation with op=" << static_cast<int>(op) << std::endl;
     
     // Convert operands to compatible types for arithmetic operations
     // Special case: Don't convert pointers to integers for string concatenation
@@ -3993,11 +4517,11 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
         // For arithmetic operations, ensure both operands are of the same type
         if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
             // Convert pointer to integer
-            std::cerr << "DEBUG LLVM: Converting pointer to integer in binary operation" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting pointer to integer in binary operation" << std::endl;
             lhs = builder->CreatePtrToInt(lhs, llvm::Type::getInt64Ty(*context), "ptr_to_int");
         } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
             // Convert pointer to integer
-            std::cerr << "DEBUG LLVM: Converting pointer to integer in binary operation" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting pointer to integer in binary operation" << std::endl;
             rhs = builder->CreatePtrToInt(rhs, llvm::Type::getInt64Ty(*context), "ptr_to_int");
         } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy() &&
                    lhs->getType() != rhs->getType()) {
@@ -4014,7 +4538,7 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
     
     switch (op) {
         case mir::MIRBinaryOpRValue::BinOp::Add:
-            std::cerr << "DEBUG LLVM: Creating add instruction" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating add instruction" << std::endl;
             // Check if operands are pointers (strings)
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
                 // Declare nova_string_concat_cstr if not already declared
@@ -4101,10 +4625,10 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
         case mir::MIRBinaryOpRValue::BinOp::UShr:
             return builder->CreateLShr(lhs, rhs, "ushr");
         case mir::MIRBinaryOpRValue::BinOp::Eq:
-            std::cerr << "DEBUG LLVM: Creating ICMP EQ instruction" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP EQ instruction" << std::endl;
             // Check if operands are pointers (strings)
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-                std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
                 // For now, just compare pointer addresses
                 // TODO: Implement proper string content comparison
                 return builder->CreateICmpEQ(lhs, rhs, "str_eq");
@@ -4112,22 +4636,22 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
-                std::cerr << "DEBUG LLVM: Type mismatch in EQ comparison, converting types" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Type mismatch in EQ comparison, converting types" << std::endl;
                 
                 // Handle pointer to integer conversion
                 if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
-                    std::cerr << "DEBUG LLVM: Converting LHS pointer to integer for comparison" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting LHS pointer to integer for comparison" << std::endl;
                     lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
                 } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-                    std::cerr << "DEBUG LLVM: Converting RHS pointer to integer for comparison" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting RHS pointer to integer for comparison" << std::endl;
                     rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
                 }
                 // Handle boolean to integer conversion
                 else if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
-                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
                     lhs = builder->CreateZExt(lhs, rhs->getType(), "bool_to_int");
                 } else if (rhs->getType()->isIntegerTy(1) && lhs->getType()->isIntegerTy(64)) {
-                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
                     rhs = builder->CreateZExt(rhs, lhs->getType(), "bool_to_int");
                 }
                 // Handle integer width differences
@@ -4143,10 +4667,10 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpEQ(lhs, rhs, "eq");
         case mir::MIRBinaryOpRValue::BinOp::Ne:
-            std::cerr << "DEBUG LLVM: Creating ICMP NE instruction" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP NE instruction" << std::endl;
             // Check if operands are pointers (strings)
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-                std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
                 // For now, just compare pointer addresses
                 // TODO: Implement proper string content comparison
                 return builder->CreateICmpNE(lhs, rhs, "str_ne");
@@ -4154,22 +4678,22 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
-                std::cerr << "DEBUG LLVM: Type mismatch in NE comparison, converting types" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Type mismatch in NE comparison, converting types" << std::endl;
                 
                 // Handle pointer to integer conversion
                 if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
-                    std::cerr << "DEBUG LLVM: Converting LHS pointer to integer for comparison" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting LHS pointer to integer for comparison" << std::endl;
                     lhs = builder->CreatePtrToInt(lhs, rhs->getType(), "ptr_to_int");
                 } else if (!lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-                    std::cerr << "DEBUG LLVM: Converting RHS pointer to integer for comparison" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting RHS pointer to integer for comparison" << std::endl;
                     rhs = builder->CreatePtrToInt(rhs, lhs->getType(), "ptr_to_int");
                 }
                 // Handle boolean to integer conversion
                 else if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(64)) {
-                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
                     lhs = builder->CreateZExt(lhs, rhs->getType(), "bool_to_int");
                 } else if (rhs->getType()->isIntegerTy(1) && lhs->getType()->isIntegerTy(64)) {
-                    std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting boolean to i64" << std::endl;
                     rhs = builder->CreateZExt(rhs, lhs->getType(), "bool_to_int");
                 }
                 // Handle integer width differences
@@ -4185,10 +4709,10 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpNE(lhs, rhs, "ne");
         case mir::MIRBinaryOpRValue::BinOp::Lt:
-            std::cerr << "DEBUG LLVM: Creating ICMP SLT instruction" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SLT instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
-                std::cerr << "DEBUG LLVM: Type mismatch in LT comparison, converting types" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Type mismatch in LT comparison, converting types" << std::endl;
                 
                 // Handle pointer to integer conversion
                 if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
@@ -4209,10 +4733,10 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpSLT(lhs, rhs, "lt");
         case mir::MIRBinaryOpRValue::BinOp::Le:
-            std::cerr << "DEBUG LLVM: Creating ICMP SLE instruction" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SLE instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
-                std::cerr << "DEBUG LLVM: Type mismatch in LE comparison, converting types" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Type mismatch in LE comparison, converting types" << std::endl;
                 
                 // Handle pointer to integer conversion
                 if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
@@ -4233,10 +4757,10 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpSLE(lhs, rhs, "le");
         case mir::MIRBinaryOpRValue::BinOp::Gt:
-            std::cerr << "DEBUG LLVM: Creating ICMP SGT instruction" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SGT instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
-                std::cerr << "DEBUG LLVM: Type mismatch in GT comparison, converting types" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Type mismatch in GT comparison, converting types" << std::endl;
                 
                 // Handle pointer to integer conversion
                 if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
@@ -4257,10 +4781,10 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpSGT(lhs, rhs, "gt");
         case mir::MIRBinaryOpRValue::BinOp::Ge:
-            std::cerr << "DEBUG LLVM: Creating ICMP SGE instruction" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SGE instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
-                std::cerr << "DEBUG LLVM: Type mismatch in GE comparison, converting types" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Type mismatch in GE comparison, converting types" << std::endl;
                 
                 // Handle pointer to integer conversion
                 if (lhs->getType()->isPointerTy() && !rhs->getType()->isPointerTy()) {
@@ -4281,7 +4805,7 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpSGE(lhs, rhs, "ge");
         default:
-            std::cerr << "DEBUG LLVM: Unknown binary operation: " << static_cast<int>(op) << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Unknown binary operation: " << static_cast<int>(op) << std::endl;
             return nullptr;
     }
 }
@@ -4336,7 +4860,7 @@ llvm::Value* LLVMCodeGen::generateCast(mir::MIRCastRValue::CastKind kind,
 llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
     if (!aggOp) return nullptr;
 
-    std::cerr << "DEBUG LLVM: generateAggregate called with " << aggOp->elements.size() << " elements" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: generateAggregate called with " << aggOp->elements.size() << " elements" << std::endl;
 
     // For arrays: allocate array on stack and initialize elements
     if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Array) {
@@ -4362,7 +4886,7 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                 llvm::AllocaInst* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(basePtr);
                 if (allocaInst && allocaInst->getAllocatedType()->isPointerTy()) {
                     // This is array with metadata struct - extract elements pointer first
-                    std::cerr << "DEBUG LLVM: SetElement - extracting elements pointer from metadata struct" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetElement - extracting elements pointer from metadata struct" << std::endl;
 
                     // Build expected metadata struct type
                     llvm::Type* i8Type = llvm::Type::getInt8Ty(*context);
@@ -4400,7 +4924,7 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                         // Store the value to the element
                         builder->CreateStore(valueToStore, elementPtr);
 
-                        std::cerr << "DEBUG LLVM: SetElement - stored value to array element" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetElement - stored value to array element" << std::endl;
 
                         // Return a dummy value (void represented as 0)
                         return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
@@ -4453,11 +4977,11 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             builder->CreateStore(elementValue, elementPtr);
         }
 
-        std::cerr << "DEBUG LLVM: Array allocated and initialized, creating metadata struct" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Array allocated and initialized, creating metadata struct" << std::endl;
 
         // Store the array type for later GEP operations
         arrayTypeMap[arrayAlloca] = arrayType;
-        std::cerr << "DEBUG LLVM: Stored array type in arrayTypeMap" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored array type in arrayTypeMap" << std::endl;
 
         // Create Array metadata struct compatible with nova::runtime::Array
         // struct Array { ObjectHeader(24 bytes), i64 length, i64 capacity, ptr elements }
@@ -4498,7 +5022,7 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
         llvm::Value* arrayPtr = builder->CreateBitCast(arrayAlloca, ptrType, "array_ptr");
         builder->CreateStore(arrayPtr, elementsPtr);
 
-        std::cerr << "DEBUG LLVM: Created array metadata struct" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created array metadata struct" << std::endl;
 
         // Store metadata struct type in map for tracking
         // IMPORTANT: Store the METADATA STRUCT TYPE, not the raw array type!
@@ -4591,27 +5115,31 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                 // If fieldValue is a load instruction, unwrap it to get the alloca
                 if (auto* loadInst = llvm::dyn_cast<llvm::LoadInst>(fieldValue)) {
                     sourceAlloca = loadInst->getPointerOperand();
-                    std::cerr << "DEBUG LLVM: Field " << i << " is loaded pointer, unwrapped to get source alloca" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Field " << i << " is loaded pointer, unwrapped to get source alloca" << std::endl;
                 }
 
                 // Now try to find the struct type
                 auto it = arrayTypeMap.find(sourceAlloca);
                 if (it != arrayTypeMap.end()) {
                     nestedStructTypes.push_back(it->second);
-                    std::cerr << "DEBUG LLVM: Field " << i << " is pointer to struct/array type: ";
-                    it->second->print(llvm::errs());
-                    std::cerr << std::endl;
+                    if(NOVA_DEBUG) {
+                        std::cerr << "DEBUG LLVM: Field " << i << " is pointer to struct/array type: ";
+                        it->second->print(llvm::errs());
+                        std::cerr << std::endl;
+                    }
                 } else {
                     nestedStructTypes.push_back(nullptr);
-                    std::cerr << "DEBUG LLVM: Field " << i << " is pointer but no struct type found in arrayTypeMap" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Field " << i << " is pointer but no struct type found in arrayTypeMap" << std::endl;
                 }
             } else {
                 nestedStructTypes.push_back(nullptr);
             }
 
-            std::cerr << "DEBUG LLVM: Field " << i << " type: ";
-            fieldType->print(llvm::errs());
-            std::cerr << std::endl;
+            if(NOVA_DEBUG) {
+                std::cerr << "DEBUG LLVM: Field " << i << " type: ";
+                fieldType->print(llvm::errs());
+                std::cerr << std::endl;
+            }
         }
 
         // Create struct type with the actual field types
@@ -4637,47 +5165,47 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                 // Store the nested struct type using (parent alloca, field index) as key
                 // This allows nested field access to work
                 nestedStructTypeMap[std::make_pair(structAlloca, i)] = nestedStructTypes[i];
-                std::cerr << "DEBUG LLVM: Stored nested struct type for field " << i << " in nestedStructTypeMap: ";
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored nested struct type for field " << i << " in nestedStructTypeMap: ";
                 nestedStructTypes[i]->print(llvm::errs());
                 std::cerr << std::endl;
             }
         }
 
-        std::cerr << "DEBUG LLVM: Struct allocated and initialized, returning pointer" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Struct allocated and initialized, returning pointer" << std::endl;
 
         // Store the struct type for later GEP operations
         arrayTypeMap[structAlloca] = structType;
-        std::cerr << "DEBUG LLVM: Stored struct type in arrayTypeMap" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored struct type in arrayTypeMap" << std::endl;
 
         // Return pointer to the struct
         return structAlloca;
     }
 
-    std::cerr << "DEBUG LLVM: Unsupported aggregate kind" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Unsupported aggregate kind" << std::endl;
     return nullptr;
 }
 
 llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp) {
     if (!getElemOp) return nullptr;
 
-    std::cerr << "DEBUG LLVM: generateGetElement called" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: generateGetElement called" << std::endl;
 
     // Get the array pointer (should be from a Copy operand)
     llvm::Value* arrayPtr = convertOperand(getElemOp->array.get());
     if (!arrayPtr) {
-        std::cerr << "DEBUG LLVM: Failed to convert array operand" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Failed to convert array operand" << std::endl;
         return nullptr;
     }
 
     // Get the index value
     llvm::Value* indexValue = convertOperand(getElemOp->index.get());
     if (!indexValue) {
-        std::cerr << "DEBUG LLVM: Failed to convert index operand" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Failed to convert index operand" << std::endl;
         return nullptr;
     }
 
-    std::cerr << "DEBUG LLVM: arrayPtr type: " << arrayPtr->getType()->getTypeID() << std::endl;
-    std::cerr << "DEBUG LLVM: Using GEP to access array element" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: arrayPtr type: " << arrayPtr->getType()->getTypeID() << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Using GEP to access array element" << std::endl;
 
     // Save the loaded array pointer for use in GEP
     llvm::Value* loadedArrayPtr = arrayPtr;
@@ -4688,34 +5216,34 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
     // If arrayPtr is a load instruction, get the pointer operand (the variable's alloca)
     if (!allocaInst) {
         if (llvm::LoadInst* loadInst = llvm::dyn_cast<llvm::LoadInst>(arrayPtr)) {
-            std::cerr << "DEBUG LLVM: arrayPtr is a load, getting pointer operand" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: arrayPtr is a load, getting pointer operand" << std::endl;
             arrayPtr = loadInst->getPointerOperand();
             allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr);
         }
     }
 
     if (!allocaInst) {
-        std::cerr << "DEBUG LLVM: arrayPtr is not an alloca (even after unwrapping load)" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: arrayPtr is not an alloca (even after unwrapping load)" << std::endl;
         return nullptr;
     }
 
     // Look up the array type from our tracking map
     auto arrayTypeIt = arrayTypeMap.find(allocaInst);
     if (arrayTypeIt == arrayTypeMap.end()) {
-        std::cerr << "DEBUG LLVM: ERROR - Array type not found in arrayTypeMap for alloca" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: ERROR - Array type not found in arrayTypeMap for alloca" << std::endl;
         return nullptr;
     }
 
     llvm::Type* arrayType = arrayTypeIt->second;
-    std::cerr << "DEBUG LLVM: Array type retrieved from arrayTypeMap: ";
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Array type retrieved from arrayTypeMap: ";
     arrayType->print(llvm::errs());
     std::cerr << std::endl;
 
-    std::cerr << "DEBUG LLVM: loadedArrayPtr type: ";
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: loadedArrayPtr type: ";
     loadedArrayPtr->getType()->print(llvm::errs());
     std::cerr << std::endl;
 
-    std::cerr << "DEBUG LLVM: loadedArrayPtr is ";
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: loadedArrayPtr is ";
     if (llvm::isa<llvm::AllocaInst>(loadedArrayPtr)) {
         std::cerr << "an AllocaInst";
     } else if (llvm::isa<llvm::LoadInst>(loadedArrayPtr)) {
@@ -4736,14 +5264,14 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
             secondIndex = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context),
                                                   constIndex->getZExtValue());
-            std::cerr << "DEBUG LLVM: Converted struct field index to i32" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converted struct field index to i32" << std::endl;
         }
     }
 
     // If loadedArrayPtr is an integer (i64), convert it to a pointer
     llvm::Value* actualPtr = loadedArrayPtr;
     if (loadedArrayPtr->getType()->isIntegerTy()) {
-        std::cerr << "DEBUG LLVM: loadedArrayPtr is i64, converting to pointer" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: loadedArrayPtr is i64, converting to pointer" << std::endl;
         llvm::Type* ptrType = llvm::PointerType::getUnqual(arrayType);
         actualPtr = builder->CreateIntToPtr(loadedArrayPtr, ptrType, "ptr_cast");
     }
@@ -4762,7 +5290,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 if (arrayTypeField->getNumElements() == 24 &&
                     arrayTypeField->getElementType()->isIntegerTy(8)) {
                     isArrayMetadataStruct = true;
-                    std::cerr << "DEBUG LLVM: Detected array metadata struct pattern" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array metadata struct pattern" << std::endl;
                 }
             }
         }
@@ -4772,7 +5300,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         llvm::Type* allocatedType = allocaInst->getAllocatedType();
         // Check if allocated type is a pointer to struct
         if (allocatedType->isPointerTy()) {
-            std::cerr << "DEBUG LLVM: Allocated type is pointer to array metadata struct" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Allocated type is pointer to array metadata struct" << std::endl;
             // The variable holds a pointer to metadata struct
             // loadedArrayPtr is the loaded pointer value (points to metadata struct)
 
@@ -4786,7 +5314,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
                     unsigned fieldIndex = constIndex->getZExtValue();
 
-                    std::cerr << "DEBUG LLVM: Accessing metadata struct field " << fieldIndex << " directly" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Accessing metadata struct field " << fieldIndex << " directly" << std::endl;
                     isMetadataFieldAccess = true;
 
                     // Access the struct field directly without extracting elements pointer
@@ -4802,12 +5330,12 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                     // Load the field value
                     llvm::Value* fieldValue = builder->CreateLoad(fieldType, fieldPtr, "field_value");
 
-                    std::cerr << "DEBUG LLVM: Loaded metadata field " << fieldIndex << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loaded metadata field " << fieldIndex << std::endl;
                     return fieldValue;
                 }
             } else {
                 // Element access: Extract elements pointer from metadata and index into array
-                std::cerr << "DEBUG LLVM: Element access - extracting elements pointer from metadata struct" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Element access - extracting elements pointer from metadata struct" << std::endl;
 
                 llvm::Type* ptrType = llvm::PointerType::get(*context, 0);
 
@@ -4821,7 +5349,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 // Load the elements pointer
                 llvm::Value* elementsPtr = builder->CreateLoad(ptrType, elementsFieldPtr, "elements_ptr_load");
 
-                std::cerr << "DEBUG LLVM: Extracted elements pointer from metadata" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Extracted elements pointer from metadata" << std::endl;
 
                 // Now do the array element access using the elements pointer
                 // Use i64 as the element type (this is consistent with how arrays are created)
@@ -4837,7 +5365,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 // Load the element value
                 llvm::Value* elementValue = builder->CreateLoad(i64Type, elementPtr, "array_elem_value");
 
-                std::cerr << "DEBUG LLVM: Loaded array element at index" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loaded array element at index" << std::endl;
                 return elementValue;
             }
         }
@@ -4849,7 +5377,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
                 unsigned fieldIndex = constIndex->getZExtValue();
 
-                std::cerr << "DEBUG LLVM: Accessing regular struct field " << fieldIndex << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Accessing regular struct field " << fieldIndex << std::endl;
 
                 // Access the struct field directly
                 llvm::Value* fieldPtr = builder->CreateStructGEP(
@@ -4864,19 +5392,19 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 // Load the field value
                 llvm::Value* fieldValue = builder->CreateLoad(fieldType, fieldPtr, "field_value");
 
-                std::cerr << "DEBUG LLVM: Loaded struct field " << fieldIndex << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loaded struct field " << fieldIndex << std::endl;
 
                 // If the field is a pointer type (nested struct/array), we need to track its type
                 // for potential nested field access
                 if (fieldType->isPointerTy()) {
-                    std::cerr << "DEBUG LLVM: Field is a pointer type, checking for nested struct type" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Field is a pointer type, checking for nested struct type" << std::endl;
 
                     // Look up if we stored the nested struct type for this field
                     auto nestedTypeKey = std::make_pair(static_cast<llvm::Value*>(allocaInst), fieldIndex);
                     auto nestedTypeIt = nestedStructTypeMap.find(nestedTypeKey);
 
                     if (nestedTypeIt != nestedStructTypeMap.end()) {
-                        std::cerr << "DEBUG LLVM: Found nested struct type in nestedStructTypeMap: ";
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found nested struct type in nestedStructTypeMap: ";
                         nestedTypeIt->second->print(llvm::errs());
                         std::cerr << std::endl;
 
@@ -4893,7 +5421,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
 
                         // Track the nested struct type for this temporary alloca
                         arrayTypeMap[tempAlloca] = nestedTypeIt->second;
-                        std::cerr << "DEBUG LLVM: Stored nested struct type for temp alloca in arrayTypeMap" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored nested struct type for temp alloca in arrayTypeMap" << std::endl;
 
                         // Return a load from the alloca
                         llvm::Value* reloaded = builder->CreateLoad(fieldType, tempAlloca, "nested_reload");
@@ -4901,11 +5429,11 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                         // CRITICAL: Also register the type for the returned loaded value
                         // This allows convertOperand to propagate the type when it creates its own temp alloca
                         arrayTypeMap[reloaded] = nestedTypeIt->second;
-                        std::cerr << "DEBUG LLVM: Also registered nested struct type for reloaded value" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Also registered nested struct type for reloaded value" << std::endl;
 
                         return reloaded;
                     } else {
-                        std::cerr << "DEBUG LLVM: No nested struct type found for parent=" << allocaInst
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: No nested struct type found for parent=" << allocaInst
                                   << ", field=" << fieldIndex << std::endl;
                     }
                 }
@@ -4935,7 +5463,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             unsigned fieldIndex = constIndex->getZExtValue();
             if (fieldIndex < structType->getNumElements()) {
                 elementType = structType->getElementType(fieldIndex);
-                std::cerr << "DEBUG LLVM: Field type at index " << fieldIndex << ": ";
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Field type at index " << fieldIndex << ": ";
                 elementType->print(llvm::errs());
                 std::cerr << std::endl;
             }
@@ -4953,12 +5481,12 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         "elem_value"
     );
 
-    std::cerr << "DEBUG LLVM: Element loaded successfully" << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Element loaded successfully" << std::endl;
 
     // If the element is a pointer type (nested struct/array), we need to track its type
     // for potential nested field access
     if (elementType && elementType->isPointerTy()) {
-        std::cerr << "DEBUG LLVM: Element is a pointer type, checking for nested struct type" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Element is a pointer type, checking for nested struct type" << std::endl;
 
         // Look up if we stored the nested struct type for this field
         // We need the parent alloca and field index
@@ -4968,7 +5496,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             auto nestedTypeIt = nestedStructTypeMap.find(nestedTypeKey);
 
             if (nestedTypeIt != nestedStructTypeMap.end()) {
-                std::cerr << "DEBUG LLVM: Found nested struct type in nestedStructTypeMap for field " << fieldIndex << ": ";
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found nested struct type in nestedStructTypeMap for field " << fieldIndex << ": ";
                 nestedTypeIt->second->print(llvm::errs());
                 std::cerr << std::endl;
 
@@ -4986,7 +5514,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 // Track the nested struct type for this temporary alloca
                 // This is critical - it allows the next GetElement to find the struct type
                 arrayTypeMap[tempAlloca] = nestedTypeIt->second;
-                std::cerr << "DEBUG LLVM: Stored nested struct type for temp alloca in arrayTypeMap" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored nested struct type for temp alloca in arrayTypeMap" << std::endl;
 
                 // Return a load from the alloca
                 // This ensures that future operations can unwrap the load to find the alloca
@@ -4995,12 +5523,12 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 // CRITICAL FIX: Also register the type for the returned loaded value
                 // This allows convertOperand to propagate the type when it creates its own temp alloca
                 arrayTypeMap[reloaded] = nestedTypeIt->second;
-                std::cerr << "DEBUG LLVM: Also registered nested struct type for reloaded value in arrayTypeMap" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Also registered nested struct type for reloaded value in arrayTypeMap" << std::endl;
 
-                std::cerr << "DEBUG LLVM: Returning reloaded value from temp alloca" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Returning reloaded value from temp alloca" << std::endl;
                 return reloaded;
             } else {
-                std::cerr << "DEBUG LLVM: No nested struct type found for parent=" << allocaInst
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: No nested struct type found for parent=" << allocaInst
                           << ", field=" << fieldIndex << std::endl;
             }
         }

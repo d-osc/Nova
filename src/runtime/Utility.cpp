@@ -277,6 +277,33 @@ void nova_console_timeEnd_string(const char* label) {
     timers.erase(it);
 }
 
+// console.timeLog(label) - prints elapsed time WITHOUT removing timer
+void nova_console_timeLog_string(const char* label) {
+    if (!label) label = "default";
+
+    auto it = timers.find(label);
+    if (it == timers.end()) {
+        printf("%s: Timer does not exist\n", label);
+        return;
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - it->second);
+    printf("%s: %.3fms\n", label, duration.count() / 1.0);
+    // Note: Timer continues running (not erased)
+}
+
+// console.timeStamp(label) - adds timestamp marker (browser dev tools feature)
+void nova_console_timeStamp_string(const char* label) {
+    auto now = std::chrono::system_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    if (label) {
+        printf("[%lld] %s\n", (long long)ms, label);
+    } else {
+        printf("[%lld]\n", (long long)ms);
+    }
+}
+
 // console.assert(condition, message) - prints error if condition is false
 void nova_console_assert(int64_t condition, const char* message) {
     // If condition is falsy (0), print assertion error to stderr
@@ -375,6 +402,24 @@ void nova_console_groupEnd() {
     }
 }
 
+// console.groupCollapsed(label) - starts a collapsed group (same as group in CLI)
+void nova_console_groupCollapsed_string(const char* label) {
+    print_indent();
+    if (label) {
+        printf("▶ %s\n", label);  // Use ▶ to indicate collapsed
+    } else {
+        printf("▶ Group\n");
+    }
+    group_indent_level++;
+}
+
+// console.groupCollapsed() - starts a collapsed group without label
+void nova_console_groupCollapsed_default() {
+    print_indent();
+    printf("▶ Group\n");
+    group_indent_level++;
+}
+
 // console.trace(message) - prints stack trace with message
 // Note: Simplified implementation without full call stack
 void nova_console_trace_string(const char* message) {
@@ -423,6 +468,179 @@ void nova_console_dir_array(void* array_ptr) {
         printf("%lld", (long long)array->elements[i]);
     }
     printf("] (length: %lld)\n", (long long)array->length);
+}
+
+// For objects (simple key-value display)
+void nova_console_dir_object(void* obj_ptr, int depth) {
+    if (!obj_ptr) {
+        printf("Object: null\n");
+        return;
+    }
+    // Simplified - just show object exists
+    printf("Object { ... } (depth: %d)\n", depth);
+}
+
+// console.dirxml(value) - displays as XML (for HTML/XML elements, falls back to dir)
+void nova_console_dirxml_string(const char* str) {
+    if (str) {
+        printf("%s\n", str);
+    } else {
+        printf("null\n");
+    }
+}
+
+void nova_console_dirxml_object(void* obj_ptr) {
+    // In CLI environment, behaves same as dir
+    nova_console_dir_object(obj_ptr, 2);
+}
+
+// ============================================================================
+// console.profile() / console.profileEnd() - CPU profiling
+// ============================================================================
+
+static std::unordered_map<std::string, std::chrono::high_resolution_clock::time_point> profiles;
+
+// console.profile(label) - starts CPU profiler
+void nova_console_profile_string(const char* label) {
+    if (!label) label = "default";
+    profiles[label] = std::chrono::high_resolution_clock::now();
+    printf("Profile '%s' started\n", label);
+}
+
+void nova_console_profile_default() {
+    nova_console_profile_string("default");
+}
+
+// console.profileEnd(label) - stops CPU profiler
+void nova_console_profileEnd_string(const char* label) {
+    if (!label) label = "default";
+
+    auto it = profiles.find(label);
+    if (it == profiles.end()) {
+        printf("Profile '%s' does not exist\n", label);
+        return;
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - it->second);
+    printf("Profile '%s' finished: %.3fms\n", label, duration.count() / 1000.0);
+    profiles.erase(it);
+}
+
+void nova_console_profileEnd_default() {
+    nova_console_profileEnd_string("default");
+}
+
+// ============================================================================
+// Additional console overloads for various types
+// ============================================================================
+
+// console.log for double/float
+void nova_console_log_double(double value) {
+    printf("%g\n", value);
+}
+
+// console.log for bool
+void nova_console_log_bool(int value) {
+    printf("%s\n", value ? "true" : "false");
+}
+
+// console.log for object
+void nova_console_log_object(void* obj) {
+    if (obj) {
+        printf("[object Object]\n");
+    } else {
+        printf("null\n");
+    }
+}
+
+// console.error for double
+void nova_console_error_double(double value) {
+    fprintf(stderr, "%g\n", value);
+}
+
+// console.error for bool
+void nova_console_error_bool(int value) {
+    fprintf(stderr, "%s\n", value ? "true" : "false");
+}
+
+// console.warn for double
+void nova_console_warn_double(double value) {
+    fprintf(stderr, "%g\n", value);
+}
+
+// console.warn for bool
+void nova_console_warn_bool(int value) {
+    fprintf(stderr, "%s\n", value ? "true" : "false");
+}
+
+// console.info for double
+void nova_console_info_double(double value) {
+    printf("%g\n", value);
+}
+
+// console.info for bool
+void nova_console_info_bool(int value) {
+    printf("%s\n", value ? "true" : "false");
+}
+
+// console.debug for double
+void nova_console_debug_double(double value) {
+    printf("%g\n", value);
+}
+
+// console.debug for bool
+void nova_console_debug_bool(int value) {
+    printf("%s\n", value ? "true" : "false");
+}
+
+// ============================================================================
+// Console class constructor support
+// ============================================================================
+
+struct ConsoleInstance {
+    FILE* stdout_stream;
+    FILE* stderr_stream;
+    int colorMode;   // 0=auto, 1=force, 2=disable
+    int inspectOptions_depth;
+    int groupIndentation;
+};
+
+// Create new Console instance
+void* nova_console_create(void* stdout_stream, void* stderr_stream) {
+    ConsoleInstance* console = new ConsoleInstance();
+    console->stdout_stream = stdout_stream ? (FILE*)stdout_stream : stdout;
+    console->stderr_stream = stderr_stream ? (FILE*)stderr_stream : stderr;
+    console->colorMode = 0;
+    console->inspectOptions_depth = 2;
+    console->groupIndentation = 2;
+    return console;
+}
+
+// Free Console instance
+void nova_console_free(void* console_ptr) {
+    if (console_ptr) {
+        delete (ConsoleInstance*)console_ptr;
+    }
+}
+
+// Console instance methods
+void nova_console_instance_log(void* console_ptr, const char* str) {
+    if (!console_ptr || !str) return;
+    ConsoleInstance* console = (ConsoleInstance*)console_ptr;
+    fprintf(console->stdout_stream, "%s\n", str);
+}
+
+void nova_console_instance_error(void* console_ptr, const char* str) {
+    if (!console_ptr || !str) return;
+    ConsoleInstance* console = (ConsoleInstance*)console_ptr;
+    fprintf(console->stderr_stream, "%s\n", str);
+}
+
+void nova_console_instance_warn(void* console_ptr, const char* str) {
+    if (!console_ptr || !str) return;
+    ConsoleInstance* console = (ConsoleInstance*)console_ptr;
+    fprintf(console->stderr_stream, "%s\n", str);
 }
 
 // Date.now() - returns current timestamp in milliseconds since Unix epoch (ES5)

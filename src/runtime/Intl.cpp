@@ -55,6 +55,43 @@ void* nova_intl_numberformat_resolvedoptions(void* fmtPtr) {
     return strdup(fmt->locale);
 }
 
+void nova_intl_numberformat_free(void* fmtPtr) {
+    NovaNumberFormat* fmt = static_cast<NovaNumberFormat*>(fmtPtr);
+    if (fmt) {
+        free(fmt->locale);
+        free(fmt->style);
+        free(fmt->currency);
+        free(fmt);
+    }
+}
+
+// formatToParts returns JSON array of parts
+void* nova_intl_numberformat_formattoparts(void* fmtPtr, double value) {
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer), "[{\"type\":\"integer\",\"value\":\"%g\"}]", value);
+    return strdup(buffer);
+}
+
+// formatRange for number ranges
+void* nova_intl_numberformat_formatrange(void* fmtPtr, double start, double end) {
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer), "%g – %g", start, end);
+    return strdup(buffer);
+}
+
+void* nova_intl_numberformat_formatrangetoparts(void* fmtPtr, double start, double end) {
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer),
+        "[{\"type\":\"integer\",\"value\":\"%g\",\"source\":\"startRange\"},"
+        "{\"type\":\"literal\",\"value\":\" – \",\"source\":\"shared\"},"
+        "{\"type\":\"integer\",\"value\":\"%g\",\"source\":\"endRange\"}]", start, end);
+    return strdup(buffer);
+}
+
+void* nova_intl_numberformat_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
+}
+
 // ============================================================================
 // Intl.DateTimeFormat
 // ============================================================================
@@ -105,6 +142,64 @@ void* nova_intl_datetimeformat_resolvedoptions(void* fmtPtr) {
     return strdup(fmt->locale);
 }
 
+void nova_intl_datetimeformat_free(void* fmtPtr) {
+    NovaDateTimeFormat* fmt = static_cast<NovaDateTimeFormat*>(fmtPtr);
+    if (fmt) {
+        free(fmt->locale);
+        free(fmt->dateStyle);
+        free(fmt->timeStyle);
+        free(fmt->timeZone);
+        free(fmt);
+    }
+}
+
+void* nova_intl_datetimeformat_formattoparts(void* fmtPtr, int64_t timestamp) {
+    time_t t = static_cast<time_t>(timestamp / 1000);
+    struct tm* tm_info = gmtime(&t);
+    if (!tm_info) return strdup("[]");
+
+    char buffer[1024];
+    snprintf(buffer, sizeof(buffer),
+        "[{\"type\":\"month\",\"value\":\"%02d\"},"
+        "{\"type\":\"literal\",\"value\":\"/\"},"
+        "{\"type\":\"day\",\"value\":\"%02d\"},"
+        "{\"type\":\"literal\",\"value\":\"/\"},"
+        "{\"type\":\"year\",\"value\":\"%d\"}]",
+        tm_info->tm_mon + 1, tm_info->tm_mday, tm_info->tm_year + 1900);
+    return strdup(buffer);
+}
+
+void* nova_intl_datetimeformat_formatrange(void* fmtPtr, int64_t start, int64_t end) {
+    time_t t1 = static_cast<time_t>(start / 1000);
+    time_t t2 = static_cast<time_t>(end / 1000);
+    struct tm* tm1 = gmtime(&t1);
+    struct tm* tm2 = gmtime(&t2);
+
+    char buffer[256];
+    if (tm1 && tm2) {
+        char buf1[64], buf2[64];
+        strftime(buf1, sizeof(buf1), "%m/%d/%Y", tm1);
+        strftime(buf2, sizeof(buf2), "%m/%d/%Y", tm2);
+        snprintf(buffer, sizeof(buffer), "%s – %s", buf1, buf2);
+    } else {
+        snprintf(buffer, sizeof(buffer), "Invalid Date");
+    }
+    return strdup(buffer);
+}
+
+void* nova_intl_datetimeformat_formatrangetoparts(void* fmtPtr, int64_t start, int64_t end) {
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer),
+        "[{\"type\":\"month\",\"value\":\"1\",\"source\":\"startRange\"},"
+        "{\"type\":\"literal\",\"value\":\" – \",\"source\":\"shared\"},"
+        "{\"type\":\"month\",\"value\":\"12\",\"source\":\"endRange\"}]");
+    return strdup(buffer);
+}
+
+void* nova_intl_datetimeformat_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
+}
+
 // ============================================================================
 // Intl.Collator
 // ============================================================================
@@ -135,6 +230,20 @@ int64_t nova_intl_collator_compare(void* colPtr, const char* str1, const char* s
 void* nova_intl_collator_resolvedoptions(void* colPtr) {
     NovaCollator* col = static_cast<NovaCollator*>(colPtr);
     return strdup(col->locale);
+}
+
+void nova_intl_collator_free(void* colPtr) {
+    NovaCollator* col = static_cast<NovaCollator*>(colPtr);
+    if (col) {
+        free(col->locale);
+        free(col->usage);
+        free(col->sensitivity);
+        free(col);
+    }
+}
+
+void* nova_intl_collator_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
 }
 
 // ============================================================================
@@ -174,6 +283,24 @@ void* nova_intl_pluralrules_select(void* rulesPtr, double n) {
 void* nova_intl_pluralrules_resolvedoptions(void* rulesPtr) {
     NovaPluralRules* rules = static_cast<NovaPluralRules*>(rulesPtr);
     return strdup(rules->locale);
+}
+
+void nova_intl_pluralrules_free(void* rulesPtr) {
+    NovaPluralRules* rules = static_cast<NovaPluralRules*>(rulesPtr);
+    if (rules) {
+        free(rules->locale);
+        free(rules->type);
+        free(rules);
+    }
+}
+
+void* nova_intl_pluralrules_selectrange(void* rulesPtr, double start, double end) {
+    // For ranges, return category based on end value
+    return nova_intl_pluralrules_select(rulesPtr, end);
+}
+
+void* nova_intl_pluralrules_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
 }
 
 // ============================================================================
@@ -225,6 +352,43 @@ void* nova_intl_relativetimeformat_format(void* fmtPtr, double value, const char
     return strdup(buffer);
 }
 
+void nova_intl_relativetimeformat_free(void* fmtPtr) {
+    NovaRelativeTimeFormat* fmt = static_cast<NovaRelativeTimeFormat*>(fmtPtr);
+    if (fmt) {
+        free(fmt->locale);
+        free(fmt->style);
+        free(fmt->numeric);
+        free(fmt);
+    }
+}
+
+void* nova_intl_relativetimeformat_formattoparts(void* fmtPtr, double value, const char* unit) {
+    int64_t absVal = static_cast<int64_t>(value < 0 ? -value : value);
+    char buffer[512];
+
+    if (value < 0) {
+        snprintf(buffer, sizeof(buffer),
+            "[{\"type\":\"integer\",\"value\":\"%lld\",\"unit\":\"%s\"},"
+            "{\"type\":\"literal\",\"value\":\" %s ago\"}]",
+            (long long)absVal, unit ? unit : "second", unit ? unit : "second");
+    } else {
+        snprintf(buffer, sizeof(buffer),
+            "[{\"type\":\"literal\",\"value\":\"in \"},"
+            "{\"type\":\"integer\",\"value\":\"%lld\",\"unit\":\"%s\"}]",
+            (long long)absVal, unit ? unit : "second");
+    }
+    return strdup(buffer);
+}
+
+void* nova_intl_relativetimeformat_resolvedoptions(void* fmtPtr) {
+    NovaRelativeTimeFormat* fmt = static_cast<NovaRelativeTimeFormat*>(fmtPtr);
+    return strdup(fmt->locale);
+}
+
+void* nova_intl_relativetimeformat_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
+}
+
 // ============================================================================
 // Intl.ListFormat
 // ============================================================================
@@ -265,6 +429,38 @@ void* nova_intl_listformat_format_simple(void* fmtPtr, const char* item1, const 
     }
 
     return strdup(result.c_str());
+}
+
+void nova_intl_listformat_free(void* fmtPtr) {
+    NovaListFormat* fmt = static_cast<NovaListFormat*>(fmtPtr);
+    if (fmt) {
+        free(fmt->locale);
+        free(fmt->type);
+        free(fmt->style);
+        free(fmt);
+    }
+}
+
+void* nova_intl_listformat_formattoparts(void* fmtPtr, const char* item1, const char* item2) {
+    NovaListFormat* fmt = static_cast<NovaListFormat*>(fmtPtr);
+    const char* conj = strcmp(fmt->type, "disjunction") == 0 ? " or " : " and ";
+
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer),
+        "[{\"type\":\"element\",\"value\":\"%s\"},"
+        "{\"type\":\"literal\",\"value\":\"%s\"},"
+        "{\"type\":\"element\",\"value\":\"%s\"}]",
+        item1 ? item1 : "", conj, item2 ? item2 : "");
+    return strdup(buffer);
+}
+
+void* nova_intl_listformat_resolvedoptions(void* fmtPtr) {
+    NovaListFormat* fmt = static_cast<NovaListFormat*>(fmtPtr);
+    return strdup(fmt->locale);
+}
+
+void* nova_intl_listformat_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
 }
 
 // ============================================================================
@@ -315,6 +511,24 @@ void* nova_intl_displaynames_of(void* dnPtr, const char* code) {
     }
 
     return strdup(code);
+}
+
+void nova_intl_displaynames_free(void* dnPtr) {
+    NovaDisplayNames* dn = static_cast<NovaDisplayNames*>(dnPtr);
+    if (dn) {
+        free(dn->locale);
+        free(dn->type);
+        free(dn);
+    }
+}
+
+void* nova_intl_displaynames_resolvedoptions(void* dnPtr) {
+    NovaDisplayNames* dn = static_cast<NovaDisplayNames*>(dnPtr);
+    return strdup(dn->locale);
+}
+
+void* nova_intl_displaynames_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
 }
 
 // ============================================================================
@@ -381,6 +595,99 @@ void* nova_intl_locale_tostring(void* locPtr) {
     return strdup(loc->baseName);
 }
 
+void nova_intl_locale_free(void* locPtr) {
+    NovaLocale* loc = static_cast<NovaLocale*>(locPtr);
+    if (loc) {
+        free(loc->baseName);
+        free(loc->language);
+        free(loc->region);
+        free(loc->script);
+        free(loc);
+    }
+}
+
+void* nova_intl_locale_get_script(void* locPtr) {
+    NovaLocale* loc = static_cast<NovaLocale*>(locPtr);
+    return strdup(loc->script);
+}
+
+void* nova_intl_locale_maximize(void* locPtr) {
+    NovaLocale* loc = static_cast<NovaLocale*>(locPtr);
+    // Simplified: add default script and region if missing
+    std::string result = loc->language;
+    if (loc->script[0]) {
+        result += "-";
+        result += loc->script;
+    } else if (strcmp(loc->language, "en") == 0) {
+        result += "-Latn";
+    }
+    if (loc->region[0]) {
+        result += "-";
+        result += loc->region;
+    } else if (strcmp(loc->language, "en") == 0) {
+        result += "-US";
+    }
+    return strdup(result.c_str());
+}
+
+void* nova_intl_locale_minimize(void* locPtr) {
+    NovaLocale* loc = static_cast<NovaLocale*>(locPtr);
+    // Simplified: just return language
+    return strdup(loc->language);
+}
+
+void* nova_intl_locale_get_calendar(void* locPtr) {
+    return strdup("gregory");
+}
+
+void* nova_intl_locale_get_casefirst(void* locPtr) {
+    return strdup("false");
+}
+
+void* nova_intl_locale_get_collation(void* locPtr) {
+    return strdup("default");
+}
+
+void* nova_intl_locale_get_hourcycle(void* locPtr) {
+    return strdup("h23");
+}
+
+void* nova_intl_locale_get_numberingsystem(void* locPtr) {
+    return strdup("latn");
+}
+
+int64_t nova_intl_locale_get_numeric(void* locPtr) {
+    return 0;
+}
+
+void* nova_intl_locale_get_calendars(void* locPtr) {
+    return strdup("gregory");
+}
+
+void* nova_intl_locale_get_collations(void* locPtr) {
+    return strdup("default");
+}
+
+void* nova_intl_locale_get_hourcycles(void* locPtr) {
+    return strdup("h23,h12");
+}
+
+void* nova_intl_locale_get_numberingsystems(void* locPtr) {
+    return strdup("latn");
+}
+
+void* nova_intl_locale_get_timezones(void* locPtr) {
+    return strdup("UTC");
+}
+
+void* nova_intl_locale_get_textinfo(void* locPtr) {
+    return strdup("ltr");
+}
+
+void* nova_intl_locale_get_weekinfo(void* locPtr) {
+    return strdup("{\"firstDay\":1,\"weekend\":[6,7],\"minimalDays\":1}");
+}
+
 // ============================================================================
 // Intl.Segmenter
 // ============================================================================
@@ -424,6 +731,129 @@ int64_t nova_intl_segmenter_segment_count(void* segPtr, const char* str) {
     } else {
         return static_cast<int64_t>(s.length());
     }
+}
+
+void nova_intl_segmenter_free(void* segPtr) {
+    NovaSegmenter* seg = static_cast<NovaSegmenter*>(segPtr);
+    if (seg) {
+        free(seg->locale);
+        free(seg->granularity);
+        free(seg);
+    }
+}
+
+void* nova_intl_segmenter_resolvedoptions(void* segPtr) {
+    NovaSegmenter* seg = static_cast<NovaSegmenter*>(segPtr);
+    return strdup(seg->locale);
+}
+
+void* nova_intl_segmenter_segment(void* segPtr, const char* str) {
+    // Returns an iterator-like object (simplified as JSON)
+    NovaSegmenter* seg = static_cast<NovaSegmenter*>(segPtr);
+    if (!str) return strdup("[]");
+
+    std::string result = "[";
+    std::string s = str;
+    int index = 0;
+
+    if (strcmp(seg->granularity, "word") == 0) {
+        std::string word;
+        for (size_t i = 0; i <= s.length(); i++) {
+            if (i == s.length() || s[i] == ' ' || s[i] == '\t' || s[i] == '\n') {
+                if (!word.empty()) {
+                    if (result.length() > 1) result += ",";
+                    result += "{\"segment\":\"" + word + "\",\"index\":" + std::to_string(index) + ",\"isWordLike\":true}";
+                    word.clear();
+                }
+                index = (int)i + 1;
+            } else {
+                if (word.empty()) index = (int)i;
+                word += s[i];
+            }
+        }
+    } else {
+        // Grapheme mode - each character
+        for (size_t i = 0; i < s.length(); i++) {
+            if (i > 0) result += ",";
+            result += "{\"segment\":\"";
+            result += s[i];
+            result += "\",\"index\":" + std::to_string(i) + "}";
+        }
+    }
+
+    result += "]";
+    return strdup(result.c_str());
+}
+
+void* nova_intl_segmenter_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
+}
+
+// ============================================================================
+// Intl.DurationFormat (ES2023)
+// ============================================================================
+
+struct NovaDurationFormat {
+    char* locale;
+    char* style;  // "long", "short", "narrow", "digital"
+};
+
+void* nova_intl_durationformat_create(const char* locale, const char* style) {
+    NovaDurationFormat* fmt = static_cast<NovaDurationFormat*>(malloc(sizeof(NovaDurationFormat)));
+    fmt->locale = locale ? strdup(locale) : strdup("en");
+    fmt->style = style ? strdup(style) : strdup("short");
+    return fmt;
+}
+
+void nova_intl_durationformat_free(void* fmtPtr) {
+    NovaDurationFormat* fmt = static_cast<NovaDurationFormat*>(fmtPtr);
+    if (fmt) {
+        free(fmt->locale);
+        free(fmt->style);
+        free(fmt);
+    }
+}
+
+void* nova_intl_durationformat_format(void* fmtPtr, int64_t hours, int64_t minutes, int64_t seconds) {
+    NovaDurationFormat* fmt = static_cast<NovaDurationFormat*>(fmtPtr);
+    char buffer[256];
+
+    if (strcmp(fmt->style, "digital") == 0) {
+        snprintf(buffer, sizeof(buffer), "%lld:%02lld:%02lld",
+                 (long long)hours, (long long)minutes, (long long)seconds);
+    } else if (strcmp(fmt->style, "narrow") == 0) {
+        snprintf(buffer, sizeof(buffer), "%lldh %lldm %llds",
+                 (long long)hours, (long long)minutes, (long long)seconds);
+    } else if (strcmp(fmt->style, "long") == 0) {
+        snprintf(buffer, sizeof(buffer), "%lld hours, %lld minutes, %lld seconds",
+                 (long long)hours, (long long)minutes, (long long)seconds);
+    } else {
+        snprintf(buffer, sizeof(buffer), "%lld hr, %lld min, %lld sec",
+                 (long long)hours, (long long)minutes, (long long)seconds);
+    }
+
+    return strdup(buffer);
+}
+
+void* nova_intl_durationformat_formattoparts(void* fmtPtr, int64_t hours, int64_t minutes, int64_t seconds) {
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer),
+        "[{\"type\":\"hours\",\"value\":\"%lld\"},"
+        "{\"type\":\"literal\",\"value\":\":\"},"
+        "{\"type\":\"minutes\",\"value\":\"%lld\"},"
+        "{\"type\":\"literal\",\"value\":\":\"},"
+        "{\"type\":\"seconds\",\"value\":\"%lld\"}]",
+        (long long)hours, (long long)minutes, (long long)seconds);
+    return strdup(buffer);
+}
+
+void* nova_intl_durationformat_resolvedoptions(void* fmtPtr) {
+    NovaDurationFormat* fmt = static_cast<NovaDurationFormat*>(fmtPtr);
+    return strdup(fmt->locale);
+}
+
+void* nova_intl_durationformat_supportedlocalesof(const char* locales) {
+    return locales ? strdup(locales) : strdup("en");
 }
 
 // ============================================================================

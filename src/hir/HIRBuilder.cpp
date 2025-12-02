@@ -1,5 +1,9 @@
 #include "nova/HIR/HIR.h"
 #include <sstream>
+#include <iostream>
+
+// Debug output control - set to 1 to enable debug output
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
@@ -16,7 +20,7 @@ std::string HIRBuilder::generateName(const std::string& hint) {
 // Arithmetic Operations
 HIRInstruction* HIRBuilder::createAdd(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
     // Debug: Check input types
-    std::cerr << "DEBUG HIR: createAdd - lhs type kind="
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createAdd - lhs type kind="
               << (lhs && lhs->type ? static_cast<int>(lhs->type->kind) : -1)
               << ", rhs type kind="
               << (rhs && rhs->type ? static_cast<int>(rhs->type->kind) : -1) << std::endl;
@@ -26,7 +30,7 @@ HIRInstruction* HIRBuilder::createAdd(HIRValue* lhs, HIRValue* rhs, const std::s
         HIRInstruction::Opcode::Add, resultType, generateName(name));
 
     // Debug: Check result type
-    std::cerr << "DEBUG HIR: createAdd - result type kind="
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createAdd - result type kind="
               << (inst->type ? static_cast<int>(inst->type->kind) : -1) << std::endl;
 
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -299,12 +303,12 @@ HIRInstruction* HIRBuilder::createLoad(HIRValue* ptr, const std::string& name) {
     // Extract pointee type from pointer
     HIRTypePtr resultType = std::make_shared<HIRType>(HIRType::Kind::Any);
 
-    std::cerr << "DEBUG HIR: createLoad - ptr=" << ptr
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - ptr=" << ptr
               << ", ptr->type=" << (ptr ? ptr->type.get() : nullptr) << std::endl;
 
     try {
         if (ptr && ptr->type) {
-            std::cerr << "DEBUG HIR: createLoad - ptr type kind="
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - ptr type kind="
                       << static_cast<int>(ptr->type->kind) << std::endl;
             if (auto* ptrType = dynamic_cast<HIRPointerType*>(ptr->type.get())) {
                 if (ptrType && ptrType->pointeeType) {
@@ -320,38 +324,38 @@ HIRInstruction* HIRBuilder::createLoad(HIRValue* ptr, const std::string& name) {
 
                     if (keepPointerType) {
                         resultType = ptrType->pointeeType;  // Extract one level but keep ptr-to-array/struct
-                        std::cerr << "DEBUG HIR: createLoad - keeping pointer-to-array/struct type" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - keeping pointer-to-array/struct type" << std::endl;
                     } else {
                         resultType = ptrType->pointeeType;
-                        std::cerr << "DEBUG HIR: createLoad - extracted pointee type kind="
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - extracted pointee type kind="
                                   << static_cast<int>(resultType->kind) << std::endl;
                     }
                 } else {
-                    std::cerr << "DEBUG HIR: createLoad - pointeeType is null" << std::endl;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - pointeeType is null" << std::endl;
                 }
             } else {
-                std::cerr << "DEBUG HIR: createLoad - not a pointer type, using default Any" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - not a pointer type, using default Any" << std::endl;
             }
         }
     } catch (...) {
         // If cast fails, use Any type
-        std::cerr << "DEBUG HIR: createLoad - exception during type extraction" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - exception during type extraction" << std::endl;
     }
 
-    std::cerr << "DEBUG HIR: createLoad - before creating instruction, resultType.get()=" << resultType.get() << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - before creating instruction, resultType.get()=" << resultType.get() << std::endl;
     HIRPointerType* checkResultType = dynamic_cast<HIRPointerType*>(resultType.get());
-    std::cerr << "DEBUG HIR: createLoad - resultType dynamic_cast to HIRPointerType=" << checkResultType << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - resultType dynamic_cast to HIRPointerType=" << checkResultType << std::endl;
 
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Load, resultType, generateName(name));
 
-    std::cerr << "DEBUG HIR: createLoad - final result type kind="
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - final result type kind="
               << (inst->type ? static_cast<int>(inst->type->kind) : -1) << std::endl;
-    std::cerr << "DEBUG HIR: createLoad - inst->type.get()=" << inst->type.get() << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - inst->type.get()=" << inst->type.get() << std::endl;
 
     // Check if it's actually an HIRPointerType
     HIRPointerType* checkPtr = dynamic_cast<HIRPointerType*>(inst->type.get());
-    std::cerr << "DEBUG HIR: createLoad - dynamic_cast to HIRPointerType=" << checkPtr << std::endl;
+    if(NOVA_DEBUG) std::cerr << "DEBUG HIR: createLoad - dynamic_cast to HIRPointerType=" << checkPtr << std::endl;
 
     inst->addOperand(std::shared_ptr<HIRValue>(ptr, [](HIRValue*){}));
 

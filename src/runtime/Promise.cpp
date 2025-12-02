@@ -559,4 +559,190 @@ int64_t nova_promise_get_error(void* promisePtr) {
     return promise->error;
 }
 
+// promise.then(onFulfilled, onRejected) - full version with both callbacks
+void* nova_promise_then_both(void* promisePtr, void* onFulfilled, void* onRejected) {
+    if (!promisePtr) return nova_promise_reject(-1);
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    NovaPromise* nextPromise = static_cast<NovaPromise*>(nova_promise_create());
+
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+
+        if (promise->state == PromiseState::PENDING) {
+            PromiseCallback thenCb;
+            thenCb.type = PromiseCallback::Type::THEN;
+            thenCb.callback = onFulfilled;
+            thenCb.nextPromise = nextPromise;
+            promise->callbacks.push_back(thenCb);
+
+            if (onRejected) {
+                PromiseCallback catchCb;
+                catchCb.type = PromiseCallback::Type::CATCH;
+                catchCb.callback = onRejected;
+                catchCb.nextPromise = nextPromise;
+                promise->callbacks.push_back(catchCb);
+            }
+        } else if (promise->state == PromiseState::FULFILLED) {
+            int64_t value = promise->value;
+            nova_promise_queue_microtask([onFulfilled, value, nextPromise]() {
+                if (onFulfilled) {
+                    typedef int64_t (*ThenCallback)(int64_t);
+                    try {
+                        int64_t result = reinterpret_cast<ThenCallback>(onFulfilled)(value);
+                        nova_promise_fulfill(nextPromise, result);
+                    } catch (...) {
+                        nova_promise_reject_internal(nextPromise, -1);
+                    }
+                } else {
+                    nova_promise_fulfill(nextPromise, value);
+                }
+            });
+            nova_promise_process_microtasks();
+        } else {
+            int64_t error = promise->error;
+            if (onRejected) {
+                nova_promise_queue_microtask([onRejected, error, nextPromise]() {
+                    typedef int64_t (*CatchCallback)(int64_t);
+                    try {
+                        int64_t result = reinterpret_cast<CatchCallback>(onRejected)(error);
+                        nova_promise_fulfill(nextPromise, result);
+                    } catch (...) {
+                        nova_promise_reject_internal(nextPromise, -1);
+                    }
+                });
+                nova_promise_process_microtasks();
+            } else {
+                nova_promise_reject_internal(nextPromise, error);
+            }
+        }
+    }
+
+    return nextPromise;
+}
+
+// Promise.try(fn) - ES2025: Wraps function in try/catch and returns promise
+void* nova_promise_try(void* fn) {
+    NovaPromise* promise = static_cast<NovaPromise*>(nova_promise_create());
+
+    if (!fn) {
+        nova_promise_fulfill(promise, 0);
+        return promise;
+    }
+
+    typedef int64_t (*TryCallback)();
+    try {
+        int64_t result = reinterpret_cast<TryCallback>(fn)();
+        nova_promise_fulfill(promise, result);
+    } catch (...) {
+        nova_promise_reject_internal(promise, -1);
+    }
+
+    return promise;
+}
+
+// Promise.try with args - ES2025
+void* nova_promise_try_with_args(void* fn, int64_t* args, int argCount) {
+    NovaPromise* promise = static_cast<NovaPromise*>(nova_promise_create());
+
+    if (!fn) {
+        nova_promise_fulfill(promise, 0);
+        return promise;
+    }
+
+    try {
+        int64_t result = 0;
+        switch (argCount) {
+            case 0: {
+                typedef int64_t (*Fn0)();
+                result = reinterpret_cast<Fn0>(fn)();
+                break;
+            }
+            case 1: {
+                typedef int64_t (*Fn1)(int64_t);
+                result = reinterpret_cast<Fn1>(fn)(args[0]);
+                break;
+            }
+            case 2: {
+                typedef int64_t (*Fn2)(int64_t, int64_t);
+                result = reinterpret_cast<Fn2>(fn)(args[0], args[1]);
+                break;
+            }
+            case 3:
+            default: {
+                typedef int64_t (*Fn3)(int64_t, int64_t, int64_t);
+                result = reinterpret_cast<Fn3>(fn)(args[0], args[1], args[2]);
+                break;
+            }
+        }
+        nova_promise_fulfill(promise, result);
+    } catch (...) {
+        nova_promise_reject_internal(promise, -1);
+    }
+
+    return promise;
+}
+
+// Free a promise (cleanup)
+void nova_promise_free(void* promisePtr) {
+    if (!promisePtr) return;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    delete promise;
+}
+
+// Free withResolvers result
+void nova_promise_withResolvers_free(void* resolversPtr) {
+    if (!resolversPtr) return;
+    PromiseWithResolvers* resolvers = static_cast<PromiseWithResolvers*>(resolversPtr);
+    delete resolvers;
+}
+
+// Get promise state as string
+const char* nova_promise_get_state(void* promisePtr) {
+    if (!promisePtr) return "unknown";
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    switch (promise->state) {
+        case PromiseState::PENDING: return "pending";
+        case PromiseState::FULFILLED: return "fulfilled";
+        case PromiseState::REJECTED: return "rejected";
+        default: return "unknown";
+    }
+}
+
+// Symbol.toStringTag support - returns "[object Promise]"
+const char* nova_promise_toString(void* promisePtr) {
+    (void)promisePtr;
+    return "[object Promise]";
+}
+
+// Check if value is a Promise
+int64_t nova_promise_isPromise(void* value) {
+    if (!value) return 0;
+    NovaPromise* p = static_cast<NovaPromise*>(value);
+    return (p->state == PromiseState::PENDING ||
+            p->state == PromiseState::FULFILLED ||
+            p->state == PromiseState::REJECTED) ? 1 : 0;
+}
+
+// Run microtask checkpoint
+void nova_promise_runMicrotasks() {
+    nova_promise_process_microtasks();
+}
+
+// Check if microtask queue is empty
+int64_t nova_promise_hasPendingMicrotasks() {
+    std::lock_guard<std::mutex> lock(microtaskMutex);
+    return microtaskQueue.empty() ? 0 : 1;
+}
+
+// queueMicrotask - internal Promise API version (main one in Timers.cpp)
+void nova_promise_queueMicrotaskInternal(void* callback) {
+    if (!callback) return;
+    typedef void (*MicrotaskCallback)();
+    MicrotaskCallback cb = reinterpret_cast<MicrotaskCallback>(callback);
+    nova_promise_queue_microtask([cb]() {
+        cb();
+    });
+}
+
 } // extern "C"
