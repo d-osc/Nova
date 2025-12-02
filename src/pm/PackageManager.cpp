@@ -200,15 +200,222 @@ static std::string base64Encode(const std::vector<unsigned char>& data) {
     return result;
 }
 
+// Get user's home directory
+static std::string getHomeDir() {
+#ifdef _WIN32
+    const char* userProfile = std::getenv("USERPROFILE");
+    if (userProfile) return userProfile;
+    const char* homeDrive = std::getenv("HOMEDRIVE");
+    const char* homePath = std::getenv("HOMEPATH");
+    if (homeDrive && homePath) {
+        return std::string(homeDrive) + homePath;
+    }
+    return "C:\\";
+#else
+    const char* home = std::getenv("HOME");
+    if (home) return home;
+    return "/tmp";
+#endif
+}
+
+// Get global npmrc path
+static std::string getGlobalNpmrcPath() {
+#ifdef _WIN32
+    const char* appData = std::getenv("APPDATA");
+    if (appData) {
+        return std::string(appData) + "\\npm\\etc\\npmrc";
+    }
+    return "C:\\Program Files\\nodejs\\etc\\npmrc";
+#else
+    return "/etc/npmrc";
+#endif
+}
+
 // Constructor
 PackageManager::PackageManager() {
     cacheDir_ = getDefaultCacheDir();
     registry_ = "https://registry.npmjs.org";
     projectPath_ = ".";
+    // Load default .npmrc from home directory
+    loadNpmrc(".");
 }
 
 // Destructor
 PackageManager::~PackageManager() {
+}
+
+// Parse a single .npmrc file
+void PackageManager::parseNpmrcFile(const std::string& filePath, NpmrcConfig& config) {
+    std::ifstream file(filePath);
+    if (!file.is_open()) return;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+
+        // Trim whitespace
+        size_t start = line.find_first_not_of(" \t");
+        size_t end = line.find_last_not_of(" \t\r\n");
+        if (start == std::string::npos) continue;
+        line = line.substr(start, end - start + 1);
+
+        // Handle environment variable substitution ${VAR}
+        size_t varStart;
+        while ((varStart = line.find("${")) != std::string::npos) {
+            size_t varEnd = line.find("}", varStart);
+            if (varEnd == std::string::npos) break;
+            std::string varName = line.substr(varStart + 2, varEnd - varStart - 2);
+            const char* varValue = std::getenv(varName.c_str());
+            line.replace(varStart, varEnd - varStart + 1, varValue ? varValue : "");
+        }
+
+        // Find the = separator
+        size_t eqPos = line.find('=');
+        if (eqPos == std::string::npos) continue;
+
+        std::string key = line.substr(0, eqPos);
+        std::string value = line.substr(eqPos + 1);
+
+        // Trim key and value
+        size_t keyEnd = key.find_last_not_of(" \t");
+        if (keyEnd != std::string::npos) key = key.substr(0, keyEnd + 1);
+
+        size_t valueStart = value.find_first_not_of(" \t");
+        if (valueStart != std::string::npos) value = value.substr(valueStart);
+
+        // Handle scoped registry: @scope:registry=url
+        if (key[0] == '@' && key.find(":registry") != std::string::npos) {
+            size_t colonPos = key.find(':');
+            std::string scope = key.substr(0, colonPos);
+            config.scopedRegistries[scope] = value;
+            continue;
+        }
+
+        // Handle auth tokens: //registry.npmjs.org/:_authToken=xxx
+        if (key.substr(0, 2) == "//") {
+            size_t authPos = key.find(":_authToken");
+            if (authPos != std::string::npos) {
+                std::string registry = key.substr(0, authPos);
+                config.authTokens[registry] = value;
+                continue;
+            }
+            size_t authBasicPos = key.find(":_auth");
+            if (authBasicPos != std::string::npos) {
+                std::string registry = key.substr(0, authBasicPos);
+                config.authBasic[registry] = value;
+                continue;
+            }
+        }
+
+        // Handle standard settings
+        if (key == "registry") {
+            config.registry = value;
+        } else if (key == "save-exact") {
+            config.saveExact = (value == "true" || value == "1");
+        } else if (key == "save-prefix") {
+            config.savePrefix = (value != "false" && value != "0");
+        } else if (key == "prefix") {
+            config.prefix = value;
+        } else if (key == "strict-ssl") {
+            config.strictSSL = (value == "true" || value == "1");
+        } else if (key == "cafile") {
+            config.cafile = value;
+        } else if (key == "proxy") {
+            config.proxy = value;
+        } else if (key == "https-proxy") {
+            config.httpsProxy = value;
+        } else if (key == "progress") {
+            config.progress = (value == "true" || value == "1");
+        } else if (key == "fetch-retries") {
+            try {
+                config.fetchRetries = std::stoi(value);
+            } catch (...) {}
+        } else if (key == "fetch-timeout") {
+            try {
+                config.fetchTimeout = std::stoi(value);
+            } catch (...) {}
+        } else {
+            // Store any other settings
+            config.customSettings[key] = value;
+        }
+    }
+}
+
+// Load .npmrc configuration from multiple sources
+void PackageManager::loadNpmrc(const std::string& projectPath) {
+    // Start with defaults
+    npmrcConfig_ = NpmrcConfig();
+    npmrcConfig_.registry = "https://registry.npmjs.org";
+
+    // 1. Load global npmrc (/etc/npmrc or C:\Program Files\nodejs\etc\npmrc)
+    parseNpmrcFile(getGlobalNpmrcPath(), npmrcConfig_);
+
+    // 2. Load user's .npmrc (~/.npmrc)
+    std::string userNpmrc = getHomeDir() +
+#ifdef _WIN32
+        "\\.npmrc";
+#else
+        "/.npmrc";
+#endif
+    parseNpmrcFile(userNpmrc, npmrcConfig_);
+
+    // 3. Load project's .npmrc (projectPath/.npmrc)
+    std::filesystem::path projectNpmrc = std::filesystem::absolute(projectPath) / ".npmrc";
+    parseNpmrcFile(projectNpmrc.string(), npmrcConfig_);
+
+    // Apply registry from config
+    if (!npmrcConfig_.registry.empty()) {
+        registry_ = npmrcConfig_.registry;
+    }
+}
+
+// Get registry URL for a specific package (handles scoped packages)
+std::string PackageManager::getRegistryForPackage(const std::string& packageName) const {
+    // Check if it's a scoped package (@scope/name)
+    if (!packageName.empty() && packageName[0] == '@') {
+        size_t slashPos = packageName.find('/');
+        if (slashPos != std::string::npos) {
+            std::string scope = packageName.substr(0, slashPos);
+            auto it = npmrcConfig_.scopedRegistries.find(scope);
+            if (it != npmrcConfig_.scopedRegistries.end()) {
+                return it->second;
+            }
+        }
+    }
+    return registry_;
+}
+
+// Get auth token for a specific registry
+std::string PackageManager::getAuthTokenForRegistry(const std::string& registryUrl) const {
+    // Extract hostname from URL for matching
+    // e.g., https://registry.npmjs.org -> //registry.npmjs.org
+    std::string host;
+    size_t protocolEnd = registryUrl.find("://");
+    if (protocolEnd != std::string::npos) {
+        host = "//" + registryUrl.substr(protocolEnd + 3);
+    } else {
+        host = "//" + registryUrl;
+    }
+
+    // Remove trailing slash
+    if (!host.empty() && host.back() == '/') {
+        host.pop_back();
+    }
+
+    // Look for exact match first
+    auto it = npmrcConfig_.authTokens.find(host);
+    if (it != npmrcConfig_.authTokens.end()) {
+        return it->second;
+    }
+
+    // Try with trailing slash
+    it = npmrcConfig_.authTokens.find(host + "/");
+    if (it != npmrcConfig_.authTokens.end()) {
+        return it->second;
+    }
+
+    return "";
 }
 
 // Set cache directory
@@ -712,7 +919,9 @@ std::string PackageManager::getTagFromVersion(const std::string& version) {
 
 // Get latest version of a package
 std::string PackageManager::getLatestVersion(const std::string& packageName) {
-    std::string url = registry_ + "/" + packageName + "/latest";
+    // Get the appropriate registry for this package (handles scoped packages)
+    std::string packageRegistry = getRegistryForPackage(packageName);
+    std::string url = packageRegistry + "/" + packageName + "/latest";
     std::string response = httpGet(url);
     if (response.empty()) return "";
     return getJsonString(response, "version");
@@ -724,13 +933,16 @@ PackageInfo PackageManager::resolvePackage(const std::string& packageName, const
     info.name = packageName;
     info.version = versionRange;
 
+    // Get the appropriate registry for this package (handles scoped packages)
+    std::string packageRegistry = getRegistryForPackage(packageName);
+
     std::string tag = getTagFromVersion(versionRange);
-    std::string url = registry_ + "/" + packageName + "/" + (versionRange.empty() ? "latest" : versionRange);
+    std::string url = packageRegistry + "/" + packageName + "/" + (versionRange.empty() ? "latest" : versionRange);
 
     std::string response = httpGet(url);
     if (response.empty()) {
         // Try latest
-        url = registry_ + "/" + packageName + "/latest";
+        url = packageRegistry + "/" + packageName + "/latest";
         response = httpGet(url);
     }
 
@@ -873,6 +1085,9 @@ std::vector<PackageInfo> PackageManager::buildDependencyTree(const std::map<std:
 InstallResult PackageManager::install(const std::string& projectPath, bool devDependencies) {
     InstallResult result = {true, 0, 0, 0, 0, 0.0, 0, {}, {}};
     projectPath_ = projectPath;
+
+    // Load .npmrc from project path
+    loadNpmrc(projectPath);
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -1017,6 +1232,9 @@ InstallResult PackageManager::add(const std::string& packageName, const std::str
     if (depType == DependencyType::Global) {
         return installGlobal(packageName, version);
     }
+
+    // Load .npmrc from project path
+    loadNpmrc(projectPath_);
 
     InstallResult result = installPackage(packageName, version);
 

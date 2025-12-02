@@ -45,6 +45,7 @@ Commands:
   logout         Log out from registry
   pack           Create a tarball for publishing
   publish        Publish package to registry
+  config         Show current configuration (reads .npmrc)
   emit           Emit IR at various stages
 
 Options:
@@ -460,6 +461,54 @@ int main(int argc, char** argv) {
         std::string registry = inputFile.empty() ? "" : inputFile;
         bool success = pm.logout(registry);
         return success ? 0 : 1;
+    }
+
+    // Handle config command - show current configuration
+    if (command == "config") {
+        pm::PackageManager pm;
+        std::string projectPath = inputFile.empty() ? "." : inputFile;
+        pm.loadNpmrc(projectPath);
+        const auto& config = pm.getNpmrcConfig();
+
+        std::cout << "[nova] Configuration" << std::endl;
+        std::cout << std::endl;
+        std::cout << "Registry: " << config.registry << std::endl;
+
+        if (!config.scopedRegistries.empty()) {
+            std::cout << std::endl;
+            std::cout << "Scoped Registries:" << std::endl;
+            for (const auto& [scope, registry] : config.scopedRegistries) {
+                std::cout << "  " << scope << " -> " << registry << std::endl;
+            }
+        }
+
+        if (!config.authTokens.empty()) {
+            std::cout << std::endl;
+            std::cout << "Auth Tokens:" << std::endl;
+            for (const auto& [registry, token] : config.authTokens) {
+                // Mask the token for security
+                std::string maskedToken = token.size() > 8 ?
+                    token.substr(0, 4) + "..." + token.substr(token.size() - 4) : "****";
+                std::cout << "  " << registry << " -> " << maskedToken << std::endl;
+            }
+        }
+
+        std::cout << std::endl;
+        std::cout << "Settings:" << std::endl;
+        std::cout << "  save-exact: " << (config.saveExact ? "true" : "false") << std::endl;
+        std::cout << "  strict-ssl: " << (config.strictSSL ? "true" : "false") << std::endl;
+        std::cout << "  progress: " << (config.progress ? "true" : "false") << std::endl;
+        std::cout << "  fetch-retries: " << config.fetchRetries << std::endl;
+        std::cout << "  fetch-timeout: " << config.fetchTimeout << "ms" << std::endl;
+
+        if (!config.proxy.empty()) {
+            std::cout << "  proxy: " << config.proxy << std::endl;
+        }
+        if (!config.httpsProxy.empty()) {
+            std::cout << "  https-proxy: " << config.httpsProxy << std::endl;
+        }
+
+        return 0;
     }
 
     // Handle pack command

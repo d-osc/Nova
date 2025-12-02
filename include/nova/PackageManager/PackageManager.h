@@ -18,6 +18,25 @@ enum class DependencyType {
     Global          // global installation (-g, --global)
 };
 
+// .npmrc configuration
+struct NpmrcConfig {
+    std::string registry;                              // registry=https://registry.npmjs.org
+    std::map<std::string, std::string> authTokens;     // //registry.npmjs.org/:_authToken=xxx
+    std::map<std::string, std::string> authBasic;      // //registry.npmjs.org/:_auth=xxx (base64)
+    bool saveExact = false;                            // save-exact=true
+    bool savePrefix = true;                            // save-prefix=^
+    std::string prefix;                                // prefix=~/.npm-global
+    bool strictSSL = true;                             // strict-ssl=true
+    std::string cafile;                                // cafile=/path/to/cert.pem
+    std::string proxy;                                 // proxy=http://proxy.example.com:8080
+    std::string httpsProxy;                            // https-proxy=http://proxy.example.com:8080
+    bool progress = true;                              // progress=true
+    int fetchRetries = 2;                              // fetch-retries=2
+    int fetchTimeout = 300000;                         // fetch-timeout=300000
+    std::map<std::string, std::string> scopedRegistries; // @myorg:registry=https://npm.myorg.com
+    std::map<std::string, std::string> customSettings;  // Any other settings
+};
+
 // Package dependency info
 struct PackageInfo {
     std::string name;
@@ -129,6 +148,19 @@ public:
     // Clean cache
     void cleanCache(int olderThanDays = 30);
 
+    // Load .npmrc configuration
+    // Loads from: 1) project/.npmrc 2) ~/.npmrc 3) global npmrc
+    void loadNpmrc(const std::string& projectPath = ".");
+
+    // Get current npmrc config
+    const NpmrcConfig& getNpmrcConfig() const { return npmrcConfig_; }
+
+    // Get registry URL for a specific package (handles scoped packages)
+    std::string getRegistryForPackage(const std::string& packageName) const;
+
+    // Get auth token for a specific registry
+    std::string getAuthTokenForRegistry(const std::string& registryUrl) const;
+
     // Set progress callback
     void setProgressCallback(ProgressCallback callback) { progressCallback_ = callback; }
 
@@ -141,6 +173,10 @@ private:
     std::string projectPath_;
     int parallelDownloads_ = 16;
     ProgressCallback progressCallback_;
+    NpmrcConfig npmrcConfig_;
+
+    // Parse a single .npmrc file and merge into config
+    void parseNpmrcFile(const std::string& filePath, NpmrcConfig& config);
 
     // Cache path: cacheDir/package-name/tag/version.tar.gz
     std::string getCachePath(const std::string& packageName, const std::string& tag, const std::string& version);
