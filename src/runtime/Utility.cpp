@@ -52,7 +52,7 @@ void print_value(void* value, TypeId type_id) {
     }
 }
 
-void panic(const char* message) {
+[[noreturn]] void panic(const char* message) {
     std::cerr << "PANIC: " << (message ? message : "Unknown error") << std::endl;
     std::exit(1);
 }
@@ -674,67 +674,112 @@ int64_t nova_math_max(int64_t a, int64_t b) {
     return a > b ? a : b;
 }
 
-// JSON.stringify(number) - converts a number to a JSON string (ES5)
-char* nova_json_stringify_number(int64_t value) {
-    // Convert number to string
-    char buffer[32];
-    snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+// JSON functions - wrap in extern "C" for proper linkage
+extern "C" {
 
-    // Allocate and copy result
-    size_t len = strlen(buffer);
+// String pool for constant strings (avoid malloc overhead)
+static const char* const JSON_TRUE = "true";
+static const char* const JSON_FALSE = "false";
+static const char* const JSON_NULL = "null";
+
+// Optimized integer to string (faster than snprintf)
+static inline size_t fast_i64toa(int64_t value, char* buffer) {
+    char* ptr = buffer;
+
+    // Handle negative numbers
+    if (value < 0) {
+        *ptr++ = '-';
+        value = -value;
+    }
+
+    // Handle zero case
+    if (value == 0) {
+        *ptr++ = '0';
+        *ptr = '\0';
+        return ptr - buffer;
+    }
+
+    // Convert digits in reverse
+    char* start = ptr;
+    while (value > 0) {
+        *ptr++ = '0' + (value % 10);
+        value /= 10;
+    }
+
+    // Reverse the digits
+    char* end = ptr - 1;
+    while (start < end) {
+        char tmp = *start;
+        *start++ = *end;
+        *end-- = tmp;
+    }
+
+    *ptr = '\0';
+    return ptr - buffer;
+}
+
+// JSON.stringify(number) - ULTRA OPTIMIZED - converts a number to a JSON string (ES5)
+char* nova_json_stringify_number(int64_t value) {
+    // For small numbers (0-9), use cached single-digit strings
+    if (value >= 0 && value <= 9) {
+        static const char* digits[10] = {"0","1","2","3","4","5","6","7","8","9"};
+        return (char*)digits[value];
+    }
+
+    char buffer[32];
+    size_t len = fast_i64toa(value, buffer);
+
     char* result = (char*)malloc(len + 1);
-    strcpy(result, buffer);
+    memcpy(result, buffer, len + 1);
     return result;
 }
 
-// JSON.stringify(string) - converts a string to a JSON string with quotes (ES5)
+// JSON.stringify(string) - ULTRA OPTIMIZED - converts a string to a JSON string with quotes (ES5)
 char* nova_json_stringify_string(const char* str) {
     if (!str) {
-        // Return "null" for null strings
-        char* result = (char*)malloc(5);
-        strcpy(result, "null");
-        return result;
+        return (char*)JSON_NULL;
     }
 
-    // Calculate length: original + 2 quotes + null terminator
     size_t len = strlen(str);
+
+    // For empty strings, return cached result
+    if (len == 0) {
+        static const char* EMPTY_STRING = "\"\"";
+        return (char*)EMPTY_STRING;
+    }
+
     char* result = (char*)malloc(len + 3);
 
-    // Add opening quote, string, and closing quote
+    // Unrolled copy for small strings
     result[0] = '"';
-    strcpy(result + 1, str);
+    if (len <= 16) {
+        // Manual unrolling for cache efficiency
+        for (size_t i = 0; i < len; i++) {
+            result[i + 1] = str[i];
+        }
+    } else {
+        memcpy(result + 1, str, len);
+    }
     result[len + 1] = '"';
     result[len + 2] = '\0';
 
     return result;
 }
 
-// JSON.stringify(boolean) - converts a boolean to a JSON string (ES5)
+// JSON.stringify(boolean) - ULTRA OPTIMIZED - returns constant strings (ES5)
 char* nova_json_stringify_bool(int64_t value) {
-    if (value) {
-        char* result = (char*)malloc(5);
-        strcpy(result, "true");
-        return result;
-    } else {
-        char* result = (char*)malloc(6);
-        strcpy(result, "false");
-        return result;
-    }
+    return (char*)(value ? JSON_TRUE : JSON_FALSE);
 }
 
-// JSON.stringify(null) - returns "null" string (ES5)
+// JSON.stringify(null) - OPTIMIZED - returns constant string (ES5)
 char* nova_json_stringify_null() {
-    char* result = (char*)malloc(5);
-    strcpy(result, "null");
-    return result;
+    return (char*)JSON_NULL;
 }
 
-// JSON.stringify(undefined) - returns undefined (which becomes nothing in JSON)
+// JSON.stringify(undefined) - OPTIMIZED - returns constant string (ES5)
 char* nova_json_stringify_undefined() {
-    // undefined values are omitted in JSON, but when called directly return "undefined"
-    char* result = (char*)malloc(10);
-    strcpy(result, "undefined");
-    return result;
+    static const char* JSON_UNDEFINED = "undefined";
+    return (char*)JSON_UNDEFINED;
 }
 
 // JSON.stringify(float) - converts a floating point number to a JSON string (ES5)
@@ -762,67 +807,55 @@ char* nova_json_stringify_float(double value) {
     return result;
 }
 
-// Forward declarations for array functions
-extern "C" {
-    int64_t nova_value_array_length(void* arr);
-    int64_t nova_value_array_at(void* arr, int64_t index);
-}
+// Forward declarations for array functions (inside same extern C block)
+int64_t nova_value_array_length(void* arr);
+int64_t nova_value_array_at(void* arr, int64_t index);
 
-// JSON.stringify(array) - converts an array to a JSON string (ES5)
+// JSON.stringify(array) - OPTIMIZED - converts an array to a JSON string (ES5)
 char* nova_json_stringify_array(void* arr) {
     if (!arr) {
-        char* result = (char*)malloc(5);
-        strcpy(result, "null");
-        return result;
+        return (char*)JSON_NULL;
     }
 
     int64_t len = nova_value_array_length(arr);
 
     if (len == 0) {
-        char* result = (char*)malloc(3);
-        strcpy(result, "[]");
-        return result;
+        static const char* EMPTY_ARRAY = "[]";
+        return (char*)EMPTY_ARRAY;
     }
 
-    // Build the JSON array string
-    size_t bufferSize = 256;
+    // Pre-calculate buffer size (estimate: 20 chars per number + commas)
+    size_t bufferSize = 2 + len * 21;  // '[' + ']' + (number + ',') * len
     char* buffer = (char*)malloc(bufferSize);
-    buffer[0] = '[';
-    size_t pos = 1;
+    char* ptr = buffer;
+
+    *ptr++ = '[';
 
     for (int64_t i = 0; i < len; i++) {
         int64_t value = nova_value_array_at(arr, i);
 
-        // Convert value to string
-        char numStr[32];
-        snprintf(numStr, sizeof(numStr), "%lld", (long long)value);
-        size_t numLen = strlen(numStr);
-
-        // Check if we need to resize buffer
-        if (pos + numLen + 3 > bufferSize) {
-            bufferSize *= 2;
-            buffer = (char*)realloc(buffer, bufferSize);
-        }
-
         // Add comma if not first element
         if (i > 0) {
-            buffer[pos++] = ',';
+            *ptr++ = ',';
         }
 
-        // Add the number
-        strcpy(buffer + pos, numStr);
-        pos += numLen;
+        // Use optimized fast_i64toa
+        ptr += fast_i64toa(value, ptr);
     }
 
-    buffer[pos++] = ']';
-    buffer[pos] = '\0';
+    *ptr++ = ']';
+    *ptr = '\0';
 
-    // Trim to actual size
-    char* result = (char*)malloc(pos + 1);
-    strcpy(result, buffer);
-    free(buffer);
+    // Trim to actual size if we over-allocated significantly
+    size_t actualSize = ptr - buffer;
+    if (actualSize < bufferSize / 2) {
+        char* result = (char*)malloc(actualSize + 1);
+        memcpy(result, buffer, actualSize + 1);
+        free(buffer);
+        return result;
+    }
 
-    return result;
+    return buffer;
 }
 
 // Simple JSON parser state
@@ -1000,6 +1033,8 @@ char* nova_json_parse_string(const char* text) {
 
     return nullptr;
 }
+
+} // extern "C"
 
 // encodeURIComponent() - encodes a URI component (ES3)
 // Encodes all characters except: A-Z a-z 0-9 - _ . ! ~ * ' ( )

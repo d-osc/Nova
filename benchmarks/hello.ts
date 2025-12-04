@@ -1,2 +1,1 @@
-// Simple hello world for startup time measurement
-console.log("Hello, World!");
+console.log(42);

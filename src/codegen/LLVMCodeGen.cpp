@@ -46,6 +46,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <iostream>
+#include <fstream>
 
 #ifdef _MSC_VER
 #pragma warning(pop)
@@ -226,6 +227,62 @@ bool LLVMCodeGen::emitLLVMIR(const std::string& filename) {
     module->print(dest, nullptr);
     dest.flush();
     
+    return true;
+}
+
+bool LLVMCodeGen::emitExecutable(const std::string& filename) {
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: emitExecutable called for " << filename << std::endl;
+
+    // Step 1: Emit LLVM IR to a temporary file
+    std::string irFile = filename + ".ll";
+    if (!emitLLVMIR(irFile)) {
+        std::cerr << "Failed to emit LLVM IR" << std::endl;
+        return false;
+    }
+
+    // Step 2: Determine path to novacore library
+    std::string novacoreLib;
+#ifdef _WIN32
+    // On Windows, find novacore.lib relative to the Nova executable
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    std::string exeDir = exePath;
+    size_t lastSlash = exeDir.find_last_of("\\/");
+    if (lastSlash != std::string::npos) {
+        exeDir = exeDir.substr(0, lastSlash);
+    }
+    novacoreLib = exeDir + "/novacore.lib";
+
+    if(NOVA_DEBUG) {
+        std::cerr << "DEBUG LLVM: Looking for novacore.lib at: " << novacoreLib << std::endl;
+        std::ifstream libCheck(novacoreLib);
+        std::cerr << "DEBUG LLVM: novacore.lib exists: " << (libCheck.good() ? "yes" : "no") << std::endl;
+    }
+#else
+    // On Unix, use relative path
+    novacoreLib = "build/Release/libnovacore.a";
+#endif
+
+    // Step 3: Compile IR to executable using clang++ with runtime library
+    std::string compileCmd;
+#ifdef _WIN32
+    compileCmd = "clang++ -O2 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lmsvcrt -lkernel32 -lWs2_32 -lAdvapi32 -Wno-override-module 2>&1";
+#else
+    compileCmd = "clang++ -O2 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lc -lstdc++ 2>&1";
+#endif
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Compile command: " << compileCmd << std::endl;
+
+    int result = system(compileCmd.c_str());
+
+    // Clean up IR file (best effort)
+    std::remove(irFile.c_str());
+
+    if (result != 0) {
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Compilation failed with code " << result << std::endl;
+        return false;
+    }
+
+    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Successfully created executable: " << filename << std::endl;
     return true;
 }
 

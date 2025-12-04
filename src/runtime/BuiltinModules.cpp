@@ -15,7 +15,9 @@ static const std::vector<std::string> BUILTIN_MODULES = {
     "nova:fs",
     "nova:test",
     "nova:path",
-    "nova:os"
+    "nova:os",
+    "nova:http",
+    "nova:http2"
 };
 
 // Check if module is a built-in nova module

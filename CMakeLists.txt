@@ -21,6 +21,28 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Optimization flags for Release build
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    if(MSVC)
+        # MSVC aggressive optimization flags
+        add_compile_options(/O2 /Oi /Ot /Ob3 /GL /Gw /Gy)
+        # /O2 - Max optimization
+        # /Oi - Intrinsic functions
+        # /Ot - Favor fast code
+        # /Ob3 - Aggressive inlining
+        # /GL - Whole program optimization
+        # /Gw - Optimize global data
+        # /Gy - Function-level linking
+        add_link_options(/LTCG /OPT:REF /OPT:ICF)
+        # /LTCG - Link-time code generation
+        # /OPT:REF - Eliminate unreferenced functions
+        # /OPT:ICF - COMDAT folding
+    else()
+        # GCC/Clang aggressive optimization flags
+        add_compile_options(-O3 -march=native -ffast-math -finline-functions -funroll-loops)
+    endif()
+endif()
+
 # Find LLVM
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
@@ -104,6 +126,8 @@ set(NOVA_SOURCES
     
     # LLVM IR Generation
     src/codegen/LLVMCodeGen.cpp
+    src/codegen/LLVMInit.cpp
+    src/codegen/CompilationCache.cpp
     src/codegen/CodeGenContext.cpp
     src/codegen/TypeGen.cpp
     src/codegen/FunctionGen.cpp

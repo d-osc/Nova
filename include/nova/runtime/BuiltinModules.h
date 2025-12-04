@@ -434,6 +434,193 @@ extern "C" {
 } // namespace os
 
 // ============================================================================
+// nova:http - HTTP Module
+// ============================================================================
+
+namespace http {
+
+extern "C" {
+    // Server functions
+    void* nova_http_createServer(void* requestListener);
+    int nova_http_Server_listen(void* serverPtr, int port, const char* hostname, void* callback);
+    void nova_http_Server_close(void* serverPtr, void* callback);
+    int nova_http_Server_listening(void* serverPtr);
+    int nova_http_Server_acceptOne(void* serverPtr, int timeoutMs);
+    int nova_http_Server_run(void* serverPtr, int maxRequests);
+    void nova_http_Server_free(void* serverPtr);
+
+    // Response functions (passed to request handler, don't create directly)
+    void nova_http_ServerResponse_setStatusCode(void* resPtr, int code);
+    int nova_http_ServerResponse_statusCode(void* resPtr);
+    void nova_http_ServerResponse_setHeader(void* resPtr, const char* name, const char* value);
+    char* nova_http_ServerResponse_getHeader(void* resPtr, const char* name);
+    int nova_http_ServerResponse_write(void* resPtr, const char* data, int length);
+    void nova_http_ServerResponse_end(void* resPtr, const char* data, int length);
+
+    // Request functions (passed to request handler)
+    char* nova_http_IncomingMessage_method(void* msgPtr);
+    char* nova_http_IncomingMessage_url(void* msgPtr);
+    char* nova_http_IncomingMessage_getHeader(void* msgPtr, const char* name);
+
+    // Utility functions
+    char* nova_http_STATUS_CODES(int code);
+}
+
+} // namespace http
+
+// ============================================================================
+// nova:http2 - HTTP/2 Module
+// ============================================================================
+
+namespace http2 {
+
+extern "C" {
+    // ============================================================================
+    // Constants Export
+    // ============================================================================
+
+    int nova_http2_constants_NO_ERROR();
+    int nova_http2_constants_PROTOCOL_ERROR();
+    int nova_http2_constants_INTERNAL_ERROR();
+    int nova_http2_constants_FLOW_CONTROL_ERROR();
+    int nova_http2_constants_SETTINGS_TIMEOUT();
+    int nova_http2_constants_STREAM_CLOSED();
+    int nova_http2_constants_FRAME_SIZE_ERROR();
+    int nova_http2_constants_REFUSED_STREAM();
+    int nova_http2_constants_CANCEL();
+    int nova_http2_constants_COMPRESSION_ERROR();
+    int nova_http2_constants_CONNECT_ERROR();
+    int nova_http2_constants_ENHANCE_YOUR_CALM();
+    int nova_http2_constants_INADEQUATE_SECURITY();
+    int nova_http2_constants_HTTP_1_1_REQUIRED();
+
+    int nova_http2_constants_HEADER_TABLE_SIZE();
+    int nova_http2_constants_ENABLE_PUSH();
+    int nova_http2_constants_MAX_CONCURRENT_STREAMS();
+    int nova_http2_constants_INITIAL_WINDOW_SIZE();
+    int nova_http2_constants_MAX_FRAME_SIZE();
+    int nova_http2_constants_MAX_HEADER_LIST_SIZE();
+    int nova_http2_constants_ENABLE_CONNECT_PROTOCOL();
+
+    int nova_http2_constants_DEFAULT_HEADER_TABLE_SIZE();
+    int nova_http2_constants_DEFAULT_ENABLE_PUSH();
+    int nova_http2_constants_DEFAULT_MAX_CONCURRENT_STREAMS();
+    int nova_http2_constants_DEFAULT_INITIAL_WINDOW_SIZE();
+    int nova_http2_constants_DEFAULT_MAX_FRAME_SIZE();
+    int nova_http2_constants_DEFAULT_MAX_HEADER_LIST_SIZE();
+
+    // ============================================================================
+    // Settings Functions
+    // ============================================================================
+
+    void* nova_http2_getDefaultSettings();
+    char* nova_http2_getPackedSettings(void* settingsPtr, int* length);
+    void* nova_http2_getUnpackedSettings(const char* buffer, int length);
+    void nova_http2_freeSettings(void* settingsPtr);
+
+    // ============================================================================
+    // Http2Session Functions
+    // ============================================================================
+
+    void* nova_http2_Session_new(int type);
+    int nova_http2_Session_type(void* sessionPtr);
+    int nova_http2_Session_destroyed(void* sessionPtr);
+    int nova_http2_Session_closed(void* sessionPtr);
+    int nova_http2_Session_connecting(void* sessionPtr);
+    void nova_http2_Session_settings(void* sessionPtr, void* settingsPtr);
+    int nova_http2_Session_localSettings(void* sessionPtr, int index);
+    int nova_http2_Session_remoteSettings(void* sessionPtr, int index);
+    void nova_http2_Session_ping(void* sessionPtr, void* callback);
+    void nova_http2_Session_goaway(void* sessionPtr, int code, int lastStreamId);
+    void nova_http2_Session_close(void* sessionPtr, void* callback);
+    void nova_http2_Session_destroy(void* sessionPtr, int code);
+    void nova_http2_Session_on(void* sessionPtr, const char* event, void* handler);
+    void nova_http2_Session_free(void* sessionPtr);
+
+    // ============================================================================
+    // Http2Stream Functions
+    // ============================================================================
+
+    void* nova_http2_Stream_new(void* sessionPtr);
+    int nova_http2_Stream_id(void* streamPtr);
+    int nova_http2_Stream_state(void* streamPtr);
+    int nova_http2_Stream_closed(void* streamPtr);
+    int nova_http2_Stream_destroyed(void* streamPtr);
+    int nova_http2_Stream_sentHeaders(void* streamPtr);
+    int nova_http2_Stream_sentTrailers(void* streamPtr);
+    void* nova_http2_Stream_session(void* streamPtr);
+    void nova_http2_Stream_priority(void* streamPtr, int weight, int exclusive);
+    void nova_http2_Stream_respond(void* streamPtr, int statusCode, const char** headers, int headerCount);
+    int nova_http2_Stream_write(void* streamPtr, const char* data, int length);
+    void nova_http2_Stream_end(void* streamPtr, const char* data, int length);
+    void nova_http2_Stream_close(void* streamPtr, int code);
+    void nova_http2_Stream_rstStream(void* streamPtr, int code);
+    void nova_http2_Stream_on(void* streamPtr, const char* event, void* handler);
+    void nova_http2_Stream_free(void* streamPtr);
+
+    // ============================================================================
+    // Http2Server Functions
+    // ============================================================================
+
+    void* nova_http2_createServer(void* requestHandler);
+    void* nova_http2_createSecureServer(void* options, void* requestHandler);
+    int nova_http2_Server_listen(void* serverPtr, int port, const char* hostname, void* callback);
+    void nova_http2_Server_close(void* serverPtr, void* callback);
+    int nova_http2_Server_listening(void* serverPtr);
+    void nova_http2_Server_setTimeout(void* serverPtr, int ms, void* callback);
+    void nova_http2_Server_on(void* serverPtr, const char* event, void* handler);
+    void nova_http2_Server_free(void* serverPtr);
+
+    // ============================================================================
+    // Client Connect
+    // ============================================================================
+
+    void* nova_http2_connect(const char* authority, void* options, void* listener);
+    void* nova_http2_ClientSession_request(void* sessionPtr, const char** headers, int headerCount);
+
+    // ============================================================================
+    // Http2ServerRequest Functions
+    // ============================================================================
+
+    void* nova_http2_ServerRequest_new(void* streamPtr);
+    char* nova_http2_ServerRequest_method(void* reqPtr);
+    char* nova_http2_ServerRequest_authority(void* reqPtr);
+    char* nova_http2_ServerRequest_scheme(void* reqPtr);
+    char* nova_http2_ServerRequest_path(void* reqPtr);
+    char* nova_http2_ServerRequest_httpVersion(void* reqPtr);
+    void* nova_http2_ServerRequest_stream(void* reqPtr);
+    void nova_http2_ServerRequest_free(void* reqPtr);
+
+    // ============================================================================
+    // Http2ServerResponse Functions
+    // ============================================================================
+
+    void* nova_http2_ServerResponse_new(void* streamPtr);
+    void nova_http2_ServerResponse_setStatusCode(void* resPtr, int code);
+    int nova_http2_ServerResponse_statusCode(void* resPtr);
+    void nova_http2_ServerResponse_setHeader(void* resPtr, const char* name, const char* value);
+    int nova_http2_ServerResponse_write(void* resPtr, const char* data, int length);
+    void nova_http2_ServerResponse_end(void* resPtr, const char* data, int length);
+    int nova_http2_ServerResponse_finished(void* resPtr);
+    void* nova_http2_ServerResponse_stream(void* resPtr);
+    void nova_http2_ServerResponse_free(void* resPtr);
+
+    // ============================================================================
+    // Sensitive Headers Symbol
+    // ============================================================================
+
+    void* nova_http2_sensitiveHeaders();
+
+    // ============================================================================
+    // Utility Functions
+    // ============================================================================
+
+    void nova_http2_cleanup();
+}
+
+} // namespace http2
+
+// ============================================================================
 // Module Registry
 // ============================================================================
 

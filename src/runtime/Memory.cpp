@@ -16,7 +16,6 @@ void* allocate(size_t size, TypeId type_id) {
     
     if (!memory) {
         panic("Out of memory");
-        return nullptr;
     }
     
     // Set up header

@@ -636,20 +636,10 @@ private:
             currentHIRBlock_ = hirBlock.get();
 
             builder_->setInsertPoint(mirBlock);
-            
-            // Still translate instructions for empty blocks (they might have a terminator)
-            if (hirBlock->instructions.empty()) {
-                
-            }
-            
-            // Debug: Check if block has terminator after processing
+
+            // Translate instructions
             for (const auto& hirInst : hirBlock->instructions) {
                 generateInstruction(hirInst.get(), mirBlock);
-            }
-            
-            // Debug: Check if this block has a terminator
-            if (!mirBlock->terminator) {
-                
             }
         }
         
@@ -998,21 +988,36 @@ private:
     
     void generateCall(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
-        if (hirInst->operands.empty()) return;
+        if (hirInst->operands.empty()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: ERROR - Call instruction has no operands!" << std::endl;
+            return;
+        }
 
-        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Processing HIR Call instruction with "
-                  << hirInst->operands.size() << " operands" << std::endl;
+        if(NOVA_DEBUG) {
+            std::cerr << "DEBUG MIRGen: Processing HIR Call instruction with "
+                      << hirInst->operands.size() << " operands" << std::endl;
+            for (size_t i = 0; i < hirInst->operands.size(); ++i) {
+                std::cerr << "  Operand " << i << ": ";
+                if (hirInst->operands[i]) {
+                    std::cerr << "value present";
+                } else {
+                    std::cerr << "NULL";
+                }
+                std::cerr << std::endl;
+            }
+        }
 
         // First operand is the function name (string constant)
         auto funcOperand = translateOperand(hirInst->operands[0].get());
 
         if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translated function operand" << std::endl;
-        
+
         std::vector<MIROperandPtr> args;
         for (size_t i = 1; i < hirInst->operands.size(); ++i) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translating argument " << (i-1) << std::endl;
             args.push_back(translateOperand(hirInst->operands[i].get()));
         }
-        
+
         if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Collected " << args.size() << " arguments" << std::endl;
 
         auto dest = getOrCreatePlace(hirInst);

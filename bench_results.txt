@@ -1,0 +1,50 @@
+==================================================
+Nova HTTP Resource Usage Benchmark
+==================================================
+Total Requests: 5000
+Concurrency: 50
+
+
+[Nova Benchmark]
+--------------------------------------------------
+  Starting Nova server...
+  ERROR: Failed to start server: [WinError 2] The system cannot find the file specified
+
+[Node Benchmark]
+--------------------------------------------------
+  Starting Node server...
+  ERROR: Server failed to start!
+
+[Bun Benchmark]
+--------------------------------------------------
+  Starting Bun server...
+  Server is ready!
+
+  Sending 5000 requests with concurrency 50...
+
+  === Performance Results ===
+  Requests Completed: 5000
+  Errors: 0
+  Duration: 9.64 seconds
+  RPS: 518.94 req/sec
+
+  === Latency ===
+  p50: 20.32 ms
+  p90: 242.81 ms
+  p99: 405.53 ms
+
+==================================================
+Resource Usage Comparison
+==================================================
+
+Runtime         RPS    CPU%     Memory       Peak     p50     p99
+----------------------------------------------------------------------
+Bun           518.9     0.0        0.0        0.0   20.32  405.53
+
+=== Efficiency Metrics ===
+
+Bun:
+  RPS per CPU%: 0
+  RPS per MB: 0
+
+Benchmark completed!

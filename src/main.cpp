@@ -4,13 +4,27 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <chrono>
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4100 4127 4244 4245 4267 4310 4324 4456 4458 4459 4624)
+#endif
+
 #include "nova/Frontend/Lexer.h"
 #include "nova/Frontend/Parser.h"
 #include "nova/HIR/HIRGen.h"
 #include "nova/MIR/MIRGen.h"
 #include "nova/CodeGen/LLVMCodeGen.h"
+#include "nova/CodeGen/LLVMInit.h"
+#include "nova/CodeGen/CompilationCache.h"
+#include "nova/CodeGen/NativeBinaryCache.h"
 #include "nova/Transpiler/Transpiler.h"
 #include "nova/PackageManager/PackageManager.h"
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 // Debug output control - set to 1 to enable debug output
 #define NOVA_DEBUG 0
@@ -62,6 +76,11 @@ Options:
   --help              Show this help message
   --version           Show version
 
+Cache Options (production optimization):
+  --no-cache          Disable compilation cache
+  --cache-stats       Show cache statistics
+  --clear-cache       Clear all cached compilations
+
 Package Manager Options (for install/update/uninstall):
   -S, --save          Save to dependencies (default)
   -D, --dev           Save to devDependencies
@@ -105,10 +124,162 @@ void printVersion() {
     std::cout << "Copyright (c) 2025 Nova Lang Team" << std::endl;
 }
 
+// Interactive shell mode
+int runShell() {
+    std::cout << R"(
+╔═══════════════════════════════════════════════════════════════╗
+║                     Nova Interactive Shell                    ║
+║         TypeScript/JavaScript Runtime via LLVM                ║
+╚═══════════════════════════════════════════════════════════════╝
+)" << std::endl;
+    std::cout << "Type TypeScript/JavaScript code and press Enter to execute." << std::endl;
+    std::cout << "Commands: .help, .clear, .exit" << std::endl;
+    std::cout << std::endl;
+
+    std::string line;
+    std::string buffer;
+    int lineNumber = 1;
+
+    while (true) {
+        // Print prompt
+        if (buffer.empty()) {
+            std::cout << "nova:" << lineNumber << "> ";
+        } else {
+            std::cout << "....:" << lineNumber << "> ";
+        }
+
+        if (!std::getline(std::cin, line)) {
+            std::cout << std::endl;
+            break;
+        }
+
+        // Handle shell commands
+        if (line == ".exit" || line == ".quit" || line == ".q") {
+            std::cout << "Goodbye!" << std::endl;
+            break;
+        }
+
+        if (line == ".help" || line == ".h") {
+            std::cout << R"(
+Shell Commands:
+  .help, .h     Show this help
+  .clear, .c    Clear the buffer
+  .exit, .q     Exit the shell
+  .version      Show version info
+
+Tips:
+  - Enter single-line expressions to evaluate immediately
+  - Use .clear to reset if you make a mistake
+)" << std::endl;
+            continue;
+        }
+
+        if (line == ".clear" || line == ".c") {
+            buffer.clear();
+            lineNumber = 1;
+            std::cout << "Buffer cleared." << std::endl;
+            continue;
+        }
+
+        if (line == ".version") {
+            printVersion();
+            continue;
+        }
+
+        // Skip empty lines
+        if (line.empty()) {
+            continue;
+        }
+
+        // Add line to buffer
+        buffer += line + "\n";
+        lineNumber++;
+
+        // Try to execute the buffer
+        try {
+            // Lexer and Parser
+            nova::Lexer lexer("<shell>", buffer);
+            if (lexer.hasErrors()) {
+                for (const auto& err : lexer.getErrors()) {
+                    std::cerr << err << std::endl;
+                }
+                buffer.clear();
+                lineNumber = 1;
+                continue;
+            }
+
+            nova::Parser parser(lexer);
+            auto ast = parser.parseProgram();
+
+            if (parser.hasErrors()) {
+                for (const auto& err : parser.getErrors()) {
+                    std::cerr << err << std::endl;
+                }
+                buffer.clear();
+                lineNumber = 1;
+                continue;
+            }
+
+            // Skip if no statements to execute
+            if (ast->body.empty()) {
+                buffer.clear();
+                lineNumber = 1;
+                continue;
+            }
+
+            // Generate and execute
+            auto* hirModule = nova::hir::generateHIR(*ast, "shell");
+            if (!hirModule) {
+                std::cerr << "Error: HIR generation failed" << std::endl;
+                buffer.clear();
+                lineNumber = 1;
+                continue;
+            }
+
+            auto* mirModule = nova::mir::generateMIR(hirModule, "shell");
+            if (!mirModule) {
+                std::cerr << "Error: MIR generation failed" << std::endl;
+                delete hirModule;
+                buffer.clear();
+                lineNumber = 1;
+                continue;
+            }
+
+            nova::codegen::LLVMCodeGen codegen("shell");
+            if (!codegen.generate(*mirModule)) {
+                std::cerr << "Error: Code generation failed" << std::endl;
+                delete mirModule;
+                delete hirModule;
+                buffer.clear();
+                lineNumber = 1;
+                continue;
+            }
+
+            codegen.runOptimizationPasses(2);
+            codegen.executeMain();
+
+            // Clean up
+            delete mirModule;
+            delete hirModule;
+
+            // Reset buffer after successful execution
+            buffer.clear();
+            lineNumber = 1;
+
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            buffer.clear();
+            lineNumber = 1;
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    // No arguments - enter interactive shell mode
     if (argc < 2) {
-        printUsage();
-        return 1;
+        return runShell();
     }
 
     std::string command = argv[1];
@@ -120,6 +291,27 @@ int main(int argc, char** argv) {
 
     if (command == "--version" || command == "-v") {
         printVersion();
+        return 0;
+    }
+
+    // Cache commands (no input file needed)
+    if (command == "--cache-stats") {
+        auto stats = codegen::getGlobalCache().getStats();
+        std::cout << "[nova] Cache Statistics:" << std::endl;
+        std::cout << "  Entries: " << stats.totalEntries << std::endl;
+        std::cout << "  Total Size: " << (stats.totalSize / 1024) << " KB" << std::endl;
+        std::cout << "  Hits: " << stats.hitCount << std::endl;
+        std::cout << "  Misses: " << stats.missCount << std::endl;
+        if (stats.hitCount + stats.missCount > 0) {
+            double hitRate = 100.0 * stats.hitCount / (stats.hitCount + stats.missCount);
+            std::cout << "  Hit Rate: " << hitRate << "%" << std::endl;
+        }
+        return 0;
+    }
+
+    if (command == "--clear-cache") {
+        codegen::getGlobalCache().clearCache();
+        std::cout << "[nova] Cache cleared" << std::endl;
         return 0;
     }
 
@@ -161,6 +353,8 @@ int main(int argc, char** argv) {
     bool verbose = false;
     bool noGC = false;
     bool noRuntime = false;
+    bool noCache = false;
+    bool showCacheStats = false;
     std::string targetTriple;
 
     // Build-specific options
@@ -226,6 +420,17 @@ int main(int argc, char** argv) {
         }
         else if (arg == "--no-runtime") {
             noRuntime = true;
+        }
+        else if (arg == "--no-cache") {
+            noCache = true;
+        }
+        else if (arg == "--cache-stats") {
+            showCacheStats = true;
+        }
+        else if (arg == "--clear-cache") {
+            codegen::getGlobalCache().clearCache();
+            std::cout << "[nova] Cache cleared" << std::endl;
+            return 0;
         }
         // Build-specific options
         else if (arg == "--outDir" && i + 1 < argc) {
@@ -640,25 +845,65 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // Show cache stats if requested (no input file needed)
+    if (showCacheStats) {
+        auto stats = codegen::getGlobalCache().getStats();
+        std::cout << "[nova] Cache Statistics:" << std::endl;
+        std::cout << "  Entries: " << stats.totalEntries << std::endl;
+        std::cout << "  Total Size: " << (stats.totalSize / 1024) << " KB" << std::endl;
+        std::cout << "  Hits: " << stats.hitCount << std::endl;
+        std::cout << "  Misses: " << stats.missCount << std::endl;
+        if (stats.hitCount + stats.missCount > 0) {
+            double hitRate = 100.0 * stats.hitCount / (stats.hitCount + stats.missCount);
+            std::cout << "  Hit Rate: " << hitRate << "%" << std::endl;
+        }
+        return 0;
+    }
+
     if (inputFile.empty()) {
         std::cerr << "Error: No input file specified" << std::endl;
         printUsage();
         return 1;
     }
-    
+
+    // Configure cache
+    if (noCache) {
+        codegen::getGlobalCache().setEnabled(false);
+    }
+
     // Check if input file exists
     std::ifstream file(inputFile);
     if (!file.good()) {
         std::cerr << "Error: Cannot open input file: " << inputFile << std::endl;
         return 1;
     }
-    
+
     // Read source code
     std::stringstream buffer;
     buffer << file.rdbuf();
     std::string sourceCode = buffer.str();
     file.close();
-    
+
+    // ============================================================
+    // FAST PATH: Check native executable cache for "run" command
+    // If cached .exe exists, execute it directly (very fast!)
+    // ============================================================
+    if (command == "run" && !noCache) {
+        auto& binCache = codegen::getNativeBinaryCache();
+        std::string cachedExe = binCache.getCachedExePath(inputFile, sourceCode);
+
+        if (binCache.hasCachedExecutable(cachedExe)) {
+            // Cache HIT - execute native binary directly!
+            if (verbose) {
+                std::cout << "[*] Cache HIT: " << cachedExe << std::endl;
+                std::cout << "[*] Executing cached native binary..." << std::endl;
+            }
+            return binCache.executeCached(cachedExe);
+        } else if (verbose) {
+            std::cout << "[*] Cache MISS: compiling to native..." << std::endl;
+        }
+    }
+
     if (verbose) {
         std::cout << "╔════════════════════════════════════════════════╗" << std::endl;
         std::cout << "║         Nova Compiler - Compilation Log        ║" << std::endl;
@@ -797,13 +1042,34 @@ int main(int argc, char** argv) {
         }
 
         if (command == "run") {
+            // Try to compile to native executable and cache it
+            if (!noCache) {
+                auto& binCache = codegen::getNativeBinaryCache();
+                std::string cachedExe = binCache.getCachedExePath(inputFile, sourceCode);
+
+                if (verbose) std::cout << "[*] Compiling to native: " << cachedExe << std::endl;
+
+                if (codegen.emitExecutable(cachedExe)) {
+                    if (verbose) std::cout << "[*] Executing native binary..." << std::endl;
+
+                    // Clean up
+                    delete mirModule;
+                    delete hirModule;
+
+                    // Execute the native binary
+                    return binCache.executeCached(cachedExe);
+                }
+                // Fall through to JIT if native compilation fails
+                if (verbose) std::cerr << "[*] Native compilation failed, using JIT..." << std::endl;
+            }
+
             if (verbose) std::cout << "\n🚀 Executing via JIT...\n" << std::endl;
             int exitCode = codegen.executeMain();
-            
+
             // Clean up
             delete mirModule;
             delete hirModule;
-            
+
             return exitCode;
         }
         

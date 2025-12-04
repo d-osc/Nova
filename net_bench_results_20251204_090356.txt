@@ -1,0 +1,113 @@
+===================================================
+Nova_HTTP Results
+===================================================
+Total Requests:       5
+Successful:           0
+Failed:               5
+Total Time:           5.06 seconds
+Requests/sec:         0
+Average Latency:      0 ms
+Min Latency:          1.79769313486232E+308 ms
+Max Latency:          0 ms
+
+===================================================
+Node_HTTP Results
+===================================================
+Total Requests:       5
+Successful:           0
+Failed:               5
+Total Time:           5.06 seconds
+Requests/sec:         0
+Average Latency:      0 ms
+Min Latency:          1.79769313486232E+308 ms
+Max Latency:          0 ms
+
+===================================================
+Bun_HTTP Results
+===================================================
+Total Requests:       5
+Successful:           0
+Failed:               5
+Total Time:           5.05 seconds
+Requests/sec:         0
+Average Latency:      0 ms
+Min Latency:          1.79769313486232E+308 ms
+Max Latency:          0 ms
+
+===================================================
+Nova_JSON Results
+===================================================
+Total Requests:       5
+Successful:           0
+Failed:               5
+Total Time:           5.06 seconds
+Requests/sec:         0
+Average Latency:      0 ms
+Min Latency:          1.79769313486232E+308 ms
+Max Latency:          0 ms
+
+===================================================
+Node_JSON Results
+===================================================
+Total Requests:       5
+Successful:           0
+Failed:               5
+Total Time:           5.07 seconds
+Requests/sec:         0
+Average Latency:      0 ms
+Min Latency:          1.79769313486232E+308 ms
+Max Latency:          0 ms
+
+===================================================
+Bun_JSON Results
+===================================================
+Total Requests:       5
+Successful:           0
+Failed:               5
+Total Time:           5.05 seconds
+Requests/sec:         0
+Average Latency:      0 ms
+Min Latency:          1.79769313486232E+308 ms
+Max Latency:          0 ms
+
+===================================================
+Nova_HTTP2 Results
+===================================================
+Total Requests:       446
+Successful:           446
+Failed:               0
+Total Time:           5.01 seconds
+Requests/sec:         89.08
+Average Latency:      11.05 ms
+Min Latency:          0 ms
+Max Latency:          21.52 ms
+
+===================================================
+Node_HTTP2 Results
+===================================================
+Total Requests:       494
+Successful:           494
+Failed:               0
+Total Time:           5 seconds
+Requests/sec:         98.78
+Average Latency:      9.99 ms
+Min Latency:          0 ms
+Max Latency:          23.31 ms
+
+===================================================
+SUMMARY - Requests per Second
+===================================================
+
+HTTP Plain Text:
+  Nova:     0 req/sec
+  Node.js:  0 req/sec
+  Bun:      0 req/sec
+
+HTTP JSON:
+  Nova:     0 req/sec
+  Node.js:  System.Collections.Hashtable.RequestsPerSecond) req/sec
+  Bun:      0 req/sec
+
+HTTP2 Plain Text:
+  Nova:     89.08 req/sec
+  Node.js:  98.78 req/sec

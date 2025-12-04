@@ -5,6 +5,15 @@
  * Compatible with Node.js http module.
  */
 
+// Debug output control - set to 1 to enable debug output, 0 to disable
+#define NOVA_HTTP_DEBUG 0
+
+#if NOVA_HTTP_DEBUG
+#define HTTP_DBG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define HTTP_DBG(...) do {} while(0)
+#endif
+
 #include "nova/runtime/BuiltinModules.h"
 #include <cstring>
 #include <cstdlib>
@@ -208,7 +217,7 @@ struct Server {
     int keepAliveTimeout;
     int headersTimeout;
     int requestTimeout;
-    void (*onRequest)(void* server, void* req, void* res);
+    void (*onRequest)(void* req, void* res);  // Node.js-compatible: (req, res) => void
     void (*onConnection)(void* server, void* socket);
     void (*onError)(void* server, const char* error);
     void (*onClose)(void* server);
@@ -397,7 +406,7 @@ void* nova_http_createServer(void* requestListener) {
     server->keepAliveTimeout = 5000;
     server->headersTimeout = 60000;
     server->requestTimeout = 300000;
-    server->onRequest = (void (*)(void*, void*, void*))requestListener;
+    server->onRequest = (void (*)(void*, void*))requestListener;
     server->onConnection = nullptr;
     server->onError = nullptr;
     server->onClose = nullptr;
@@ -408,9 +417,15 @@ void* nova_http_createServer(void* requestListener) {
 
 // Server.listen(port, hostname, callback)
 int nova_http_Server_listen(void* serverPtr, int port, const char* hostname, void* callback) {
-    if (!serverPtr) return 0;
+    HTTP_DBG("DEBUG nova_http_Server_listen: Called with port=%d\n", port);
+
+    if (!serverPtr) {
+        HTTP_DBG("DEBUG nova_http_Server_listen: serverPtr is NULL\n");
+        return 0;
+    }
 
     Server* server = (Server*)serverPtr;
+    HTTP_DBG("DEBUG nova_http_Server_listen: server=%p\n", server);
 
 #ifdef _WIN32
     initWinsock();
@@ -418,16 +433,27 @@ int nova_http_Server_listen(void* serverPtr, int port, const char* hostname, voi
 
     server->socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server->socket == INVALID_SOCK) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        HTTP_DBG("DEBUG nova_http_Server_listen: socket() failed, WSAGetLastError()=%d\n", err);
+#endif
         if (server->onError) {
             server->onError(serverPtr, "Failed to create socket");
         }
         return 0;
     }
 
+    HTTP_DBG("DEBUG nova_http_Server_listen: socket created successfully, fd=%d\n", (int)server->socket);
+
     // Allow address reuse
     int opt = 1;
 #ifdef _WIN32
-    setsockopt(server->socket, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+    if (setsockopt(server->socket, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt)) != 0) {
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        HTTP_DBG("DEBUG nova_http_Server_listen: SO_REUSEADDR failed, WSAGetLastError()=%d\n", err);
+    }
 #else
     setsockopt(server->socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #endif
@@ -445,7 +471,14 @@ int nova_http_Server_listen(void* serverPtr, int port, const char* hostname, voi
         server->hostname = allocString("0.0.0.0");
     }
 
+    HTTP_DBG("DEBUG nova_http_Server_listen: binding to %s:%d\n", server->hostname, port);
+
     if (bind(server->socket, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        HTTP_DBG("DEBUG nova_http_Server_listen: bind() failed, WSAGetLastError()=%d\n", err);
+#endif
         if (server->onError) {
             server->onError(serverPtr, "Failed to bind");
         }
@@ -454,7 +487,14 @@ int nova_http_Server_listen(void* serverPtr, int port, const char* hostname, voi
         return 0;
     }
 
+    HTTP_DBG("DEBUG nova_http_Server_listen: bind() successful\n");
+
     if (listen(server->socket, SOMAXCONN) < 0) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        HTTP_DBG("DEBUG nova_http_Server_listen: listen() failed, WSAGetLastError()=%d\n", err);
+#endif
         if (server->onError) {
             server->onError(serverPtr, "Failed to listen");
         }
@@ -462,6 +502,20 @@ int nova_http_Server_listen(void* serverPtr, int port, const char* hostname, voi
         server->socket = INVALID_SOCK;
         return 0;
     }
+
+    HTTP_DBG("DEBUG nova_http_Server_listen: listen() successful, SOMAXCONN=%d\n", SOMAXCONN);
+
+#ifdef _WIN32
+    // Explicitly ensure socket is in blocking mode for select() to work properly
+    u_long blockingMode = 0;  // 0 = blocking, 1 = non-blocking
+    if (ioctlsocket(server->socket, FIONBIO, &blockingMode) != 0) {
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        HTTP_DBG("DEBUG nova_http_Server_listen: Warning - ioctlsocket(FIONBIO, 0) failed, WSAGetLastError()=%d\n", err);
+    } else {
+        HTTP_DBG("DEBUG nova_http_Server_listen: Socket explicitly set to blocking mode\n");
+    }
+#endif
 
     server->port = port;
     server->listening = 1;
@@ -570,7 +624,7 @@ void nova_http_Server_on(void* serverPtr, const char* event, void* handler) {
     Server* server = (Server*)serverPtr;
 
     if (strcmp(event, "request") == 0) {
-        server->onRequest = (void (*)(void*, void*, void*))handler;
+        server->onRequest = (void (*)(void*, void*))handler;
     } else if (strcmp(event, "connection") == 0) {
         server->onConnection = (void (*)(void*, void*))handler;
     } else if (strcmp(event, "error") == 0) {
@@ -852,17 +906,30 @@ int nova_http_ServerResponse_write(void* resPtr, const char* data, int length) {
 }
 
 void nova_http_ServerResponse_end(void* resPtr, const char* data, int length) {
-    if (!resPtr) return;
+    HTTP_DBG("DEBUG nova_http_ServerResponse_end: Called with resPtr=%p, data=%p, length=%d\n",
+            resPtr, (void*)data, length);
+
+    if (!resPtr) {
+        HTTP_DBG("DEBUG nova_http_ServerResponse_end: resPtr is NULL\n");
+        return;
+    }
+
     ServerResponse* res = (ServerResponse*)resPtr;
-    if (res->finished) return;
+    if (res->finished) {
+        HTTP_DBG("DEBUG nova_http_ServerResponse_end: Already finished\n");
+        return;
+    }
 
     if (data) {
+        HTTP_DBG("DEBUG nova_http_ServerResponse_end: Sending data: '%s'\n", data);
         nova_http_ServerResponse_write(resPtr, data, length);
     } else if (!res->headersSent) {
+        HTTP_DBG("DEBUG nova_http_ServerResponse_end: Sending empty response\n");
         nova_http_ServerResponse_write(resPtr, "", 0);
     }
 
     res->finished = 1;
+    HTTP_DBG("DEBUG nova_http_ServerResponse_end: Response marked as finished\n");
 }
 
 int nova_http_ServerResponse_finished(void* resPtr) {
@@ -1060,6 +1127,512 @@ void nova_http_ClientRequest_free(void* reqPtr) {
         CLOSE_SOCKET(req->socket);
     }
     delete req;
+}
+
+// ============================================================================
+// Server Accept and Request Handling
+// ============================================================================
+
+// Simple HTTP request parser
+static bool parseHttpRequest(const char* requestData, IncomingMessage* msg) {
+    if (!requestData || !msg) return false;
+
+    // Parse request line: METHOD /path HTTP/1.1
+    const char* line = requestData;
+    const char* lineEnd = strstr(line, "\r\n");
+    if (!lineEnd) return false;
+
+    // Extract method
+    const char* space1 = strchr(line, ' ');
+    if (!space1 || space1 > lineEnd) return false;
+    size_t methodLen = space1 - line;
+    msg->method = (char*)malloc(methodLen + 1);
+    memcpy(msg->method, line, methodLen);
+    msg->method[methodLen] = '\0';
+
+    // Extract URL/path
+    const char* space2 = strchr(space1 + 1, ' ');
+    if (!space2 || space2 > lineEnd) return false;
+    size_t urlLen = space2 - (space1 + 1);
+    msg->url = (char*)malloc(urlLen + 1);
+    memcpy(msg->url, space1 + 1, urlLen);
+    msg->url[urlLen] = '\0';
+
+    // Extract HTTP version
+    const char* versionStart = space2 + 1;
+    size_t versionLen = lineEnd - versionStart;
+    if (msg->httpVersion) free(msg->httpVersion);
+    msg->httpVersion = (char*)malloc(versionLen + 1);
+    memcpy(msg->httpVersion, versionStart, versionLen);
+    msg->httpVersion[versionLen] = '\0';
+
+    // Parse headers
+    line = lineEnd + 2;
+    while (*line != '\r' || *(line + 1) != '\n') {
+        lineEnd = strstr(line, "\r\n");
+        if (!lineEnd) break;
+
+        const char* colon = strchr(line, ':');
+        if (colon && colon < lineEnd) {
+            // Extract header name
+            std::string name(line, colon - line);
+            for (auto& c : name) c = (char)tolower(c);
+
+            // Extract header value (skip leading spaces)
+            const char* valueStart = colon + 1;
+            while (*valueStart == ' ' && valueStart < lineEnd) valueStart++;
+            std::string value(valueStart, lineEnd - valueStart);
+
+            msg->headers[name] = value;
+        }
+
+        line = lineEnd + 2;
+    }
+
+    // Body would be after the blank line, but we'll keep it simple for now
+    msg->complete = 1;
+    return true;
+}
+
+// Accept one connection and handle one request (blocking)
+// Returns 1 if request was handled, 0 if timeout, -1 on error
+int nova_http_Server_acceptOne(void* serverPtr, int timeoutMs) {
+    if (!serverPtr) return -1;
+    Server* server = (Server*)serverPtr;
+
+    if (server->socket == INVALID_SOCK || !server->listening) {
+        return -1;
+    }
+
+    // Variables for connection handling
+    struct sockaddr_in clientAddr;
+#ifdef _WIN32
+    int addrLen = sizeof(clientAddr);
+#else
+    socklen_t addrLen = sizeof(clientAddr);
+#endif
+
+#ifdef _WIN32
+    // WINDOWS FIX: select() does NOT reliably detect incoming connections on Windows.
+    // Use non-blocking accept() with polling instead.
+
+    // Set socket to non-blocking mode
+    u_long nonBlockingMode = 1;  // 1 = non-blocking
+    if (ioctlsocket(server->socket, FIONBIO, &nonBlockingMode) != 0) {
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        HTTP_DBG("DEBUG acceptOne: Failed to set non-blocking mode, WSAGetLastError()=%d\n", err);
+        return -1;
+    }
+
+    // Poll for incoming connections with timeout
+    int pollInterval = 100;  // Poll every 100ms
+    int elapsedMs = 0;
+    int pollCount = 0;
+
+    HTTP_DBG("DEBUG acceptOne: Starting polling loop with timeout=%dms, interval=%dms\n", timeoutMs, pollInterval);
+    fflush(stderr);
+
+    while (elapsedMs < timeoutMs) {
+        socket_t clientSocket = accept(server->socket, (struct sockaddr*)&clientAddr, &addrLen);
+        pollCount++;
+
+        if (pollCount <= 3 || (pollCount % 10 == 0)) {
+            HTTP_DBG("DEBUG acceptOne: Poll #%d, elapsed=%dms, accept() returned socket=%d\n",
+                    pollCount, elapsedMs, (int)clientSocket);
+            fflush(stderr);
+        }
+
+        if (clientSocket != INVALID_SOCK) {
+            // Connection accepted successfully!
+            HTTP_DBG("DEBUG acceptOne: *** CONNECTION ACCEPTED *** clientSocket=%d\n", (int)clientSocket);
+            fflush(stderr);
+
+            // Read HTTP request (simplified - read up to 8KB)
+            char buffer[8192];
+            int bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+
+            if (bytesRead <= 0) {
+                CLOSE_SOCKET(clientSocket);
+                return -1;
+            }
+
+            buffer[bytesRead] = '\0';
+
+            // Parse request
+            IncomingMessage* req = (IncomingMessage*)nova_http_IncomingMessage_new();
+            req->socket = clientSocket;
+
+            if (!parseHttpRequest(buffer, req)) {
+                nova_http_IncomingMessage_free(req);
+                CLOSE_SOCKET(clientSocket);
+                return -1;
+            }
+
+            // Create response
+            ServerResponse* res = (ServerResponse*)nova_http_ServerResponse_new(clientSocket);
+
+            // Call request handler
+            if (server->onRequest) {
+                server->onRequest(req, res);
+            }
+
+            // Ensure response is sent and finished
+            if (!res->finished) {
+                nova_http_ServerResponse_end(res, nullptr, 0);
+            }
+
+            // Check for Keep-Alive support (HTTP/1.1 default)
+            bool keepAlive = true;
+            bool isHttp11 = (req->httpVersion && strcmp(req->httpVersion, "1.1") == 0);
+
+            // Check Connection header
+            char* connectionHeader = nova_http_IncomingMessage_getHeader(req, "connection");
+            if (connectionHeader) {
+                std::string conn = connectionHeader;
+                for (auto& c : conn) c = (char)tolower(c);
+
+                if (isHttp11) {
+                    // HTTP/1.1: keep-alive by default unless "close" specified
+                    keepAlive = (conn.find("close") == std::string::npos);
+                } else {
+                    // HTTP/1.0: close by default unless "keep-alive" specified
+                    keepAlive = (conn.find("keep-alive") != std::string::npos);
+                }
+                free(connectionHeader);
+            } else {
+                // No Connection header: use HTTP version default
+                keepAlive = isHttp11;  // HTTP/1.1 keeps alive by default
+            }
+
+            // Clean up
+            nova_http_IncomingMessage_free(req);
+            nova_http_ServerResponse_free(res);
+
+            if (!keepAlive) {
+                // Client wants to close connection
+                CLOSE_SOCKET(clientSocket);
+                return 1;
+            }
+
+            // Keep-Alive: Set socket timeout and handle multiple requests
+            DWORD timeout = 5000;  // 5 seconds idle timeout
+            setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+
+            // Keep socket in blocking mode for recv()
+            u_long blockingMode = 0;
+            ioctlsocket(clientSocket, FIONBIO, &blockingMode);
+
+            // Loop to handle multiple requests on this connection
+            int requestsOnConnection = 1;  // Already handled first request
+            const int maxRequestsPerConnection = 1000;  // Prevent infinite loops
+
+            while (keepAlive && requestsOnConnection < maxRequestsPerConnection) {
+                // Read next request
+                char buffer2[8192];
+                int bytesRead2 = recv(clientSocket, buffer2, sizeof(buffer2) - 1, 0);
+
+                if (bytesRead2 <= 0) {
+                    // Timeout or client closed connection
+                    break;
+                }
+
+                buffer2[bytesRead2] = '\0';
+
+                // Parse request
+                IncomingMessage* req2 = (IncomingMessage*)nova_http_IncomingMessage_new();
+                req2->socket = clientSocket;
+
+                if (!parseHttpRequest(buffer2, req2)) {
+                    nova_http_IncomingMessage_free(req2);
+                    break;
+                }
+
+                // Create response
+                ServerResponse* res2 = (ServerResponse*)nova_http_ServerResponse_new(clientSocket);
+
+                // Call request handler
+                if (server->onRequest) {
+                    server->onRequest(req2, res2);
+                }
+
+                // Ensure response is sent
+                if (!res2->finished) {
+                    nova_http_ServerResponse_end(res2, nullptr, 0);
+                }
+
+                // Check if we should keep connection alive for next request
+                bool isHttp11_2 = (req2->httpVersion && strcmp(req2->httpVersion, "1.1") == 0);
+                char* connectionHeader2 = nova_http_IncomingMessage_getHeader(req2, "connection");
+
+                if (connectionHeader2) {
+                    std::string conn2 = connectionHeader2;
+                    for (auto& c : conn2) c = (char)tolower(c);
+
+                    if (isHttp11_2) {
+                        keepAlive = (conn2.find("close") == std::string::npos);
+                    } else {
+                        keepAlive = (conn2.find("keep-alive") != std::string::npos);
+                    }
+                    free(connectionHeader2);
+                } else {
+                    keepAlive = isHttp11_2;
+                }
+
+                // Clean up
+                nova_http_IncomingMessage_free(req2);
+                nova_http_ServerResponse_free(res2);
+
+                requestsOnConnection++;
+            }
+
+            // Close connection after keep-alive loop ends
+            CLOSE_SOCKET(clientSocket);
+            return requestsOnConnection;  // Return number of requests handled
+        }
+
+        // Check error
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        if (err != WSAEWOULDBLOCK) {
+            // Real error (not just "no connection pending")
+            HTTP_DBG("DEBUG acceptOne: accept() error, WSAGetLastError()=%d\n", err);
+            return -1;
+        }
+
+        // No connection yet, sleep and retry
+        Sleep(pollInterval);
+        elapsedMs += pollInterval;
+    }
+
+    // Timeout - no connection within the timeout period
+    HTTP_DBG("DEBUG acceptOne: Polling loop timeout after %d polls, %dms elapsed\n", pollCount, elapsedMs);
+    fflush(stderr);
+    return 0;
+
+#else
+    // POSIX systems: use select() which works correctly for listening sockets
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(server->socket, &readfds);
+
+    struct timeval tv;
+    tv.tv_sec = timeoutMs / 1000;
+    tv.tv_usec = (timeoutMs % 1000) * 1000;
+
+    int selectResult = select((int)server->socket + 1, &readfds, NULL, NULL, &tv);
+
+    if (selectResult < 0) {
+        return -1;
+    }
+
+    if (selectResult == 0) {
+        return 0;  // Timeout
+    }
+
+    // Connection available
+    socket_t clientSocket = accept(server->socket, (struct sockaddr*)&clientAddr, &addrLen);
+
+    if (clientSocket == INVALID_SOCK) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        (void)err;  // Suppress unused warning when debug disabled
+        HTTP_DBG("DEBUG acceptOne: accept() failed, WSAGetLastError()=%d\n", err);
+#else
+        HTTP_DBG("DEBUG acceptOne: accept() failed, errno=%d\n", errno);
+#endif
+        return -1;
+    }
+
+    HTTP_DBG("DEBUG acceptOne: accept() successful, clientSocket=%d\n", (int)clientSocket);
+    fflush(stderr);
+
+    // Read HTTP request (simplified - read up to 8KB)
+    char buffer[8192];
+    int bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+
+    if (bytesRead <= 0) {
+        CLOSE_SOCKET(clientSocket);
+        return -1;
+    }
+
+    buffer[bytesRead] = '\0';
+
+    // Parse request
+    IncomingMessage* req = (IncomingMessage*)nova_http_IncomingMessage_new();
+    req->socket = clientSocket;
+
+    if (!parseHttpRequest(buffer, req)) {
+        nova_http_IncomingMessage_free(req);
+        CLOSE_SOCKET(clientSocket);
+        return -1;
+    }
+
+    // Create response
+    ServerResponse* res = (ServerResponse*)nova_http_ServerResponse_new(clientSocket);
+
+    // Call request handler
+    HTTP_DBG("DEBUG acceptOne: About to call request handler, onRequest=%p\n", (void*)server->onRequest);
+    if (server->onRequest) {
+        HTTP_DBG("DEBUG acceptOne: Calling request handler with req=%p, res=%p\n", (void*)req, (void*)res);
+        server->onRequest(req, res);  // Node.js-compatible: callback(req, res)
+        HTTP_DBG("DEBUG acceptOne: Request handler returned\n");
+    } else {
+        HTTP_DBG("DEBUG acceptOne: No request handler registered!\n");
+    }
+
+    // Ensure response is sent and finished
+    if (!res->finished) {
+        nova_http_ServerResponse_end(res, nullptr, 0);
+    }
+
+    // Check for Keep-Alive support (HTTP/1.1 default)
+    bool keepAlive = true;
+    bool isHttp11 = (req->httpVersion && strcmp(req->httpVersion, "1.1") == 0);
+
+    // Check Connection header
+    char* connectionHeader = nova_http_IncomingMessage_getHeader(req, "connection");
+    if (connectionHeader) {
+        std::string conn = connectionHeader;
+        for (auto& c : conn) c = (char)tolower(c);
+
+        if (isHttp11) {
+            // HTTP/1.1: keep-alive by default unless "close" specified
+            keepAlive = (conn.find("close") == std::string::npos);
+        } else {
+            // HTTP/1.0: close by default unless "keep-alive" specified
+            keepAlive = (conn.find("keep-alive") != std::string::npos);
+        }
+        free(connectionHeader);
+    } else {
+        // No Connection header: use HTTP version default
+        keepAlive = isHttp11;  // HTTP/1.1 keeps alive by default
+    }
+
+    // Clean up request/response objects
+    nova_http_IncomingMessage_free(req);
+    nova_http_ServerResponse_free(res);
+
+    if (!keepAlive) {
+        // Client wants to close connection
+        CLOSE_SOCKET(clientSocket);
+        return 1;
+    }
+
+    // Keep-Alive: Set socket timeout and handle multiple requests
+    struct timeval tv;
+    tv.tv_sec = 5;   // 5 seconds idle timeout
+    tv.tv_usec = 0;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // Loop to handle multiple requests on this connection
+    int requestsOnConnection = 1;  // Already handled first request
+    const int maxRequestsPerConnection = 1000;  // Prevent infinite loops
+
+    while (keepAlive && requestsOnConnection < maxRequestsPerConnection) {
+        // Read next request
+        char buffer2[8192];
+        int bytesRead2 = recv(clientSocket, buffer2, sizeof(buffer2) - 1, 0);
+
+        if (bytesRead2 <= 0) {
+            // Timeout or client closed connection
+            break;
+        }
+
+        buffer2[bytesRead2] = '\0';
+
+        // Parse request
+        IncomingMessage* req2 = (IncomingMessage*)nova_http_IncomingMessage_new();
+        req2->socket = clientSocket;
+
+        if (!parseHttpRequest(buffer2, req2)) {
+            nova_http_IncomingMessage_free(req2);
+            break;
+        }
+
+        // Create response
+        ServerResponse* res2 = (ServerResponse*)nova_http_ServerResponse_new(clientSocket);
+
+        // Call request handler
+        if (server->onRequest) {
+            server->onRequest(req2, res2);
+        }
+
+        // Ensure response is sent
+        if (!res2->finished) {
+            nova_http_ServerResponse_end(res2, nullptr, 0);
+        }
+
+        // Check if we should keep connection alive for next request
+        bool isHttp11_2 = (req2->httpVersion && strcmp(req2->httpVersion, "1.1") == 0);
+        char* connectionHeader2 = nova_http_IncomingMessage_getHeader(req2, "connection");
+
+        if (connectionHeader2) {
+            std::string conn2 = connectionHeader2;
+            for (auto& c : conn2) c = (char)tolower(c);
+
+            if (isHttp11_2) {
+                keepAlive = (conn2.find("close") == std::string::npos);
+            } else {
+                keepAlive = (conn2.find("keep-alive") != std::string::npos);
+            }
+            free(connectionHeader2);
+        } else {
+            keepAlive = isHttp11_2;
+        }
+
+        // Clean up
+        nova_http_IncomingMessage_free(req2);
+        nova_http_ServerResponse_free(res2);
+
+        requestsOnConnection++;
+    }
+
+    // Close connection after keep-alive loop ends
+    CLOSE_SOCKET(clientSocket);
+    return requestsOnConnection;  // Return number of requests handled
+#endif
+}
+
+// Run server event loop (handles multiple requests until stopped)
+// This is a blocking call - returns number of requests handled, or -1 on error
+int nova_http_Server_run(void* serverPtr, int maxRequests) {
+    HTTP_DBG("DEBUG nova_http_Server_run: Called with maxRequests=%d\n", maxRequests);
+
+    if (!serverPtr) {
+        HTTP_DBG("DEBUG nova_http_Server_run: serverPtr is NULL\n");
+        return -1;
+    }
+    Server* server = (Server*)serverPtr;
+
+    HTTP_DBG("DEBUG nova_http_Server_run: socket=%d, listening=%d, INVALID_SOCK=%d\n",
+            (int)server->socket, server->listening, (int)INVALID_SOCK);
+
+    if (server->socket == INVALID_SOCK || !server->listening) {
+        HTTP_DBG("DEBUG nova_http_Server_run: Early exit - socket invalid or not listening\n");
+        return -1;
+    }
+
+    HTTP_DBG("DEBUG nova_http_Server_run: Entering event loop\n");
+    int requestsHandled = 0;
+
+    while (server->listening && (maxRequests == 0 || requestsHandled < maxRequests)) {
+        HTTP_DBG("DEBUG nova_http_Server_run: *** ABOUT TO CALL nova_http_Server_acceptOne() ***\n");
+        int result = nova_http_Server_acceptOne(serverPtr, 5000);  // 5000ms (5 second) timeout
+        HTTP_DBG("DEBUG nova_http_Server_run: *** RETURNED FROM nova_http_Server_acceptOne(), result=%d ***\n", result);
+
+        if (result > 0) {
+            requestsHandled++;
+            HTTP_DBG("DEBUG nova_http_Server_run: Handled request #%d\n", requestsHandled);
+        } else if (result < 0) {
+            HTTP_DBG("DEBUG nova_http_Server_run: acceptOne error, breaking loop\n");
+            break;  // Error
+        }
+        // result == 0 means timeout, continue loop
+    }
+
+    HTTP_DBG("DEBUG nova_http_Server_run: Exiting, handled %d requests\n", requestsHandled);
+    return requestsHandled;
 }
 
 // ============================================================================

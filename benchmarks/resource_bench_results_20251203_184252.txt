@@ -1,0 +1,4 @@
+﻿Resource Usage Benchmark Results
+Generated: 12/03/2025 18:42:52
+Configuration: Target RPS=3000, Duration=20s, Connections=10
+

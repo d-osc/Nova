@@ -28,10 +28,16 @@ public:
     bool emitAssembly(const std::string& filename);
     bool emitLLVMIR(const std::string& filename);
     bool emitBitcode(const std::string& filename);
-    
+
+    // Load pre-compiled bitcode (for cache)
+    bool loadBitcode(const std::string& filename);
+
+    // Compile to native executable
+    bool emitExecutable(const std::string& filename);
+
     // Optimization
     void runOptimizationPasses(unsigned optLevel = 2);
-    
+
     // JIT execution
     int executeMain();
     
@@ -57,6 +63,9 @@ private:
 
     // Array type tracking (maps array pointers to their array types)
     std::unordered_map<llvm::Value*, llvm::Type*> arrayTypeMap;
+
+    // Function return struct type tracking (maps function name to struct type it returns)
+    std::unordered_map<std::string, llvm::Type*> functionReturnStructTypes;
 
     // Nested struct type tracking (maps (parent value, field index) to nested struct type)
     // Used for tracking struct types of pointer fields in structs

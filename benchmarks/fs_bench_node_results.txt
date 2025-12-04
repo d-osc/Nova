@@ -1,0 +1,149 @@
+Node.js File System Benchmark
+==============================
+
+1. Small File Operations (1 KB)
+--------------------------------
+write_small_file: 0.290ms avg, 3448 ops/sec
+read_small_file: 0.030ms avg, 33333 ops/sec
+stat_small_file: 0.020ms avg, 50000 ops/sec
+
+2. Medium File Operations (1 MB)
+----------------------------------
+write_medium_file: 24.500ms avg, 41 ops/sec
+read_medium_file: 2.200ms avg, 455 ops/sec
+
+3. Large File Operations (10 MB)
+----------------------------------
+write_large_file: 24.600ms avg, 41 ops/sec
+read_large_file: 17.600ms avg, 57 ops/sec
+
+4. Directory Operations
+-----------------------
+create_directory: 0.220ms avg, 4545 ops/sec
+list_directory: 0.060ms avg, 16667 ops/sec
+
+5. File Copy Operations
+------------------------
+copy_small_file: 0.590ms avg, 1695 ops/sec
+copy_medium_file: 0.900ms avg, 1111 ops/sec
+
+6. JSON Operations
+-------------------
+write_json: 0.310ms avg, 3226 ops/sec
+read_and_parse_json: 0.030ms avg, 33333 ops/sec
+
+7. File Exists & Stats
+-----------------------
+file_exists: 0.020ms avg, 50000 ops/sec
+file_stat: 0.020ms avg, 50000 ops/sec
+
+8. Delete Operations
+---------------------
+delete_file: 0.260ms avg, 3846 ops/sec
+
+Cleaning up...
+
+Benchmark Complete!
+
+Results Summary:
+{
+  "runtime": "Node.js",
+  "tests": {
+    "write_small_file": {
+      "totalMs": 29,
+      "avgMs": 0.29,
+      "opsPerSec": 3448.2758620689656,
+      "iterations": 100
+    },
+    "read_small_file": {
+      "totalMs": 3,
+      "avgMs": 0.03,
+      "opsPerSec": 33333.333333333336,
+      "iterations": 100
+    },
+    "stat_small_file": {
+      "totalMs": 2,
+      "avgMs": 0.02,
+      "opsPerSec": 50000,
+      "iterations": 100
+    },
+    "write_medium_file": {
+      "totalMs": 245,
+      "avgMs": 24.5,
+      "opsPerSec": 40.816326530612244,
+      "iterations": 10
+    },
+    "read_medium_file": {
+      "totalMs": 22,
+      "avgMs": 2.2,
+      "opsPerSec": 454.5454545454545,
+      "iterations": 10
+    },
+    "write_large_file": {
+      "totalMs": 123,
+      "avgMs": 24.6,
+      "opsPerSec": 40.65040650406504,
+      "iterations": 5
+    },
+    "read_large_file": {
+      "totalMs": 88,
+      "avgMs": 17.6,
+      "opsPerSec": 56.81818181818181,
+      "iterations": 5
+    },
+    "create_directory": {
+      "totalMs": 22,
+      "avgMs": 0.22,
+      "opsPerSec": 4545.454545454545,
+      "iterations": 100
+    },
+    "list_directory": {
+      "totalMs": 6,
+      "avgMs": 0.06,
+      "opsPerSec": 16666.666666666668,
+      "iterations": 100
+    },
+    "copy_small_file": {
+      "totalMs": 59,
+      "avgMs": 0.59,
+      "opsPerSec": 1694.9152542372883,
+      "iterations": 100
+    },
+    "copy_medium_file": {
+      "totalMs": 9,
+      "avgMs": 0.9,
+      "opsPerSec": 1111.111111111111,
+      "iterations": 10
+    },
+    "write_json": {
+      "totalMs": 31,
+      "avgMs": 0.31,
+      "opsPerSec": 3225.8064516129034,
+      "iterations": 100
+    },
+    "read_and_parse_json": {
+      "totalMs": 3,
+      "avgMs": 0.03,
+      "opsPerSec": 33333.333333333336,
+      "iterations": 100
+    },
+    "file_exists": {
+      "totalMs": 2,
+      "avgMs": 0.02,
+      "opsPerSec": 50000,
+      "iterations": 100
+    },
+    "file_stat": {
+      "totalMs": 2,
+      "avgMs": 0.02,
+      "opsPerSec": 50000,
+      "iterations": 100
+    },
+    "delete_file": {
+      "totalMs": 13,
+      "avgMs": 0.26,
+      "opsPerSec": 3846.153846153846,
+      "iterations": 50
+    }
+  }
+}

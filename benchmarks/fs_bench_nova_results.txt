@@ -1,0 +1,4 @@
+fs_bench_nova.ts:30:38: error: Expected ',' between parameters
+fs_bench_nova.ts:30:38: error: Expected ',' between parameters
+fs_bench_nova.ts:56:1: error: Unexpected token in expression
+fs_bench_nova.ts:56:1: error: Unexpected token

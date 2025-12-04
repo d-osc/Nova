@@ -1,6 +1,7 @@
 #include "nova/runtime/Runtime.h"
 #include <cstring>
 #include <algorithm>
+#include <iostream>
 
 namespace nova {
 namespace runtime {
@@ -1042,6 +1043,46 @@ const char* nova_string_toWellFormed(const char* str) {
     }
 
     result[j] = '\0';
+    return result;
+}
+
+// Convert int32 to string
+const char* nova_i32_to_string(int32_t value) {
+    // Max length for int32: "-2147483648" = 11 chars + null terminator = 12
+    char* result = static_cast<char*>(std::malloc(12));
+    if (!result) return "";
+
+    std::snprintf(result, 12, "%d", value);
+    return result;
+}
+
+// Convert int64 to string
+const char* nova_i64_to_string(int64_t value) {
+    // Max length for int64: "-9223372036854775808" = 20 chars + null terminator = 21
+    char* result = static_cast<char*>(std::malloc(24));
+    if (!result) {
+        std::cerr << "ERROR: malloc failed in nova_i64_to_string" << std::endl;
+        return "";
+    }
+
+    int written = std::snprintf(result, 24, "%lld", value);
+    if (written < 0) {
+        std::cerr << "ERROR: snprintf failed in nova_i64_to_string" << std::endl;
+        std::free(result);
+        return "";
+    }
+
+    std::cerr << "DEBUG: nova_i64_to_string(" << value << ") = \"" << result << "\"" << std::endl;
+    return result;
+}
+
+// Convert double to string
+const char* nova_f64_to_string(double value) {
+    // Allocate enough space for a double string representation
+    char* result = static_cast<char*>(std::malloc(32));
+    if (!result) return "";
+
+    std::snprintf(result, 32, "%g", value);
     return result;
 }
 

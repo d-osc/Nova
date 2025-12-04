@@ -1,0 +1,76 @@
+// Node.js HTTPS Server Benchmark
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+
+// Generate self-signed certificate for testing
+const { generateKeyPairSync } = require('crypto');
+const { X509Certificate } = require('crypto');
+
+// Simple self-signed cert generation (for benchmarking only)
+function generateSelfSignedCert() {
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+    });
+
+    return { key: privateKey, cert: publicKey };
+}
+
+// For benchmark, use simple key/cert (in production, use proper certificates)
+const options = {
+    key: `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj
+MzEfYyjiWA4R4/M2bS1+fWIcPm15j9VDPsv0s4qFQwGc/MwWBNUhLCy0j+G5H1Kp
+SQlGcJE4S3yPMGJfN8ZkR2nE4x8n6d5R0H0cOzX0QHD2xVLXy9GJWJdGW4RXFMBB
+JDQQ9UDqYhG1hFJTpwEnlZ7hJLZS+WmRQYa3YWXdH1vqDFQlQAb6lv3r9C3fRWRb
+YwF+HuM+4LyI4hHJH7D0KvSwflw+GCQKFZE+LUvVt2z4I5PW/BEq6bJ0fZQPVTuR
+YlMy8hC2N0MUgNgpLlZqXfqZxmLkLqThJZPGlBlLYSZIk/9gHFMfTK0RjCDqoAxI
+BZqPSx6DAgMBAAECggEAfqF5JBx8oL7fqwxb3r4xP+IrPq8dBUy4tQQH3gfjP2Gn
+XPEj7m3YD3O0WwT/6bCN8I5FTU7qbT3xZSPOF2mJ8DBHFPW0p9sQ7wXjTH0u+UOV
+yCN9r5xNsAYPF0Y8DWO0+VwGYHCc7mJ9YvXVLGW7FWMnD4Vh3e7UwQvZqVP5YQJZ
+k7lD0VqOAaDYQYbqFW8gWJvHF+Gqc8L3nWxYy8/9cPmD+PnYQZlOGLQs9N3P1CQU
+yOHWY+wJhOGYA8HLN8FfPxFqZGKQqPUvVDqvVWQqYQp8iJNXCNqhGBYVCFZyqKQN
+qGPVmJ7qBvRPNQwQPQqK0wF8yJNmQQKBgQDe4F+qWJqJ8HYvhQqPQxQrPQmRYKqQ
+ZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqR
+ZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqR
+ZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRZqRQKBgQDYJ0K/m7x4u0u7u0u7u
+0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7
+u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0u7
+u0u7u0u7u0u7u0u7u0u7u0u7u0u7u0QKBgHm3j3j3j3j3j3j3j3j3j3j3j3j3j3j3
+j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3
+j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3j3
+j3j3j3j3j3j3QKBgDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0
+NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0
+NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0
+NDQ0NDQ0NDQ0QKBgQCJ8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J
+8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J
+8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J8J
+8J8J8J8J8J8J8Q==
+-----END PRIVATE KEY-----`,
+    cert: `-----BEGIN CERTIFICATE-----
+MIIDBjCCAe4CCQDHvZKVVv8NbDANBgkqhkiG9w0BAQsFADBFMQswCQYDVQQGEwJV
+UzETMBEGA1UECAwKU29tZS1TdGF0ZTEhMB8GA1UECgwYSW50ZXJuZXQgV2lkZ2l0
+cyBQdHkgTHRkMB4XDTIzMDEwMTAwMDAwMFoXDTI0MDEwMTAwMDAwMFowRTELMAkG
+A1UEBhMCVVMxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0
+IFdpZGdpdHMgUHR5IEx0ZDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEB
+ALtUlNS31SzxwqMzMR9jKOJYDhHj8zZtLX59Yhw+bXmP1UM+y/SzioVDAZz8zBYE
+1SEsLLSP4bkfUqlJCUZwkThLfI8wYl83xmRHacTjHyfp3lHQfRw7NfRAcPbFUtfL
+0YlYl0ZbhFcUwEEkNBD1QOpiEbWEUlOnASeVnuEktlL5aZFBhrdhZd0fW+oMVCVA
+BvqW/ev0Ld9FZFtjAX4e4z7gvIjiEckfsPQq9LB+XD4YJAoVkT4tS9W3bPgjk9b8
+ESrpsnR9lA9VO5FiUzLyELY3QxSA2CkuVmpd+pnGYuQupOElk8aUGUthJkiT/2Ac
+Ux9MrRGMIOqgDEgFmo9LHoMCAwEAATANBgkqhkiG9w0BAQsFAAOCAQEAh+7DvPPP
+PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPxxx
+-----END CERTIFICATE-----`
+};
+
+// Create HTTPS server
+const server = https.createServer(options, (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Hello HTTPS from Node.js!');
+});
+
+server.listen(8443, () => {
+    console.log('Node.js HTTPS server listening on https://localhost:8443');
+});

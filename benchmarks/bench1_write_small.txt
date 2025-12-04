@@ -1,0 +1,1 @@
+write_small_1kb: 100 iterations, total ms: 

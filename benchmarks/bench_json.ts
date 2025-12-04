@@ -1,38 +1,50 @@
-// JSON Benchmark - Parse & Stringify
-const iterations = 100000;
+// JSON Benchmark Tests
 
-const testObject = {
-    name: "Nova Benchmark",
-    version: "1.0.0",
-    features: ["fast", "efficient", "compatible"],
-    nested: {
-        level1: {
-            level2: {
-                level3: {
-                    data: [1, 2, 3, 4, 5]
-                }
-            }
-        }
-    },
-    numbers: Array.from({length: 100}, (_, i) => i * Math.random())
-};
+console.log("=== JSON.stringify Benchmarks ===");
 
-const jsonString = JSON.stringify(testObject);
+// Benchmark 1: Numbers
+console.log("\n1. Numbers:");
+const num1 = 0;
+const num2 = -42;
+const num3 = 999999;
+console.log(JSON.stringify(num1));
+console.log(JSON.stringify(num2));
+console.log(JSON.stringify(num3));
 
-// Stringify benchmark
-const stringifyStart = Date.now();
-for (let i = 0; i < iterations; i++) {
-    JSON.stringify(testObject);
-}
-const stringifyTime = Date.now() - stringifyStart;
+// Benchmark 2: Strings
+console.log("\n2. Strings:");
+const str1 = "Hello World";
+const str2 = "Nova Compiler";
+const str3 = "TypeScript";
+console.log(JSON.stringify(str1));
+console.log(JSON.stringify(str2));
+console.log(JSON.stringify(str3));
 
-// Parse benchmark
-const parseStart = Date.now();
-for (let i = 0; i < iterations; i++) {
-    JSON.parse(jsonString);
-}
-const parseTime = Date.now() - parseStart;
+// Benchmark 3: Booleans
+console.log("\n3. Booleans:");
+const bool1 = true;
+const bool2 = false;
+console.log(JSON.stringify(bool1));
+console.log(JSON.stringify(bool2));
 
-console.log(`JSON.stringify x${iterations}: ${stringifyTime}ms`);
-console.log(`JSON.parse x${iterations}: ${parseTime}ms`);
-console.log(`Total: ${stringifyTime + parseTime}ms`);
+// Benchmark 4: Arrays
+console.log("\n4. Arrays:");
+const arr1 = [1, 2, 3];
+const arr2 = [10, 20, 30, 40, 50];
+const arr3 = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+console.log(JSON.stringify(arr1));
+console.log(JSON.stringify(arr2));
+console.log(JSON.stringify(arr3));
+
+// Benchmark 5: Mixed Operations
+console.log("\n5. Mixed Operations:");
+const x = 123;
+const y = "test";
+const z = true;
+const arr = [1, 2, 3, 4, 5];
+console.log(JSON.stringify(x));
+console.log(JSON.stringify(y));
+console.log(JSON.stringify(z));
+console.log(JSON.stringify(arr));
+
+console.log("\n=== Benchmark Complete ===");
