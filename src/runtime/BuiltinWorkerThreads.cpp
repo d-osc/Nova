@@ -5,6 +5,7 @@
  * Enables parallel JavaScript execution with message passing.
  */
 
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <map>
