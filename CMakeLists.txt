@@ -261,16 +261,20 @@ set(NOVA_SOURCES
 
 # Create library
 add_library(novacore STATIC ${NOVA_SOURCES})
-# On macOS, don't add LLVM_INCLUDE_DIRS as they conflict with explicit paths in CMAKE_CXX_FLAGS
-if(NOT APPLE)
+# On macOS, use regular includes (not SYSTEM) to get -I instead of -isystem
+if(APPLE)
+    target_include_directories(novacore PRIVATE ${LLVM_INCLUDE_DIRS})
+else()
     target_include_directories(novacore SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 endif()
 target_link_libraries(novacore ${llvm_libs})
 
 # Create executable
 add_executable(nova src/main.cpp)
-# On macOS, don't add LLVM_INCLUDE_DIRS as they conflict with explicit paths in CMAKE_CXX_FLAGS
-if(NOT APPLE)
+# On macOS, use regular includes (not SYSTEM) to get -I instead of -isystem
+if(APPLE)
+    target_include_directories(nova PRIVATE ${LLVM_INCLUDE_DIRS})
+else()
     target_include_directories(nova SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 endif()
 target_link_libraries(nova novacore ${llvm_libs})
