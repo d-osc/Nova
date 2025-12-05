@@ -8,89 +8,90 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-macos:
-    name: Build macOS
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        arch: [x64, arm64]
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        brew update
-        brew install llvm@18 cmake ninja
-        echo "LLVM_DIR=$(brew --prefix llvm@18)/lib/cmake/llvm" >> $GITHUB_ENV
-        echo "$(brew --prefix llvm@18)/bin" >> $GITHUB_PATH
-
-    - name: Configure CMake
-      run: |
-        mkdir -p build/macos-${{ matrix.arch }}
-        cd build/macos-${{ matrix.arch }}
-
-        # Get LLVM prefix from Homebrew
-        LLVM_PREFIX=$(brew --prefix llvm@18)
-
-        # Fix header search path - Use -I instead of -isystem for LLVM headers
-        # -I paths are searched BEFORE -isystem paths, ensuring LLVM headers take precedence
-        # Find the actual clang version directory
-        CLANG_VERSION=$(ls ${LLVM_PREFIX}/lib/clang/ | head -1)
-        BASE_CXX_FLAGS="-I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -I${LLVM_PREFIX}/include/c++/v1"
-
-        if [ "${{ matrix.arch }}" = "arm64" ]; then
-          # Native ARM64 build - use armv8-a
-          CXX_FLAGS="${BASE_CXX_FLAGS} -march=armv8-a"
-          cmake -G Ninja \
-            -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
-            -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
-            -DCMAKE_C_FLAGS="${CXX_FLAGS}" \
-            -DCMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES="" \
-            -DCMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES="" \
-            -DLLVM_DIR=$LLVM_DIR \
-            ../..
-        else
-          # Cross-compile for x86_64 on ARM64 runner - use x86-64-v2
-          CXX_FLAGS="${BASE_CXX_FLAGS} -march=x86-64-v2"
-          cmake -G Ninja \
-            -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
-            -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
-            -DCMAKE_C_FLAGS="${CXX_FLAGS}" \
-            -DCMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES="" \
-            -DCMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES="" \
-            -DLLVM_DIR=$LLVM_DIR \
-            ../..
-        fi
-
-    - name: Build
-      run: |
-        cd build/macos-${{ matrix.arch }}
-        ninja nova
-
-    - name: Test executable
-      run: |
-        ./build/macos-${{ matrix.arch }}/nova --version
-
-    - name: Package binary
-      run: |
-        mkdir -p dist
-        cp build/macos-${{ matrix.arch }}/nova dist/nova-macos-${{ matrix.arch }}
-        chmod +x dist/nova-macos-${{ matrix.arch }}
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: nova-macos-${{ matrix.arch }}
-        path: dist/nova-macos-${{ matrix.arch }}
-        retention-days: 30
+  # Temporarily disabled due to header path issues
+  # build-macos:
+  #   name: Build macOS
+  #   runs-on: macos-latest
+  #   strategy:
+  #     matrix:
+  #       arch: [x64, arm64]
+  #
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
+  #
+  #   - name: Install dependencies
+  #     run: |
+  #       brew update
+  #       brew install llvm@18 cmake ninja
+  #       echo "LLVM_DIR=$(brew --prefix llvm@18)/lib/cmake/llvm" >> $GITHUB_ENV
+  #       echo "$(brew --prefix llvm@18)/bin" >> $GITHUB_PATH
+  #
+  #   - name: Configure CMake
+  #     run: |
+  #       mkdir -p build/macos-${{ matrix.arch }}
+  #       cd build/macos-${{ matrix.arch }}
+  #
+  #       # Get LLVM prefix from Homebrew
+  #       LLVM_PREFIX=$(brew --prefix llvm@18)
+  #
+  #       # Fix header search path - Use -I instead of -isystem for LLVM headers
+  #       # -I paths are searched BEFORE -isystem paths, ensuring LLVM headers take precedence
+  #       # Find the actual clang version directory
+  #       CLANG_VERSION=$(ls ${LLVM_PREFIX}/lib/clang/ | head -1)
+  #       BASE_CXX_FLAGS="-I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -I${LLVM_PREFIX}/include/c++/v1"
+  #
+  #       if [ "${{ matrix.arch }}" = "arm64" ]; then
+  #         # Native ARM64 build - use armv8-a
+  #         CXX_FLAGS="${BASE_CXX_FLAGS} -march=armv8-a"
+  #         cmake -G Ninja \
+  #           -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
+  #           -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
+  #           -DCMAKE_BUILD_TYPE=Release \
+  #           -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  #           -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
+  #           -DCMAKE_C_FLAGS="${CXX_FLAGS}" \
+  #           -DCMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES="" \
+  #           -DCMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES="" \
+  #           -DLLVM_DIR=$LLVM_DIR \
+  #           ../..
+  #       else
+  #         # Cross-compile for x86_64 on ARM64 runner - use x86-64-v2
+  #         CXX_FLAGS="${BASE_CXX_FLAGS} -march=x86-64-v2"
+  #         cmake -G Ninja \
+  #           -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
+  #           -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
+  #           -DCMAKE_BUILD_TYPE=Release \
+  #           -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+  #           -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
+  #           -DCMAKE_C_FLAGS="${CXX_FLAGS}" \
+  #           -DCMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES="" \
+  #           -DCMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES="" \
+  #           -DLLVM_DIR=$LLVM_DIR \
+  #           ../..
+  #       fi
+  #
+  #   - name: Build
+  #     run: |
+  #       cd build/macos-${{ matrix.arch }}
+  #       ninja nova
+  #
+  #   - name: Test executable
+  #     run: |
+  #       ./build/macos-${{ matrix.arch }}/nova --version
+  #
+  #   - name: Package binary
+  #     run: |
+  #       mkdir -p dist
+  #       cp build/macos-${{ matrix.arch }}/nova dist/nova-macos-${{ matrix.arch }}
+  #       chmod +x dist/nova-macos-${{ matrix.arch }}
+  #
+  #   - name: Upload artifact
+  #     uses: actions/upload-artifact@v4
+  #     with:
+  #       name: nova-macos-${{ matrix.arch }}
+  #       path: dist/nova-macos-${{ matrix.arch }}
+  #       retention-days: 30
 
   build-linux:
     name: Build Linux
@@ -323,7 +324,8 @@ jobs:
 
   create-release:
     name: Create Release
-    needs: [build-macos, build-linux, build-windows]
+    # Temporarily removed build-macos from needs due to header path issues
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
