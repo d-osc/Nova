@@ -19,6 +19,7 @@
 #include <windows.h>
 #else
 #include <errno.h>
+#include <unistd.h>
 #endif
 
 extern "C" {
