@@ -143,11 +143,18 @@ jobs:
         Write-Host "Extracting .tar.xz to .tar..."
         7z x llvm.tar.xz -y
 
-        Write-Host "Checking for .tar file..."
-        Get-ChildItem . -File | Where-Object Name -like "*.tar"
+        Write-Host "Listing all files..."
+        Get-ChildItem . -File
 
-        Write-Host "Extracting .tar to C:\..."
-        7z x "clang+llvm-18.1.7-x86_64-pc-windows-msvc.tar" -o"C:\" -y
+        Write-Host "Finding .tar file..."
+        $tarFile = Get-ChildItem . -File | Where-Object Name -like "*.tar" | Select-Object -First 1
+
+        if (-not $tarFile) {
+          throw "No .tar file found after extracting .tar.xz"
+        }
+
+        Write-Host "Extracting $($tarFile.Name) to C:\..."
+        7z x $tarFile.FullName -o"C:\" -y
 
         Write-Host "Checking extracted directory..."
         Get-ChildItem C:\ -Directory | Where-Object Name -like "*llvm*"
