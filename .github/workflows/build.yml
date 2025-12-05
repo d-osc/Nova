@@ -8,14 +8,68 @@ on:
   workflow_dispatch:
 
 jobs:
-  # macOS build temporarily disabled due to persistent header path conflicts
-  # Issue: CMake forcibly adds macOS SDK paths despite -nostdinc flags
-  # TODO: Investigate alternative build approaches (Docker, cross-compile, etc.)
-  #
-  # build-macos-arm64:
-  #   name: Build macOS ARM64 (M1)
-  #   runs-on: macos-latest
-  #   ...
+  build-macos-arm64:
+    name: Build macOS ARM64 (M1)
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        brew update
+        brew install llvm@18 cmake ninja
+        echo "LLVM_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
+        echo "$(brew --prefix llvm@18)/bin" >> $GITHUB_PATH
+
+    - name: Configure CMake with custom toolchain
+      run: |
+        mkdir -p build/macos-arm64
+        cd build/macos-arm64
+
+        # Get LLVM details
+        LLVM_PREFIX=$(brew --prefix llvm@18)
+        CLANG_VERSION=$(ls ${LLVM_PREFIX}/lib/clang/ | head -1)
+
+        echo "Using LLVM at: ${LLVM_PREFIX}"
+        echo "Clang version: ${CLANG_VERSION}"
+
+        # Export for toolchain file
+        export LLVM_PREFIX
+        export CLANG_VERSION
+
+        # Use custom toolchain file to override CMake platform defaults
+        cmake -G Ninja \
+          -DCMAKE_TOOLCHAIN_FILE=../../.github/workflows/macos-toolchain.cmake \
+          -DLLVM_PREFIX=${LLVM_PREFIX} \
+          -DCLANG_VERSION=${CLANG_VERSION} \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DLLVM_DIR=${LLVM_PREFIX}/lib/cmake/llvm \
+          ../..
+
+    - name: Build
+      run: |
+        cd build/macos-arm64
+        ninja nova
+
+    - name: Test executable
+      run: |
+        ./build/macos-arm64/nova --version
+
+    - name: Package binary
+      run: |
+        mkdir -p dist
+        cp build/macos-arm64/nova dist/nova-macos-arm64
+        chmod +x dist/nova-macos-arm64
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nova-macos-arm64
+        path: dist/nova-macos-arm64
+        retention-days: 30
 
   build-linux:
     name: Build Linux
