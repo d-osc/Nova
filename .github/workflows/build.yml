@@ -34,11 +34,11 @@ jobs:
         # Get LLVM prefix from Homebrew
         LLVM_PREFIX=$(brew --prefix llvm@18)
 
-        # Fix header search path - LLVM headers must come before system headers
+        # Fix header search path - Use -I instead of -isystem for LLVM headers
+        # -I paths are searched BEFORE -isystem paths, ensuring LLVM headers take precedence
         # Find the actual clang version directory
         CLANG_VERSION=$(ls ${LLVM_PREFIX}/lib/clang/ | head -1)
-        # Use -nostdinc to disable all standard include paths, then add only what we need
-        BASE_CXX_FLAGS="-nostdinc -nostdinc++ -isystem ${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -isystem ${LLVM_PREFIX}/include/c++/v1"
+        BASE_CXX_FLAGS="-I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -I${LLVM_PREFIX}/include/c++/v1"
 
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           # Native ARM64 build - use armv8-a
