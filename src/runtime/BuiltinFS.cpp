@@ -735,6 +735,8 @@ int nova_fs_fchownSync([[maybe_unused]] int fd, [[maybe_unused]] int uid, [[mayb
 int nova_fs_fdatasyncSync(int fd) {
 #ifdef _WIN32
     return _commit(fd) == 0 ? 1 : 0;  // Windows doesn't distinguish
+#elif defined(__APPLE__)
+    return fsync(fd) == 0 ? 1 : 0;    // macOS doesn't have fdatasync, use fsync
 #else
     return fdatasync(fd) == 0 ? 1 : 0;
 #endif
