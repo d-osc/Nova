@@ -30,20 +30,27 @@ jobs:
       run: |
         mkdir -p build/macos-${{ matrix.arch }}
         cd build/macos-${{ matrix.arch }}
+
+        # Fix header search path - LLVM libc++ must come before system headers
+        LLVM_PREFIX=$(brew --prefix llvm@18)
+        CXX_FLAGS="-nostdinc++ -isystem ${LLVM_PREFIX}/include/c++/v1"
+
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           cmake -G Ninja \
-            -DCMAKE_C_COMPILER=$(brew --prefix llvm@18)/bin/clang \
-            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm@18)/bin/clang++ \
+            -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
+            -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
             -DLLVM_DIR=$LLVM_DIR \
             ../..
         else
           cmake -G Ninja \
-            -DCMAKE_C_COMPILER=$(brew --prefix llvm@18)/bin/clang \
-            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm@18)/bin/clang++ \
+            -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
+            -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
             -DLLVM_DIR=$LLVM_DIR \
             ../..
         fi
