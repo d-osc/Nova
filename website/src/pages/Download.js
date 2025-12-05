@@ -1,16 +1,19 @@
 import React from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 import './Download.css';
 
 function Download() {
+  const { t } = useLanguage();
+
   return (
     <div className="download-page">
       <section className="page-hero">
         <div className="container">
           <h1 className="page-title">
-            <span className="gradient-text">Download</span> Nova
+            <span className="gradient-text">{t('download.title')}</span>
           </h1>
           <p className="page-subtitle">
-            Get started with Nova on your platform
+            {t('download.subtitle')}
           </p>
         </div>
       </section>

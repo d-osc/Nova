@@ -1,2 +1,0 @@
-benchmarks/bench_http_nova_simple.ts:1:1: error: Unexpected token in expression
-benchmarks/bench_http_nova_simple.ts:1:1: error: Unexpected token

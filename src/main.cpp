@@ -48,6 +48,7 @@ Commands:
   build, -b      Transpile TypeScript to JavaScript (like tsc)
   test           Run automated tests
   check          Type check only
+  pm             Package manager commands (see 'nova pm --help')
   install, i     Install packages (fast, with cache)
   update, u      Update packages to latest versions
   uninstall, un  Remove a package
@@ -122,6 +123,59 @@ void printVersion() {
     std::cout << "Nova Compiler v1.0.0" << std::endl;
     std::cout << "LLVM version: 16.0.0" << std::endl;
     std::cout << "Copyright (c) 2025 Nova Lang Team" << std::endl;
+}
+
+void printPMUsage() {
+    std::cout << R"(
+╔═══════════════════════════════════════════════════════════════╗
+║                  Nova Package Manager (pm)                    ║
+║              Fast Package Manager with Caching                ║
+╚═══════════════════════════════════════════════════════════════╝
+
+Usage: nova pm <command> [options]
+
+Commands:
+  install, i <pkg>    Install a package
+  update, u [pkg]     Update package(s) to latest version
+  uninstall, un <pkg> Remove a package
+  ci                  Clean install from lockfile
+  link [pkg]          Link package globally or to project
+  list, ls            Show dependency tree
+  outdated            Check for outdated packages
+  login [registry]    Log in to registry
+  logout [registry]   Log out from registry
+  pack                Create tarball for publishing
+  publish             Publish package to registry
+  config              Show current configuration
+
+Options:
+  -S, --save          Save to dependencies (default)
+  -D, --dev           Save to devDependencies
+  -g, --global        Install/uninstall globally
+  -p, -P, --peer      Save to peerDependencies
+  -op, -Op, --optional Save to optionalDependencies
+
+Examples:
+  # Install dependencies from package.json
+  nova pm install
+
+  # Install a specific package
+  nova pm install lodash
+
+  # Install dev dependency
+  nova pm install --save-dev typescript
+
+  # Install global package
+  nova pm install -g typescript
+
+  # Update packages
+  nova pm update
+
+  # Remove a package
+  nova pm uninstall lodash
+
+For more information: https://nova-lang.org/docs/pm
+)" << std::endl;
 }
 
 // Interactive shell mode
@@ -483,6 +537,43 @@ int main(int argc, char** argv) {
         bool withTypeScript = (inputFile == "ts" || inputFile == "typescript");
         bool success = pm.init(".", withTypeScript);
         return success ? 0 : 1;
+    }
+
+    // Handle pm (package manager) command
+    if (command == "pm") {
+        // Check if subcommand is provided
+        if (argc < 3) {
+            printPMUsage();
+            return 0;
+        }
+
+        // Get the subcommand (install, update, etc.)
+        std::string subcommand = argv[2];
+
+        // Check for --help or -h
+        if (subcommand == "--help" || subcommand == "-h") {
+            printPMUsage();
+            return 0;
+        }
+
+        // Normalize subcommand aliases
+        if (subcommand == "i") subcommand = "install";
+        else if (subcommand == "u") subcommand = "update";
+        else if (subcommand == "un") subcommand = "uninstall";
+        else if (subcommand == "ls") subcommand = "list";
+
+        // Get the package name or input (if any)
+        std::string pmInputFile;
+        if (argc > 3) {
+            pmInputFile = argv[3];
+        }
+
+        // Re-map command and inputFile for existing handlers
+        command = subcommand;
+        inputFile = pmInputFile;
+
+        // Continue to existing command handlers below
+        // (install, update, uninstall, ci, link, list, etc.)
     }
 
     // Handle test command

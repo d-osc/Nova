@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 import './Benchmarks.css';
 
 function Benchmarks() {
+  const { t } = useLanguage();
   const [selectedCategory, setSelectedCategory] = useState('all');
 
   const categories = [
@@ -19,10 +21,10 @@ function Benchmarks() {
       <section className="page-hero">
         <div className="container">
           <h1 className="page-title">
-            <span className="gradient-text">Benchmarks</span>
+            <span className="gradient-text">{t('benchmarks.title')}</span>
           </h1>
           <p className="page-subtitle">
-            Comprehensive performance comparisons: Nova vs Bun vs Deno vs Node.js
+            {t('benchmarks.subtitle')}
           </p>
         </div>
       </section>

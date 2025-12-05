@@ -1,14 +1,17 @@
 import React from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 import './Footer.css';
 
 function Footer() {
+  const { t } = useLanguage();
+
   return (
     <footer className="footer">
       <div className="container">
         <div className="footer-content">
           <div className="footer-section">
             <h3 className="gradient-text">Nova</h3>
-            <p>TypeScript/JavaScript to Native Code Compiler</p>
+            <p>{t('home.hero.subtitle')}</p>
             <p className="powered-by">Powered by LLVM 18.1.7</p>
           </div>
 

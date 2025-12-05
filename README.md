@@ -21,6 +21,33 @@ TypeScript/JavaScript → AST → HIR → MIR → LLVM IR → Native Code
 - 💾 **Low memory usage** - 30-50% less than Node.js
 - ✅ **100% test pass rate** - 511 tests passing
 
+## Quick Install
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/d-osc/Nova/master/scripts/install.sh | bash
+```
+
+### Windows
+
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/d-osc/Nova/master/scripts/install.ps1 | iex"
+```
+
+### Usage
+
+```bash
+# Run TypeScript directly
+nova run app.ts
+
+# Compile to native binary
+nova build app.ts -o app
+
+# Use the package manager
+nova pm install lodash
+```
+
 ## Features
 
 ### Core Language

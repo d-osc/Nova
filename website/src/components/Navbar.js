@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useLanguage } from '../contexts/LanguageContext';
+import LanguageSwitcher from './LanguageSwitcher';
 import './Navbar.css';
 
 function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
+  const { t } = useLanguage();
 
   return (
     <nav className="navbar">
@@ -15,19 +18,16 @@ function Navbar() {
 
           <div className={`nav-menu ${isOpen ? 'active' : ''}`}>
             <Link to="/" className="nav-link" onClick={() => setIsOpen(false)}>
-              Home
+              {t('nav.home')}
             </Link>
             <Link to="/features" className="nav-link" onClick={() => setIsOpen(false)}>
-              Features
+              {t('nav.features')}
             </Link>
             <Link to="/benchmarks" className="nav-link" onClick={() => setIsOpen(false)}>
-              Benchmarks
+              {t('nav.benchmarks')}
             </Link>
             <Link to="/docs" className="nav-link" onClick={() => setIsOpen(false)}>
-              Docs
-            </Link>
-            <Link to="/download" className="nav-link" onClick={() => setIsOpen(false)}>
-              Download
+              {t('nav.docs')}
             </Link>
             <a
               href="https://github.com/d-osc/Nova"
@@ -37,6 +37,7 @@ function Navbar() {
             >
               GitHub
             </a>
+            <LanguageSwitcher />
           </div>
 
           <button

@@ -1,16 +1,19 @@
 import React from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 import './Features.css';
 
 function Features() {
+  const { t } = useLanguage();
+
   return (
     <div className="features-page">
       <section className="page-hero">
         <div className="container">
           <h1 className="page-title">
-            <span className="gradient-text">Features</span>
+            <span className="gradient-text">{t('features.title')}</span>
           </h1>
           <p className="page-subtitle">
-            Everything you need to build high-performance applications
+            {t('features.subtitle')}
           </p>
         </div>
       </section>

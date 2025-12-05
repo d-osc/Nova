@@ -1,8 +1,11 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { useLanguage } from '../contexts/LanguageContext';
 import './Home.css';
 
 function Home() {
+  const { t } = useLanguage();
+
   return (
     <div className="home">
       {/* Hero Section */}
@@ -10,35 +13,35 @@ function Home() {
         <div className="container">
           <div className="hero-content">
             <h1 className="hero-title">
-              <span className="gradient-text">Nova</span>
+              <span className="gradient-text">{t('home.hero.title')}</span>
               <br />
-              TypeScript to Native Code
+              {t('home.hero.subtitle')}
             </h1>
             <p className="hero-subtitle">
-              Compile TypeScript/JavaScript directly to native code via LLVM.
+              {t('home.hero.description')}
               <br />
-              <strong>5-10x faster SQLite</strong>, native performance, Node.js compatible.
+              <strong>{t('home.hero.descriptionHighlight')}</strong>, {t('home.hero.descriptionEnd')}
             </p>
             <div className="hero-buttons">
-              <Link to="/download" className="btn btn-primary">
-                Get Started
-              </Link>
+              <a href="#install" className="btn btn-primary">
+                {t('home.hero.getStarted')}
+              </a>
               <Link to="/docs" className="btn btn-secondary">
-                Documentation
+                {t('home.hero.documentation')}
               </Link>
             </div>
             <div className="hero-stats">
               <div className="stat">
                 <div className="stat-value">5-10x</div>
-                <div className="stat-label">Faster SQLite</div>
+                <div className="stat-label">{t('home.hero.stats.sqlite')}</div>
               </div>
               <div className="stat">
                 <div className="stat-value">511</div>
-                <div className="stat-label">Tests Passing</div>
+                <div className="stat-label">{t('home.hero.stats.tests')}</div>
               </div>
               <div className="stat">
                 <div className="stat-value">40+</div>
-                <div className="stat-label">Built-in Modules</div>
+                <div className="stat-label">{t('home.hero.stats.modules')}</div>
               </div>
             </div>
           </div>
@@ -84,60 +87,54 @@ console.log(users);
       <section className="features-overview section">
         <div className="container">
           <h2 className="section-title">
-            Why <span className="gradient-text">Nova</span>?
+            {t('home.features.title')} <span className="gradient-text">{t('home.hero.title')}</span>?
           </h2>
           <div className="features-grid">
             <div className="feature-card">
               <div className="feature-icon">⚡</div>
-              <h3>Ultra Performance</h3>
+              <h3>{t('home.features.ultraPerformance.title')}</h3>
               <p>
-                Compiles to native code via LLVM with aggressive optimizations.
-                5-10x faster SQLite than Node.js better-sqlite3.
+                {t('home.features.ultraPerformance.description')}
               </p>
             </div>
 
             <div className="feature-card">
               <div className="feature-icon">🔧</div>
-              <h3>Node.js Compatible</h3>
+              <h3>{t('home.features.nodejsCompatible.title')}</h3>
               <p>
-                40+ built-in modules compatible with Node.js APIs.
-                Drop-in replacement for many Node.js applications.
+                {t('home.features.nodejsCompatible.description')}
               </p>
             </div>
 
             <div className="feature-card">
               <div className="feature-icon">📦</div>
-              <h3>Package Manager</h3>
+              <h3>{t('home.features.packageManager.title')}</h3>
               <p>
-                npm-compatible package manager built-in.
-                Install and manage dependencies seamlessly.
+                {t('home.features.packageManager.description')}
               </p>
             </div>
 
             <div className="feature-card">
               <div className="feature-icon">💾</div>
-              <h3>Low Memory</h3>
+              <h3>{t('home.features.lowMemory.title')}</h3>
               <p>
-                30-50% less memory usage compared to Node.js.
-                Efficient garbage collection and memory management.
+                {t('home.features.lowMemory.description')}
               </p>
             </div>
 
             <div className="feature-card">
               <div className="feature-icon">🚀</div>
-              <h3>Fast Startup</h3>
+              <h3>{t('home.features.fastStartup.title')}</h3>
               <p>
-                ~5-10ms startup time, 2-3x faster than Node.js.
-                Perfect for CLI tools and serverless functions.
+                {t('home.features.fastStartup.description')}
               </p>
             </div>
 
             <div className="feature-card">
               <div className="feature-icon">✅</div>
-              <h3>Battle Tested</h3>
+              <h3>{t('home.features.battleTested.title')}</h3>
               <p>
-                511 tests with 100% pass rate.
-                Comprehensive test coverage for reliability.
+                {t('home.features.battleTested.description')}
               </p>
             </div>
           </div>
@@ -148,85 +145,102 @@ console.log(users);
       <section className="performance section">
         <div className="container">
           <h2 className="section-title">
-            <span className="gradient-text">Performance</span> that Matters
+            <span className="gradient-text">{t('home.performance.title')}</span> {t('home.performance.subtitle')}
           </h2>
           <div className="perf-grid">
             <div className="perf-card">
-              <h3>SQLite Operations</h3>
+              <h3>{t('home.performance.sqlite.title')}</h3>
               <div className="perf-bar">
                 <div className="perf-fill" style={{ width: '15%' }}>
-                  <span>Nova: 180ms</span>
+                  <span>{t('home.performance.sqlite.nova')}</span>
                 </div>
               </div>
               <div className="perf-bar baseline">
                 <div className="perf-fill-baseline" style={{ width: '100%' }}>
-                  <span>Node.js: 1,200ms</span>
+                  <span>{t('home.performance.sqlite.nodejs')}</span>
                 </div>
               </div>
-              <p className="perf-result">6.7x faster</p>
+              <p className="perf-result">{t('home.performance.sqlite.result')}</p>
             </div>
 
             <div className="perf-card">
-              <h3>Memory Usage</h3>
+              <h3>{t('home.performance.memory.title')}</h3>
               <div className="perf-bar">
                 <div className="perf-fill" style={{ width: '36%' }}>
-                  <span>Nova: 90MB</span>
+                  <span>{t('home.performance.memory.nova')}</span>
                 </div>
               </div>
               <div className="perf-bar baseline">
                 <div className="perf-fill-baseline" style={{ width: '100%' }}>
-                  <span>Node.js: 250MB</span>
+                  <span>{t('home.performance.memory.nodejs')}</span>
                 </div>
               </div>
-              <p className="perf-result">64% less memory</p>
+              <p className="perf-result">{t('home.performance.memory.result')}</p>
             </div>
 
             <div className="perf-card">
-              <h3>Startup Time</h3>
+              <h3>{t('home.performance.startup.title')}</h3>
               <div className="perf-bar">
                 <div className="perf-fill" style={{ width: '25%' }}>
-                  <span>Nova: 5ms</span>
+                  <span>{t('home.performance.startup.nova')}</span>
                 </div>
               </div>
               <div className="perf-bar baseline">
                 <div className="perf-fill-baseline" style={{ width: '100%' }}>
-                  <span>Node.js: 20ms</span>
+                  <span>{t('home.performance.startup.nodejs')}</span>
                 </div>
               </div>
-              <p className="perf-result">4x faster</p>
+              <p className="perf-result">{t('home.performance.startup.result')}</p>
             </div>
           </div>
           <div className="cta-center">
             <Link to="/benchmarks" className="btn btn-primary">
-              View All Benchmarks
+              {t('home.performance.viewBenchmarks')}
             </Link>
           </div>
         </div>
       </section>
 
       {/* Quick Start */}
-      <section className="quick-start section">
+      <section id="install" className="quick-start section">
         <div className="container">
-          <h2 className="section-title">Get Started in Seconds</h2>
+          <h2 className="section-title">{t('home.quickStart.title')}</h2>
+
+          <div className="install-commands">
+            <div className="install-section">
+              <h3>macOS / Linux</h3>
+              <div className="code-block">
+                <code>curl -fsSL https://raw.githubusercontent.com/d-osc/Nova/master/scripts/install.sh | bash</code>
+              </div>
+            </div>
+
+            <div className="install-section">
+              <h3>Windows</h3>
+              <div className="code-block">
+                <code>powershell -c "irm https://raw.githubusercontent.com/d-osc/Nova/master/scripts/install.ps1 | iex"</code>
+              </div>
+            </div>
+          </div>
+
           <div className="quick-start-grid">
             <div className="quick-start-step">
               <div className="step-number">1</div>
-              <h3>Download</h3>
-              <p>Download Nova for your platform</p>
-              <code>wget nova-installer.sh</code>
+              <h3>{t('home.quickStart.step1.title')}</h3>
+              <p>One-liner installation - no dependencies needed</p>
+              <code>curl ... | bash</code>
             </div>
 
             <div className="quick-start-step">
               <div className="step-number">2</div>
-              <h3>Install</h3>
-              <p>Run the installer</p>
-              <code>sh nova-installer.sh</code>
+              <h3>Verify</h3>
+              <p>Check Nova is installed correctly</p>
+              <code>nova --version</code>
             </div>
 
             <div className="quick-start-step">
               <div className="step-number">3</div>
-              <h3>Run</h3>
-              <p>Execute your TypeScript code</p>
+              <h3>{t('home.quickStart.step3.title')}</h3>
+              <p>{t('home.quickStart.step3.description')}</p>
               <code>nova run app.ts</code>
             </div>
           </div>
@@ -236,19 +250,19 @@ console.log(users);
       {/* CTA Section */}
       <section className="cta-section">
         <div className="container">
-          <h2>Ready to experience native performance?</h2>
-          <p>Join developers who are already building faster applications with Nova</p>
+          <h2>{t('home.cta.title')}</h2>
+          <p>{t('home.cta.description')}</p>
           <div className="cta-buttons">
-            <Link to="/download" className="btn btn-primary">
-              Download Nova
-            </Link>
+            <a href="#install" className="btn btn-primary">
+              {t('home.cta.download')}
+            </a>
             <a
               href="https://github.com/d-osc/Nova"
               className="btn btn-secondary"
               target="_blank"
               rel="noopener noreferrer"
             >
-              View on GitHub
+              {t('home.cta.viewGithub')}
             </a>
           </div>
         </div>

@@ -1,0 +1,112 @@
+{
+  "nav": {
+    "home": "Home",
+    "features": "Features",
+    "docs": "Docs",
+    "benchmarks": "Benchmarks",
+    "download": "Download"
+  },
+  "home": {
+    "hero": {
+      "title": "Nova",
+      "subtitle": "TypeScript to Native Code",
+      "description": "Compile TypeScript/JavaScript directly to native code via LLVM.",
+      "descriptionHighlight": "5-10x faster SQLite",
+      "descriptionEnd": "native performance, Node.js compatible.",
+      "getStarted": "Get Started",
+      "documentation": "Documentation",
+      "stats": {
+        "sqlite": "Faster SQLite",
+        "tests": "Tests Passing",
+        "modules": "Built-in Modules"
+      }
+    },
+    "features": {
+      "title": "Why",
+      "ultraPerformance": {
+        "title": "Ultra Performance",
+        "description": "Compiles to native code via LLVM with aggressive optimizations. 5-10x faster SQLite than Node.js better-sqlite3."
+      },
+      "nodejsCompatible": {
+        "title": "Node.js Compatible",
+        "description": "40+ built-in modules compatible with Node.js APIs. Drop-in replacement for many Node.js applications."
+      },
+      "packageManager": {
+        "title": "Package Manager",
+        "description": "npm-compatible package manager built-in. Install and manage dependencies seamlessly."
+      },
+      "lowMemory": {
+        "title": "Low Memory",
+        "description": "30-50% less memory usage compared to Node.js. Efficient garbage collection and memory management."
+      },
+      "fastStartup": {
+        "title": "Fast Startup",
+        "description": "~5-10ms startup time, 2-3x faster than Node.js. Perfect for CLI tools and serverless functions."
+      },
+      "battleTested": {
+        "title": "Battle Tested",
+        "description": "511 tests with 100% pass rate. Comprehensive test coverage for reliability."
+      }
+    },
+    "performance": {
+      "title": "Performance",
+      "subtitle": "that Matters",
+      "sqlite": {
+        "title": "SQLite Operations",
+        "nova": "Nova: 180ms",
+        "nodejs": "Node.js: 1,200ms",
+        "result": "6.7x faster"
+      },
+      "memory": {
+        "title": "Memory Usage",
+        "nova": "Nova: 90MB",
+        "nodejs": "Node.js: 250MB",
+        "result": "64% less memory"
+      },
+      "startup": {
+        "title": "Startup Time",
+        "nova": "Nova: 5ms",
+        "nodejs": "Node.js: 20ms",
+        "result": "4x faster"
+      },
+      "viewBenchmarks": "View All Benchmarks"
+    },
+    "quickStart": {
+      "title": "Get Started in Seconds",
+      "step1": {
+        "title": "Download",
+        "description": "Download Nova for your platform"
+      },
+      "step2": {
+        "title": "Install",
+        "description": "Run the installer"
+      },
+      "step3": {
+        "title": "Run",
+        "description": "Execute your TypeScript code"
+      }
+    },
+    "cta": {
+      "title": "Ready to experience native performance?",
+      "description": "Join developers who are already building faster applications with Nova",
+      "download": "Download Nova",
+      "viewGithub": "View on GitHub"
+    }
+  },
+  "features": {
+    "title": "Features",
+    "subtitle": "Everything you need for modern development"
+  },
+  "download": {
+    "title": "Download Nova",
+    "subtitle": "Get started with Nova today"
+  },
+  "benchmarks": {
+    "title": "Performance Benchmarks",
+    "subtitle": "See how Nova compares to other runtimes"
+  },
+  "docs": {
+    "title": "Documentation",
+    "subtitle": "Learn how to use Nova"
+  }
+}

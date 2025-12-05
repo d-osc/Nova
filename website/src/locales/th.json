@@ -1,0 +1,112 @@
+{
+  "nav": {
+    "home": "หน้าแรก",
+    "features": "คุณสมบัติ",
+    "docs": "เอกสาร",
+    "benchmarks": "ผลทดสอบ",
+    "download": "ดาวน์โหลด"
+  },
+  "home": {
+    "hero": {
+      "title": "Nova",
+      "subtitle": "TypeScript สู่โค้ดเนทีฟ",
+      "description": "คอมไพล์ TypeScript/JavaScript ไปเป็นโค้ดเนทีฟโดยตรงผ่าน LLVM",
+      "descriptionHighlight": "SQLite เร็วกว่า 5-10 เท่า",
+      "descriptionEnd": "ประสิทธิภาพระดับเนทีฟ เข้ากันได้กับ Node.js",
+      "getStarted": "เริ่มต้นใช้งาน",
+      "documentation": "เอกสารประกอบ",
+      "stats": {
+        "sqlite": "SQLite เร็วขึ้น",
+        "tests": "เทสต์ผ่าน",
+        "modules": "โมดูลในตัว"
+      }
+    },
+    "features": {
+      "title": "ทำไมต้อง",
+      "ultraPerformance": {
+        "title": "ประสิทธิภาพสูงสุด",
+        "description": "คอมไพล์เป็นโค้ดเนทีฟผ่าน LLVM พร้อมการเพิ่มประสิทธิภาพสูงสุด SQLite เร็วกว่า Node.js better-sqlite3 ถึง 5-10 เท่า"
+      },
+      "nodejsCompatible": {
+        "title": "เข้ากันได้กับ Node.js",
+        "description": "โมดูลในตัวกว่า 40+ ตัวที่เข้ากันได้กับ API ของ Node.js สามารถใช้แทน Node.js ได้ในหลายแอปพลิเคชัน"
+      },
+      "packageManager": {
+        "title": "ตัวจัดการแพ็กเกจ",
+        "description": "ตัวจัดการแพ็กเกจที่เข้ากันได้กับ npm ในตัว ติดตั้งและจัดการ dependencies ได้อย่างราบรื่น"
+      },
+      "lowMemory": {
+        "title": "ใช้หน่วยความจำต่ำ",
+        "description": "ใช้หน่วยความจำน้อยกว่า Node.js ถึง 30-50% การจัดการหน่วยความจำและ garbage collection ที่มีประสิทธิภาพ"
+      },
+      "fastStartup": {
+        "title": "เริ่มต้นเร็ว",
+        "description": "เวลาเริ่มต้น ~5-10ms เร็วกว่า Node.js ถึง 2-3 เท่า เหมาะสำหรับเครื่องมือ CLI และ serverless functions"
+      },
+      "battleTested": {
+        "title": "ผ่านการทดสอบมาแล้ว",
+        "description": "511 เทสต์ผ่านทั้งหมด 100% การทดสอบครอบคลุมอย่างสมบูรณ์เพื่อความน่าเชื่อถือ"
+      }
+    },
+    "performance": {
+      "title": "ประสิทธิภาพ",
+      "subtitle": "ที่สำคัญจริงๆ",
+      "sqlite": {
+        "title": "การทำงานของ SQLite",
+        "nova": "Nova: 180ms",
+        "nodejs": "Node.js: 1,200ms",
+        "result": "เร็วกว่า 6.7 เท่า"
+      },
+      "memory": {
+        "title": "การใช้หน่วยความจำ",
+        "nova": "Nova: 90MB",
+        "nodejs": "Node.js: 250MB",
+        "result": "ใช้น้อยกว่า 64%"
+      },
+      "startup": {
+        "title": "เวลาเริ่มต้น",
+        "nova": "Nova: 5ms",
+        "nodejs": "Node.js: 20ms",
+        "result": "เร็วกว่า 4 เท่า"
+      },
+      "viewBenchmarks": "ดูผลทดสอบทั้งหมด"
+    },
+    "quickStart": {
+      "title": "เริ่มต้นได้ในไม่กี่วินาที",
+      "step1": {
+        "title": "ดาวน์โหลด",
+        "description": "ดาวน์โหลด Nova สำหรับแพลตฟอร์มของคุณ"
+      },
+      "step2": {
+        "title": "ติดตั้ง",
+        "description": "รันตัวติดตั้ง"
+      },
+      "step3": {
+        "title": "รัน",
+        "description": "รันโค้ด TypeScript ของคุณ"
+      }
+    },
+    "cta": {
+      "title": "พร้อมสัมผัสประสิทธิภาพระดับเนทีฟหรือยัง?",
+      "description": "ร่วมเป็นส่วนหนึ่งกับนักพัฒนาที่กำลังสร้างแอปพลิเคชันที่เร็วขึ้นด้วย Nova",
+      "download": "ดาวน์โหลด Nova",
+      "viewGithub": "ดูใน GitHub"
+    }
+  },
+  "features": {
+    "title": "คุณสมบัติ",
+    "subtitle": "ทุกสิ่งที่คุณต้องการสำหรับการพัฒนาสมัยใหม่"
+  },
+  "download": {
+    "title": "ดาวน์โหลด Nova",
+    "subtitle": "เริ่มต้นใช้งาน Nova วันนี้"
+  },
+  "benchmarks": {
+    "title": "ผลการทดสอบประสิทธิภาพ",
+    "subtitle": "ดูว่า Nova เทียบกับ runtime อื่นๆ อย่างไร"
+  },
+  "docs": {
+    "title": "เอกสารประกอบ",
+    "subtitle": "เรียนรู้วิธีใช้งาน Nova"
+  }
+}

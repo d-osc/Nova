@@ -85,6 +85,9 @@ yarn-error.log
 package-lock.json
 yarn.lock
 
+# Nova cache
+.nova-cache/
+
 # Testing
 Testing/
 *.gcda

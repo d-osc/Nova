@@ -1,16 +1,19 @@
 import React from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 import './Docs.css';
 
 function Docs() {
+  const { t } = useLanguage();
+
   return (
     <div className="docs-page">
       <section className="page-hero">
         <div className="container">
           <h1 className="page-title">
-            <span className="gradient-text">Documentation</span>
+            <span className="gradient-text">{t('docs.title')}</span>
           </h1>
           <p className="page-subtitle">
-            Everything you need to get started with Nova
+            {t('docs.subtitle')}
           </p>
         </div>
       </section>

@@ -1,8 +1,8 @@
 {
-  "name": "nova-lang-website",
+  "name": "nova-website",
   "version": "1.0.0",
   "description": "Official website for Nova Language - TypeScript/JavaScript to Native Code Compiler",
-  "homepage": "https://d-osc.github.io/nova-lang",
+  "homepage": "https://d-osc.github.io/Nova",
   "private": true,
   "dependencies": {
     "react": "^18.2.0",
