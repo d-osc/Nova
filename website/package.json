@@ -18,7 +18,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "predeploy": "npm run build-clean",
-    "deploy": "gh-pages -d ./build --add",
+    "deploy": "gh-pages -d ./website/build --add",
     "deploy-cli": "set NODE_OPTIONS=--max-old-space-size=4096 && npx gh-pages -d build --dotfiles --remove \".DS_Store\" \"Thumbs.db\"",
     "deploy-alt": "set NODE_OPTIONS=--max-old-space-size=4096 && npx --yes gh-pages@latest -d build --dotfiles --remove \".DS_Store\" \"Thumbs.db\" --no-silent"
   },
