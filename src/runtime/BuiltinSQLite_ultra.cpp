@@ -172,8 +172,8 @@ public:
         }
 
         // Prepare new statement
-        sqlite3_stmt* stmt = nullptr;
 #ifdef NOVA_HAS_SQLITE3
+        sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             if (cache.size() >= MAX_CACHED) {
                 evictLRU();
