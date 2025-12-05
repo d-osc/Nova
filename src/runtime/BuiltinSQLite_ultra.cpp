@@ -50,6 +50,10 @@ typedef void sqlite3_stmt;
 #define SQLITE_OPEN_CREATE 0x00000004
 #define SQLITE_OPEN_MEMORY 0x00000080
 #define SQLITE_OPEN_READONLY 0x00000001
+#define SQLITE_MODE_READONLY 0x00000001
+// Stub functions for when SQLite is not available
+static inline int sqlite3_reset(sqlite3_stmt*) { return SQLITE_OK; }
+static inline int sqlite3_clear_bindings(sqlite3_stmt*) { return SQLITE_OK; }
 #endif
 
 // ============================================================================
@@ -178,6 +182,8 @@ public:
             cache[sql] = CachedStatement{stmt, sql, ++globalTime, 1};
             return stmt;
         }
+#else
+        (void)db; // Suppress unused parameter warning
 #endif
         return nullptr;
     }
@@ -246,8 +252,8 @@ public:
 
         // Create new connection
         if (pool.size() < MAX_CONNECTIONS) {
-            sqlite3* db = nullptr;
 #ifdef NOVA_HAS_SQLITE3
+            sqlite3* db = nullptr;
             if (sqlite3_open_v2(location.c_str(), &db, flags, nullptr) == SQLITE_OK) {
                 // Ultra-fast configuration
                 sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
@@ -260,6 +266,8 @@ public:
                 pool.push_back(PooledConnection{db, true, location, StatementCache()});
                 return db;
             }
+#else
+            (void)flags; // Suppress unused parameter warning
 #endif
         }
 
