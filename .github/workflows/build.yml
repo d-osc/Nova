@@ -135,16 +135,15 @@ jobs:
     - name: Setup LLVM
       run: |
         $llvmUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.7/clang+llvm-18.1.7-x86_64-pc-windows-msvc.tar.xz"
-        $llvmArchive = "$env:TEMP\llvm.tar.xz"
+        $llvmArchive = "llvm.tar.xz"
         $llvmDir = "C:\LLVM"
 
         Write-Host "Downloading LLVM..."
         Invoke-WebRequest -Uri $llvmUrl -OutFile $llvmArchive
 
         Write-Host "Extracting LLVM..."
-        7z x $llvmArchive -o"$env:TEMP" -y
-        $tarFile = "$env:TEMP\clang+llvm-18.1.7-x86_64-pc-windows-msvc.tar"
-        7z x $tarFile -o"C:\" -y
+        7z x $llvmArchive -y
+        7z x "clang+llvm-18.1.7-x86_64-pc-windows-msvc.tar" -o"C:\" -y
 
         Rename-Item -Path "C:\clang+llvm-18.1.7-x86_64-pc-windows-msvc" -NewName "LLVM"
 
