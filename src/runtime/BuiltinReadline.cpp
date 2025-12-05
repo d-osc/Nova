@@ -1,6 +1,7 @@
 // Nova Readline Module - Node.js compatible readline API
 // Provides line-by-line reading of streams
 
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <map>

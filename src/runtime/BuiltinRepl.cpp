@@ -1,6 +1,7 @@
 // Nova REPL Module - Node.js compatible REPL API
 // Provides Read-Eval-Print-Loop functionality
 
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <map>
