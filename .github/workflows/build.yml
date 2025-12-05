@@ -31,9 +31,10 @@ jobs:
         mkdir -p build/macos-${{ matrix.arch }}
         cd build/macos-${{ matrix.arch }}
 
-        # Fix header search path - LLVM libc++ must come before system headers
+        # Fix header search path - LLVM headers must come before system headers
         LLVM_PREFIX=$(brew --prefix llvm@18)
-        BASE_CXX_FLAGS="-nostdinc++ -isystem ${LLVM_PREFIX}/include/c++/v1"
+        # Include LLVM's clang resource directory for compiler-rt headers (stddef.h, etc.)
+        BASE_CXX_FLAGS="-nostdinc++ -isystem ${LLVM_PREFIX}/lib/clang/18/include -isystem ${LLVM_PREFIX}/include/c++/v1"
 
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           # Native ARM64 build - use armv8-a
