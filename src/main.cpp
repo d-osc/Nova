@@ -591,6 +591,20 @@ int main(int argc, char** argv) {
         return result;
     }
 
+    // Handle run-script command (run npm scripts from package.json)
+    if (command == "run" || command == "run-script") {
+        if (inputFile.empty()) {
+            std::cerr << "Error: No script name specified" << std::endl;
+            std::cerr << "Usage: nova run <script-name>" << std::endl;
+            std::cerr << "Example: nova run start" << std::endl;
+            return 1;
+        }
+
+        pm::PackageManager pm;
+        int result = pm.runScript(inputFile, ".");
+        return result;
+    }
+
     // Handle install command
     if (command == "install") {
         pm::PackageManager pmgr;

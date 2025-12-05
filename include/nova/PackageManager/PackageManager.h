@@ -75,6 +75,9 @@ public:
     // Run automated tests
     int runTests(const std::string& projectPath = ".", const std::string& pattern = "");
 
+    // Run npm script from package.json
+    int runScript(const std::string& scriptName, const std::string& projectPath = ".");
+
     // Set cache directory (default: ~/.nova/cache)
     void setCacheDir(const std::string& path);
     std::string getCacheDir() const { return cacheDir_; }

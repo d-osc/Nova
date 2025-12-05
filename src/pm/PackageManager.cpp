@@ -786,6 +786,114 @@ int PackageManager::runTests(const std::string& projectPath, const std::string& 
     }
 }
 
+// Run npm script from package.json
+int PackageManager::runScript(const std::string& scriptName, const std::string& projectPath) {
+    projectPath_ = projectPath;
+    std::filesystem::path basePath = std::filesystem::absolute(projectPath);
+    std::filesystem::path packageJsonPath = basePath / "package.json";
+
+    // Check if package.json exists
+    if (!std::filesystem::exists(packageJsonPath)) {
+        std::cerr << "[nova] Error: package.json not found in " << projectPath << std::endl;
+        return 1;
+    }
+
+    // Read package.json
+    std::ifstream packageJsonFile(packageJsonPath);
+    if (!packageJsonFile.is_open()) {
+        std::cerr << "[nova] Error: Failed to open package.json" << std::endl;
+        return 1;
+    }
+
+    std::string packageJson((std::istreambuf_iterator<char>(packageJsonFile)),
+                           std::istreambuf_iterator<char>());
+    packageJsonFile.close();
+
+    // Find scripts section
+    size_t scriptsPos = packageJson.find("\"scripts\"");
+    if (scriptsPos == std::string::npos) {
+        std::cerr << "[nova] Error: No scripts found in package.json" << std::endl;
+        return 1;
+    }
+
+    // Find the script
+    std::string searchKey = "\"" + scriptName + "\"";
+    size_t scriptKeyPos = packageJson.find(searchKey, scriptsPos);
+    if (scriptKeyPos == std::string::npos) {
+        std::cerr << "[nova] Error: Script '" << scriptName << "' not found in package.json" << std::endl;
+        std::cerr << std::endl;
+        std::cerr << "Available scripts:" << std::endl;
+
+        // Try to show available scripts
+        size_t scriptStart = packageJson.find('{', scriptsPos);
+        size_t scriptEnd = packageJson.find('}', scriptStart);
+        if (scriptStart != std::string::npos && scriptEnd != std::string::npos) {
+            std::string scriptsSection = packageJson.substr(scriptStart, scriptEnd - scriptStart);
+            size_t pos = 0;
+            while ((pos = scriptsSection.find('"', pos)) != std::string::npos) {
+                size_t endQuote = scriptsSection.find('"', pos + 1);
+                if (endQuote != std::string::npos) {
+                    std::string name = scriptsSection.substr(pos + 1, endQuote - pos - 1);
+                    if (!name.empty() && name != "scripts") {
+                        std::cerr << "  - " << name << std::endl;
+                    }
+                    pos = endQuote + 1;
+                    // Skip to next line/script
+                    pos = scriptsSection.find('"', pos);
+                    if (pos == std::string::npos) break;
+                } else {
+                    break;
+                }
+            }
+        }
+        return 1;
+    }
+
+    // Extract script command
+    size_t colonPos = packageJson.find(':', scriptKeyPos);
+    if (colonPos == std::string::npos) {
+        std::cerr << "[nova] Error: Malformed package.json" << std::endl;
+        return 1;
+    }
+
+    size_t startQuote = packageJson.find('"', colonPos);
+    if (startQuote == std::string::npos) {
+        std::cerr << "[nova] Error: Malformed script command" << std::endl;
+        return 1;
+    }
+
+    size_t endQuote = packageJson.find('"', startQuote + 1);
+    if (endQuote == std::string::npos) {
+        std::cerr << "[nova] Error: Malformed script command" << std::endl;
+        return 1;
+    }
+
+    std::string scriptCommand = packageJson.substr(startQuote + 1, endQuote - startQuote - 1);
+
+    // Print what we're running
+    std::cout << "[nova] Running script: " << scriptName << std::endl;
+    std::cout << "[nova] Command: " << scriptCommand << std::endl;
+    std::cout << std::endl;
+
+    // Execute the script
+#ifdef _WIN32
+    std::string fullCommand = "cmd /c \"cd /d \"" + basePath.string() + "\" && " + scriptCommand + "\"";
+#else
+    std::string fullCommand = "cd " + basePath.string() + " && " + scriptCommand;
+#endif
+
+    int result = std::system(fullCommand.c_str());
+
+    std::cout << std::endl;
+    if (result == 0) {
+        std::cout << "\033[32m[nova] Script '" << scriptName << "' completed successfully\033[0m" << std::endl;
+    } else {
+        std::cout << "\033[31m[nova] Script '" << scriptName << "' failed with code " << result << "\033[0m" << std::endl;
+    }
+
+    return result;
+}
+
 // HTTP GET request
 std::string PackageManager::httpGet(const std::string& url) {
 #ifdef _WIN32
