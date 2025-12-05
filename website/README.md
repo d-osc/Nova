@@ -1,4 +1,4 @@
-# Nova Language Website
+# Nova Runtime Website
 
 Official React website for Nova - TypeScript/JavaScript to Native Code Compiler
 

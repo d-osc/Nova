@@ -46,23 +46,39 @@ Write-Color "windows-x64" "Green"
 Write-Color "→ Downloading Nova..." "Blue"
 
 $DownloadUrl = if ($NovaVersion -eq "latest") {
-    "https://github.com/$GithubRepo/releases/latest/download/nova-windows-x64.exe"
+    "https://github.com/$GithubRepo/releases/latest/download/nova-windows-x64.zip"
 } else {
-    "https://github.com/$GithubRepo/releases/download/$NovaVersion/nova-windows-x64.exe"
+    "https://github.com/$GithubRepo/releases/download/$NovaVersion/nova-windows-x64.zip"
 }
 
 # Create directory
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
+$TempZip = "$env:TEMP\nova-windows-x64.zip"
 $NovaExe = "$BinDir\nova.exe"
 
 try {
     # Download with progress
     $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $NovaExe -UseBasicParsing
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing
     Write-Color "✓ Nova downloaded successfully" "Green"
+
+    # Extract zip
+    Write-Color "→ Extracting Nova..." "Blue"
+    Expand-Archive -Path $TempZip -DestinationPath $BinDir -Force
+
+    # Rename exe if needed
+    $ExtractedExe = "$BinDir\nova-windows-x64.exe"
+    if (Test-Path $ExtractedExe) {
+        Move-Item -Path $ExtractedExe -Destination $NovaExe -Force
+    }
+
+    # Clean up temp file
+    Remove-Item -Path $TempZip -Force -ErrorAction SilentlyContinue
+
+    Write-Color "✓ Nova extracted successfully" "Green"
 } catch {
-    Write-Color "✗ Error downloading Nova: $_" "Red"
+    Write-Color "✗ Error downloading/extracting Nova: $_" "Red"
     exit 1
 }
 

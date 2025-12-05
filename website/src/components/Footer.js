@@ -50,7 +50,7 @@ function Footer() {
         </div>
 
         <div className="footer-bottom">
-          <p>&copy; 2025 Nova Language. All rights reserved.</p>
+          <p>&copy; 2025 Nova Runtime. All rights reserved.</p>
           <p>Built with ❤️ using React</p>
         </div>
       </div>

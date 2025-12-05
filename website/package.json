@@ -1,7 +1,7 @@
 {
   "name": "nova-website",
   "version": "1.4.0",
-  "description": "Official website for Nova Language - TypeScript/JavaScript to Native Code Compiler",
+  "description": "Official website for Nova Runtime - TypeScript/JavaScript to Native Code Compiler",
   "homepage": "https://d-osc.github.io/Nova",
   "private": true,
   "dependencies": {

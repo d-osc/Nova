@@ -62,45 +62,53 @@ detect_platform() {
 download_nova() {
     echo -e "${BLUE}→ Downloading Nova...${NC}"
 
+    # Determine download URL based on platform
     if [ "$NOVA_VERSION" = "latest" ]; then
-        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/latest/download/nova-$PLATFORM-$ARCH_NAME"
+        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/latest/download/nova-$PLATFORM-$ARCH_NAME.zip"
     else
-        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/$NOVA_VERSION/nova-$PLATFORM-$ARCH_NAME"
+        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/$NOVA_VERSION/nova-$PLATFORM-$ARCH_NAME.zip"
     fi
 
-    # Handle macOS universal binary
-    if [ "$PLATFORM" = "macos" ]; then
-        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/latest/download/nova-macos-universal.tar.gz"
+    # Download and extract zip file
+    TMP_ZIP=$(mktemp -u).zip
+    TMP_DIR=$(mktemp -d)
 
-        # Download and extract
-        TMP_FILE=$(mktemp)
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL "$DOWNLOAD_URL" -o "$TMP_FILE"
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q "$DOWNLOAD_URL" -O "$TMP_FILE"
-        else
-            echo -e "${RED}✗ Error: curl or wget is required${NC}"
-            exit 1
-        fi
-
-        mkdir -p "$BIN_DIR"
-        tar -xzf "$TMP_FILE" -C "$BIN_DIR"
-        rm "$TMP_FILE"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$DOWNLOAD_URL" -o "$TMP_ZIP"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$DOWNLOAD_URL" -O "$TMP_ZIP"
     else
-        # Download Linux binary
-        mkdir -p "$BIN_DIR"
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL "$DOWNLOAD_URL" -o "$BIN_DIR/nova"
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q "$DOWNLOAD_URL" -O "$BIN_DIR/nova"
-        else
-            echo -e "${RED}✗ Error: curl or wget is required${NC}"
-            exit 1
-        fi
+        echo -e "${RED}✗ Error: curl or wget is required${NC}"
+        exit 1
     fi
+
+    echo -e "${BLUE}→ Extracting Nova...${NC}"
+
+    # Extract zip file
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$TMP_ZIP" -d "$TMP_DIR"
+    else
+        echo -e "${RED}✗ Error: unzip is required${NC}"
+        exit 1
+    fi
+
+    # Find the extracted binary and move it
+    mkdir -p "$BIN_DIR"
+    EXTRACTED_BINARY=$(find "$TMP_DIR" -type f -name "nova-*" | head -n 1)
+
+    if [ -n "$EXTRACTED_BINARY" ]; then
+        mv "$EXTRACTED_BINARY" "$BIN_DIR/nova"
+    else
+        echo -e "${RED}✗ Error: Could not find extracted binary${NC}"
+        exit 1
+    fi
+
+    # Cleanup
+    rm -f "$TMP_ZIP"
+    rm -rf "$TMP_DIR"
 
     chmod +x "$BIN_DIR/nova"
-    echo -e "${GREEN}✓ Nova downloaded successfully${NC}"
+    echo -e "${GREEN}✓ Nova downloaded and extracted successfully${NC}"
 }
 
 # Setup PATH
