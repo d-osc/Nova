@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(NovaCompiler VERSION 1.0.0 LANGUAGES C CXX)
 
+# Clear implicit include directories to prevent system header conflicts on macOS
+# This must be done after project() but before any targets are created
+set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "")
+set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "")
+
 # Set C++20 standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
