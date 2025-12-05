@@ -1,9 +1,9 @@
 #include "nova/HIR/HIR.h"
+// Debug mode disabled
+#define NOVA_DEBUG 0
 #include <sstream>
 #include <iostream>
 
-// Debug output control - set to 1 to enable debug output
-#define NOVA_DEBUG 0
 
 namespace nova::hir {
 

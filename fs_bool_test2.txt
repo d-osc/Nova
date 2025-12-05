@@ -1,1 +1,0 @@
-isDirectory_returned_0

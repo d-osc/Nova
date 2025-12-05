@@ -1,6 +1,6 @@
 {
   "name": "@nova/compiler",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "Nova Compiler - TypeScript/JavaScript to Native Code via LLVM",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

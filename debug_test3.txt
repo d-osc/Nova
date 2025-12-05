@@ -1,1 +1,0 @@
-FAIL: relative/path returned 1

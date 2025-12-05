@@ -1,1 +1,0 @@
-SUCCESS: /home/user returned 1

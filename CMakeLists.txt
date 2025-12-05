@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NovaCompiler VERSION 1.0.0 LANGUAGES C CXX)
+project(NovaCompiler VERSION 1.4.0 LANGUAGES C CXX)
 
 # Clear implicit include directories to prevent system header conflicts on macOS
 # This must be done after project() but before any targets are created
@@ -111,6 +111,18 @@ llvm_map_components_to_libnames(llvm_libs
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Generate version header
+set(VERSION_HEADER "${CMAKE_BINARY_DIR}/include/nova/Version.h")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include/nova")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.h.in"
+    "${VERSION_HEADER}"
+    @ONLY
+)
+
+# Add the generated header to the include path
+include_directories("${CMAKE_BINARY_DIR}/include")
 
 # Source files
 set(NOVA_SOURCES

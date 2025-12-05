@@ -1,8 +1,28 @@
 # Nova Compiler - TODO List
 
-> **Last Updated**: 2025-12-01
+> **Last Updated**: 2025-12-06
 > **Current Version**: v1.4.0
 > **Test Status**: 511 tests passing (100%)
+
+---
+
+## Recent Updates (December 2025)
+
+### ✅ Completed
+- **Code Cleanup**: Removed all DEBUG code from compiler source files
+  - Disabled NOVA_DEBUG in 6 core files (main.cpp, LLVMCodeGen.cpp, HIRGen.cpp, MIRGen.cpp, HIRBuilder.cpp, Iterator.cpp)
+  - Cleaned up 1400+ debug statements for production readiness
+- **Package Manager**: Added `nova pm` subcommand for better UX
+  - Unified package manager interface (`nova pm install`, `nova pm update`, etc.)
+  - Full npm-compatible package management
+- **Website Documentation**: Comprehensive documentation added
+  - CLI commands reference with detailed examples
+  - Configuration guide (nova.config.json)
+  - Performance optimization tips
+  - Debugging guide and testing framework docs
+  - Deployment guides (standalone binary, Docker, systemd)
+- **Multi-language Support**: Website now supports Thai (ไทย) and English
+- **Installation Scripts**: Added Bun-style one-liner installers for macOS/Linux/Windows
 
 ---
 
@@ -44,9 +64,10 @@ The Nova compiler is feature-complete for most TypeScript/JavaScript functionali
 ## Future Improvements
 
 ### Performance
+- [x] Remove debug overhead (DEBUG code removed)
 - [ ] Implement lazy compilation
 - [ ] Add caching for repeated compilations
-- [ ] Optimize runtime library
+- [ ] Optimize runtime library further
 
 ### Language Features
 - [ ] Full closure support (capturing variables)
@@ -63,7 +84,12 @@ The Nova compiler is feature-complete for most TypeScript/JavaScript functionali
 - [ ] Watch mode for development
 
 ### Documentation
-- [ ] API reference
+- [x] Comprehensive user documentation (website)
+- [x] CLI commands reference
+- [x] Configuration guide
+- [x] Performance and debugging guides
+- [x] Deployment documentation
+- [ ] API reference (detailed)
 - [ ] Internal architecture guide
 - [ ] Contributing guide
 

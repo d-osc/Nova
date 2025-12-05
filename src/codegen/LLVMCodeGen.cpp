@@ -1,12 +1,7 @@
 // LLVM Code Generator from MIR
-
-// Debug output control - set to 1 to enable debug output
+// Debug mode disabled
 #define NOVA_DEBUG 0
-#if NOVA_DEBUG
-#define NOVA_DBG(x) std::cerr << x
-#else
-#define NOVA_DBG(x) do {} while(0)
-#endif
+
 
 #ifdef _MSC_VER
 #pragma warning(push)

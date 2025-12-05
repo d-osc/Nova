@@ -1,2 +1,0 @@
-JIT session error: Symbols not found: [ nova_http_Server_listen, nova_http_Server_run, nova_http_createServer, nova_i32_to_string, nova_string_concat_cstr ]
-C:\Users\ondev\llvm\bin\lli.exe: Failed to materialize symbols: { (main, { __arrow_0, main }) }

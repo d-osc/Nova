@@ -1,4 +1,6 @@
 #include "nova/MIR/MIRGen.h"
+// Debug mode disabled
+#define NOVA_DEBUG 0
 #include "nova/MIR/MIRBuilder.h"
 #include <algorithm>
 #include <unordered_map>
@@ -6,8 +8,6 @@
 #include <set>
 #include <queue>
 
-// Debug output control - set to 1 to enable debug output
-#define NOVA_DEBUG 0
 
 namespace nova::mir {
 

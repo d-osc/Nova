@@ -21,20 +21,27 @@
 #include "nova/CodeGen/NativeBinaryCache.h"
 #include "nova/Transpiler/Transpiler.h"
 #include "nova/PackageManager/PackageManager.h"
+#include "nova/Version.h"
 
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
 
-// Debug output control - set to 1 to enable debug output
-#define NOVA_DEBUG 0
-
 using namespace nova;
 
 void printUsage() {
+    std::string versionBanner = "Nova Compiler " NOVA_VERSION;
+    
+    // Ensure the banner fits within the border (adjust spacing as needed)
+    size_t totalWidth = 63;  // Width of the box content area
+    size_t versionWidth = versionBanner.length();
+    size_t padding = (totalWidth - versionWidth) / 2;
+    
+    std::string centeredVersion = std::string(padding, ' ') + versionBanner;
+    
     std::cout << R"(
 ╔═══════════════════════════════════════════════════════════════╗
-║                     Nova Compiler v1.0.0                      ║
+║ )" << centeredVersion << R"( ║
 ║         TypeScript/JavaScript AOT Compiler via LLVM           ║
 ╚═══════════════════════════════════════════════════════════════╝
 
@@ -120,7 +127,7 @@ For more information: https://nova-lang.org/docs
 }
 
 void printVersion() {
-    std::cout << "Nova Compiler v1.0.0" << std::endl;
+    std::cout << NOVA_VERSION_STRING << std::endl;
     std::cout << "LLVM version: 16.0.0" << std::endl;
     std::cout << "Copyright (c) 2025 Nova Lang Team" << std::endl;
 }
@@ -1120,7 +1127,6 @@ int main(int argc, char** argv) {
         }
 
         if (verbose) std::cout << "⏳ Phase 9: LLVM Optimization Passes..." << std::endl;
-        if (NOVA_DEBUG) std::cerr << "DEBUG: Running optimization passes with optLevel=" << optLevel << std::endl;
         codegen.runOptimizationPasses(optLevel);
 
         if (emitLLVM) {

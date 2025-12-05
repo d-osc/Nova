@@ -1,4 +1,6 @@
 // Iterator Helpers Runtime (ES2025)
+// Debug mode disabled
+#define NOVA_DEBUG 0
 // Implements the Iterator Helpers proposal for Nova AOT compiler
 
 #include <iostream>
@@ -7,8 +9,6 @@
 #include <vector>
 #include <functional>
 
-// Debug output control - set to 1 to enable debug output
-#define NOVA_DEBUG 0
 
 extern "C" {
     // Array runtime functions

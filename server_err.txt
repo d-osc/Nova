@@ -1,9 +1,0 @@
-Warning: Property 'writeHead' not found in struct
-  Object type: kind=27
-Warning: Property 'end' not found in struct
-  Object type: kind=27
-DEBUG LLVM: Generating 1 regular functions first
-DEBUG LLVM: Generating 1 main/top-level functions last
-DEBUG LLVM: Checking if value is in arrayTypeMap
-  Value: i64 0
-  arrayTypeMap has 1 entries

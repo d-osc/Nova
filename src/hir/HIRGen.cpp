@@ -1,4 +1,6 @@
 #include "nova/HIR/HIRGen.h"
+// Debug mode disabled
+#define NOVA_DEBUG 0
 #include "nova/HIR/HIR.h"
 #include "nova/Frontend/AST.h"
 #include <iostream>
@@ -9,13 +11,6 @@
 #include <functional>
 #include <limits>
 
-// Debug output control - set to 1 to enable debug output
-#define NOVA_DEBUG 0
-#if NOVA_DEBUG
-#define NOVA_DBG(x) std::cerr << x
-#else
-#define NOVA_DBG(x) do {} while(0)
-#endif
 
 namespace nova::hir {
 
