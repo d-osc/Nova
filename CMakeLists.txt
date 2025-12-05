@@ -3,8 +3,11 @@ project(NovaCompiler VERSION 1.0.0 LANGUAGES C CXX)
 
 # Clear implicit include directories to prevent system header conflicts on macOS
 # This must be done after project() but before any targets are created
-set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "")
-set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "")
+# Only do this on macOS where we explicitly specify LLVM paths
+if(APPLE)
+    set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "")
+    set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "")
+endif()
 
 # Set C++20 standard
 set(CMAKE_CXX_STANDARD 20)
