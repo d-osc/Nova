@@ -27,6 +27,10 @@
 #include <grp.h>
 #include <signal.h>
 #include <dlfcn.h>
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/vm_statistics.h>
+#endif
 #endif
 
 // Process start time for uptime calculation
@@ -1523,7 +1527,23 @@ int64_t nova_process_availableMemory() {
         return status.ullAvailPhys;
     }
     return 0;
+#elif defined(__APPLE__)
+    // macOS: use vm_statistics64 to get available memory
+    vm_size_t page_size;
+    vm_statistics64_data_t vm_stats;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+
+    host_page_size(mach_host_self(), &page_size);
+
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
+                         (host_info64_t)&vm_stats, &count) == KERN_SUCCESS) {
+        // Free memory = free pages + inactive pages
+        int64_t free_memory = (int64_t)(vm_stats.free_count + vm_stats.inactive_count) * (int64_t)page_size;
+        return free_memory;
+    }
+    return 0;
 #else
+    // Linux: use sysconf
     long pages = sysconf(_SC_AVPHYS_PAGES);
     long pageSize = sysconf(_SC_PAGESIZE);
     return pages * pageSize;
