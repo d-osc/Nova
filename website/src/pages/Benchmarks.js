@@ -336,7 +336,7 @@ function Benchmarks() {
                 <strong>Nova Ultra</strong> uses 12 major optimizations: response caching, zero-copy buffers,
                 connection pooling, buffer pooling, arena allocators, string pooling, header interning,
                 O(1) status lookups, SIMD parsing, socket tuning, and fast-path optimization.
-                See <a href="https://github.com/d-osc/nova-lang/blob/master/HTTP_ULTRA_OPTIMIZATION.md" style={{color: '#667eea'}}>HTTP_ULTRA_OPTIMIZATION.md</a> for details.
+                See <a href="https://github.com/d-osc/Nova/blob/master/HTTP_ULTRA_OPTIMIZATION.md" style={{color: '#667eea'}}>HTTP_ULTRA_OPTIMIZATION.md</a> for details.
               </p>
             </div>
           )}
@@ -706,7 +706,7 @@ function Benchmarks() {
 
           <div className="cta-center">
             <a
-              href="https://github.com/d-osc/nova-lang/tree/master/benchmarks"
+              href="https://github.com/d-osc/Nova/tree/master/benchmarks"
               className="btn btn-primary"
               target="_blank"
               rel="noopener noreferrer"
@@ -714,7 +714,7 @@ function Benchmarks() {
               View Benchmark Code
             </a>
             <a
-              href="https://github.com/d-osc/nova-lang/blob/master/SQLITE_ULTRA_OPTIMIZATION.md"
+              href="https://github.com/d-osc/Nova/blob/master/SQLITE_ULTRA_OPTIMIZATION.md"
               className="btn btn-secondary"
               target="_blank"
               rel="noopener noreferrer"

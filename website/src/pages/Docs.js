@@ -23,7 +23,7 @@ function Docs() {
               <h3>Quick Start</h3>
               <p>Get up and running with Nova in minutes</p>
               <a
-                href="https://github.com/d-osc/nova-lang#quick-start"
+                href="https://github.com/d-osc/Nova#quick-start"
                 className="doc-link"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -37,7 +37,7 @@ function Docs() {
               <h3>Usage Guide</h3>
               <p>Comprehensive guide to using Nova compiler</p>
               <a
-                href="https://github.com/d-osc/nova-lang/blob/master/docs/USAGE_GUIDE.md"
+                href="https://github.com/d-osc/Nova/blob/master/docs/USAGE_GUIDE.md"
                 className="doc-link"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -51,7 +51,7 @@ function Docs() {
               <h3>Architecture</h3>
               <p>Learn about Nova's compiler architecture</p>
               <a
-                href="https://github.com/d-osc/nova-lang/blob/master/docs/ARCHITECTURE.md"
+                href="https://github.com/d-osc/Nova/blob/master/docs/ARCHITECTURE.md"
                 className="doc-link"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -65,7 +65,7 @@ function Docs() {
               <h3>Build Instructions</h3>
               <p>How to build Nova from source</p>
               <a
-                href="https://github.com/d-osc/nova-lang/blob/master/docs/BUILD.md"
+                href="https://github.com/d-osc/Nova/blob/master/docs/BUILD.md"
                 className="doc-link"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -79,7 +79,7 @@ function Docs() {
               <h3>SQLite Optimization</h3>
               <p>Ultra-fast SQLite implementation details</p>
               <a
-                href="https://github.com/d-osc/nova-lang/blob/master/SQLITE_ULTRA_OPTIMIZATION.md"
+                href="https://github.com/d-osc/Nova/blob/master/SQLITE_ULTRA_OPTIMIZATION.md"
                 className="doc-link"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -93,7 +93,7 @@ function Docs() {
               <h3>Methods Status</h3>
               <p>Complete list of supported methods</p>
               <a
-                href="https://github.com/d-osc/nova-lang/blob/master/docs/METHODS_STATUS.md"
+                href="https://github.com/d-osc/Nova/blob/master/docs/METHODS_STATUS.md"
                 className="doc-link"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -110,7 +110,7 @@ function Docs() {
                 <h4>Installation</h4>
                 <pre>
                   <code>{`# Download and install
-wget https://github.com/d-osc/nova-lang/releases/latest/download/nova-installer.sh
+wget https://github.com/d-osc/Nova/releases/latest/download/nova-installer.sh
 sh nova-installer.sh
 
 # Verify installation
@@ -274,7 +274,7 @@ nova pm uninstall lodash`}</code>
               <p>Check out our GitHub repository for more documentation and examples</p>
               <div className="cta-buttons">
                 <a
-                  href="https://github.com/d-osc/nova-lang"
+                  href="https://github.com/d-osc/Nova"
                   className="btn btn-primary"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -282,7 +282,7 @@ nova pm uninstall lodash`}</code>
                   View on GitHub
                 </a>
                 <a
-                  href="https://github.com/d-osc/nova-lang/tree/master/examples"
+                  href="https://github.com/d-osc/Nova/tree/master/examples"
                   className="btn btn-secondary"
                   target="_blank"
                   rel="noopener noreferrer"

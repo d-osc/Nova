@@ -243,7 +243,7 @@ console.log(users);
               Download Nova
             </Link>
             <a
-              href="https://github.com/d-osc/nova-lang"
+              href="https://github.com/d-osc/Nova"
               className="btn btn-secondary"
               target="_blank"
               rel="noopener noreferrer"

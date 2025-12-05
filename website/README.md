@@ -228,7 +228,7 @@ MIT License - Same as Nova project
 
 For issues or questions:
 - Open an issue on GitHub
-- Check the [Nova documentation](https://github.com/d-osc/nova-lang)
+- Check the [Nova documentation](https://github.com/d-osc/Nova)
 
 ---
 

@@ -27,7 +27,7 @@ function Download() {
                 <span className="size">~27 MB</span>
               </div>
               <a
-                href="https://github.com/d-osc/nova-lang/releases/latest/download/nova-windows-x64.exe"
+                href="https://github.com/d-osc/Nova/releases/latest/download/nova-windows-x64.exe"
                 className="btn btn-primary download-btn"
                 download
               >
@@ -44,7 +44,7 @@ function Download() {
                 <span className="size">~34 MB</span>
               </div>
               <a
-                href="https://github.com/d-osc/nova-lang/releases/latest/download/nova-macos-universal.tar.gz"
+                href="https://github.com/d-osc/Nova/releases/latest/download/nova-macos-universal.tar.gz"
                 className="btn btn-primary download-btn"
                 download
               >
@@ -61,7 +61,7 @@ function Download() {
                 <span className="size">~34 MB</span>
               </div>
               <a
-                href="https://github.com/d-osc/nova-lang/releases/latest/download/nova-linux-x64"
+                href="https://github.com/d-osc/Nova/releases/latest/download/nova-linux-x64"
                 className="btn btn-primary download-btn"
                 download
               >
@@ -82,7 +82,7 @@ function Download() {
                 <div className="code-block">
                   <pre>
                     <code>{`# Clone repository
-git clone https://github.com/d-osc/nova-lang.git
+git clone https://github.com/d-osc/Nova.git
 cd Nova
 
 # Run automated installer
@@ -104,7 +104,7 @@ nova --version`}</code>
                 <div className="code-block">
                   <pre>
                     <code>{`# Clone repository
-git clone https://github.com/d-osc/nova-lang.git
+git clone https://github.com/d-osc/Nova.git
 cd Nova
 
 # Run automated installer
@@ -127,7 +127,7 @@ nova --version`}</code>
                 <div className="code-block">
                   <pre>
                     <code>{`# Clone repository
-git clone https://github.com/d-osc/nova-lang.git
+git clone https://github.com/d-osc/Nova.git
 cd Nova
 
 # Run automated installer
@@ -156,14 +156,14 @@ nova --version`}</code>
               <div className="code-block">
                 <pre>
                   <code>{`# Windows
-Invoke-WebRequest -Uri "https://github.com/d-osc/nova-lang/releases/latest/download/nova-windows-x64.exe" -OutFile "nova.exe"
+Invoke-WebRequest -Uri "https://github.com/d-osc/Nova/releases/latest/download/nova-windows-x64.exe" -OutFile "nova.exe"
 
 # macOS
-curl -L https://github.com/d-osc/nova-lang/releases/latest/download/nova-macos-universal.tar.gz | tar xz
+curl -L https://github.com/d-osc/Nova/releases/latest/download/nova-macos-universal.tar.gz | tar xz
 sudo mv nova /usr/local/bin/
 
 # Linux
-wget https://github.com/d-osc/nova-lang/releases/latest/download/nova-linux-x64
+wget https://github.com/d-osc/Nova/releases/latest/download/nova-linux-x64
 chmod +x nova-linux-x64
 sudo mv nova-linux-x64 /usr/local/bin/nova`}</code>
                 </pre>
@@ -175,7 +175,7 @@ sudo mv nova-linux-x64 /usr/local/bin/nova`}</code>
               <div className="code-block">
                 <pre>
                   <code>{`# macOS - Homebrew (coming soon)
-brew tap d-osc/nova-lang
+brew tap d-osc/Nova
 brew install nova
 
 # Linux - Snap (coming soon)
@@ -198,7 +198,7 @@ choco install nova`}</code>
                 <div className="code-block">
                   <pre>
                     <code>{`# Clone repository
-git clone https://github.com/d-osc/nova-lang.git
+git clone https://github.com/d-osc/Nova.git
 cd Nova
 
 # Run installer (detects OS automatically)
@@ -230,7 +230,7 @@ cd Nova
 # - Ninja build system
 
 # Clone and build
-git clone https://github.com/d-osc/nova-lang.git
+git clone https://github.com/d-osc/Nova.git
 cd Nova
 
 # Configure
@@ -256,7 +256,7 @@ sudo cmake --install build
               <h3>📚 Build Resources</h3>
               <div className="resource-links">
                 <a
-                  href="https://github.com/d-osc/nova-lang/blob/master/INSTALL.md"
+                  href="https://github.com/d-osc/Nova/blob/master/INSTALL.md"
                   className="resource-link"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -264,7 +264,7 @@ sudo cmake --install build
                   📖 Complete Installation Guide
                 </a>
                 <a
-                  href="https://github.com/d-osc/nova-lang/blob/master/docs/BUILD.md"
+                  href="https://github.com/d-osc/Nova/blob/master/docs/BUILD.md"
                   className="resource-link"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -272,7 +272,7 @@ sudo cmake --install build
                   🔧 Detailed Build Instructions
                 </a>
                 <a
-                  href="https://github.com/d-osc/nova-lang/blob/master/CONTRIBUTING.md"
+                  href="https://github.com/d-osc/Nova/blob/master/CONTRIBUTING.md"
                   className="resource-link"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -326,7 +326,7 @@ sudo cmake --install build
                 <h4>Try Examples</h4>
                 <p>Explore sample projects to see Nova in action</p>
                 <a
-                  href="https://github.com/d-osc/nova-lang/tree/master/examples"
+                  href="https://github.com/d-osc/Nova/tree/master/examples"
                   className="step-link"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -340,7 +340,7 @@ sudo cmake --install build
                 <h4>Join the Community</h4>
                 <p>Connect with other Nova developers and contributors</p>
                 <a
-                  href="https://github.com/d-osc/nova-lang/discussions"
+                  href="https://github.com/d-osc/Nova/discussions"
                   className="step-link"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -356,7 +356,7 @@ sudo cmake --install build
             <p>Check out our documentation or open an issue on GitHub</p>
             <div className="cta-buttons">
               <a
-                href="https://github.com/d-osc/nova-lang"
+                href="https://github.com/d-osc/Nova"
                 className="btn btn-primary"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -364,7 +364,7 @@ sudo cmake --install build
                 View on GitHub
               </a>
               <a
-                href="https://github.com/d-osc/nova-lang/issues"
+                href="https://github.com/d-osc/Nova/issues"
                 className="btn btn-secondary"
                 target="_blank"
                 rel="noopener noreferrer"

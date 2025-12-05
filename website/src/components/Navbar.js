@@ -30,7 +30,7 @@ function Navbar() {
               Download
             </Link>
             <a
-              href="https://github.com/d-osc/nova-lang"
+              href="https://github.com/d-osc/Nova"
               className="nav-link"
               target="_blank"
               rel="noopener noreferrer"
