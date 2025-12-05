@@ -31,11 +31,12 @@ jobs:
         # Get LLVM prefix from Homebrew
         LLVM_PREFIX=$(brew --prefix llvm@18)
 
-        # Fix header search path - Use -I instead of -isystem for LLVM headers
-        # -I paths are searched BEFORE -isystem paths, ensuring LLVM headers take precedence
-        # Find the actual clang version directory
+        # Fix header search path - Block ALL system headers and use only LLVM's
+        # -nostdinc++ blocks system C++ headers
+        # -nostdinc blocks system C headers
+        # Then explicitly add LLVM headers in correct order
         CLANG_VERSION=$(ls ${LLVM_PREFIX}/lib/clang/ | head -1)
-        CXX_FLAGS="-I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -I${LLVM_PREFIX}/include/c++/v1 -march=armv8-a"
+        CXX_FLAGS="-nostdinc++ -nostdinc -isystem ${LLVM_PREFIX}/include/c++/v1 -isystem ${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -march=armv8-a"
 
         cmake -G Ninja \
           -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
