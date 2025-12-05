@@ -134,7 +134,7 @@ jobs:
 
     - name: Setup LLVM
       run: |
-        choco install llvm --version=18 -y --force --allow-downgrade
+        choco install llvm --version=18.1.7 -y --force --allow-downgrade
         echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         echo "LLVM_DIR=C:\Program Files\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
