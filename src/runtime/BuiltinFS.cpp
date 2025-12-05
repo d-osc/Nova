@@ -32,7 +32,9 @@
 #include <utime.h>
 #include <sys/uio.h>  // For readv/writev
 #include <sys/time.h> // For lutimes
-#include <sys/inotify.h>  // For file watching
+#ifdef __linux__
+#include <sys/inotify.h>  // For file watching (Linux only)
+#endif
 #endif
 
 namespace nova {
@@ -1240,7 +1242,7 @@ struct FSWatcher {
     HANDLE dirHandle;
     HANDLE threadHandle;
     bool stopThread;
-#else
+#elif defined(__linux__)
     int inotifyFd;
     int watchDescriptor;
 #endif
@@ -1371,7 +1373,7 @@ void* nova_fs_watch(const char* filename, void (*listener)(const char*, const ch
 
     // Start watcher thread
     watcher->threadHandle = CreateThread(nullptr, 0, WatcherThread, watcher, 0, nullptr);
-#else
+#elif defined(__linux__)
     watcher->inotifyFd = inotify_init1(IN_NONBLOCK);
     if (watcher->inotifyFd < 0) {
         delete watcher;
@@ -1386,6 +1388,9 @@ void* nova_fs_watch(const char* filename, void (*listener)(const char*, const ch
         delete watcher;
         return nullptr;
     }
+#else
+    // macOS: file watching not yet implemented (would use FSEvents/kqueue)
+    // For now, watcher is created but won't receive events
 #endif
 
     activeWatchers.push_back(watcher);
@@ -1448,7 +1453,7 @@ void nova_fs_watcher_close(void* watcher) {
         WaitForSingleObject(w->threadHandle, 1000);
         CloseHandle(w->threadHandle);
     }
-#else
+#elif defined(__linux__)
     if (w->watchDescriptor >= 0) {
         inotify_rm_watch(w->inotifyFd, w->watchDescriptor);
     }
@@ -1456,6 +1461,7 @@ void nova_fs_watcher_close(void* watcher) {
         close(w->inotifyFd);
     }
 #endif
+    // macOS: no cleanup needed yet (no file watching implementation)
 
     // Call close listeners
     for (auto& listener : w->closeListeners) {
