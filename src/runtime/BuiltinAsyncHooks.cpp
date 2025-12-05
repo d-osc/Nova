@@ -6,6 +6,7 @@
  */
 
 #include "nova/runtime/BuiltinModules.h"
+#include <algorithm>
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
