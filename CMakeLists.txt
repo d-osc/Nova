@@ -39,12 +39,26 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
         # /OPT:ICF - COMDAT folding
     else()
         # GCC/Clang aggressive optimization flags
+        # Only add -march=native if no -march flag is already set in CMAKE_CXX_FLAGS
+        set(MARCH_FLAG "-march=native")
+        if(CMAKE_CXX_FLAGS MATCHES "-march=")
+            set(MARCH_FLAG "")
+        endif()
+
         if(WIN32)
             # On Windows, skip -ffast-math as it conflicts with MSVC STL's infinity implementation
-            add_compile_options(-O3 -march=native -finline-functions -funroll-loops)
+            if(MARCH_FLAG)
+                add_compile_options(-O3 ${MARCH_FLAG} -finline-functions -funroll-loops)
+            else()
+                add_compile_options(-O3 -finline-functions -funroll-loops)
+            endif()
         else()
             # Use -ffast-math but allow infinity/NaN for JavaScript compatibility
-            add_compile_options(-O3 -march=native -ffast-math -fno-finite-math-only -finline-functions -funroll-loops)
+            if(MARCH_FLAG)
+                add_compile_options(-O3 ${MARCH_FLAG} -ffast-math -fno-finite-math-only -finline-functions -funroll-loops)
+            else()
+                add_compile_options(-O3 -ffast-math -fno-finite-math-only -finline-functions -funroll-loops)
+            endif()
         endif()
     endif()
 endif()
