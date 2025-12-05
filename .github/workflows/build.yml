@@ -19,50 +19,25 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install build tools
+    - name: Install dependencies
       run: |
-        brew install cmake ninja
-
-    - name: Cache LLVM
-      id: cache-llvm
-      uses: actions/cache@v4
-      with:
-        path: /usr/local/llvm
-        key: llvm-18.1.8-macos-${{ matrix.arch }}
-
-    - name: Setup LLVM
-      if: steps.cache-llvm.outputs.cache-hit != 'true'
-      run: |
-        if [ "${{ matrix.arch }}" = "arm64" ]; then
-          LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-arm64-apple-macos11.tar.xz"
-        else
-          LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-apple-darwin.tar.xz"
-        fi
-
-        echo "Downloading and extracting LLVM (streaming)..."
-        sudo mkdir -p /tmp/llvm-extract
-        curl -L "$LLVM_URL" | tar -xJ -C /tmp/llvm-extract
-
-        echo "Moving to final location..."
-        sudo mv /tmp/llvm-extract/clang+llvm-* /usr/local/llvm
-
-        echo "LLVM installation complete"
-
-    - name: Setup LLVM environment
-      run: |
-        echo "LLVM_DIR=/usr/local/llvm/lib/cmake/llvm" >> $GITHUB_ENV
-        echo "/usr/local/llvm/bin" >> $GITHUB_PATH
+        brew update
+        brew install llvm@18 cmake ninja
+        echo "LLVM_DIR=$(brew --prefix llvm@18)/lib/cmake/llvm" >> $GITHUB_ENV
+        echo "$(brew --prefix llvm@18)/bin" >> $GITHUB_PATH
 
     - name: Configure CMake
       run: |
         mkdir -p build/macos-${{ matrix.arch }}
         cd build/macos-${{ matrix.arch }}
 
+        # Get LLVM prefix from Homebrew
+        LLVM_PREFIX=$(brew --prefix llvm@18)
+
         # Fix header search path - LLVM headers must come before system headers
-        LLVM_PREFIX=/usr/local/llvm
-        # Include LLVM's clang resource directory for compiler-rt headers (stddef.h, etc.)
-        # Use full version number for clang resource directory
-        BASE_CXX_FLAGS="-nostdinc++ -isystem ${LLVM_PREFIX}/lib/clang/18.1.8/include -isystem ${LLVM_PREFIX}/include/c++/v1"
+        # Find the actual clang version directory
+        CLANG_VERSION=$(ls ${LLVM_PREFIX}/lib/clang/ | head -1)
+        BASE_CXX_FLAGS="-nostdinc++ -isystem ${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -isystem ${LLVM_PREFIX}/include/c++/v1"
 
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           # Native ARM64 build - use armv8-a
