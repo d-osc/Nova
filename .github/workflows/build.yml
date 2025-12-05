@@ -23,7 +23,15 @@ jobs:
       run: |
         brew install cmake ninja
 
+    - name: Cache LLVM
+      id: cache-llvm
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/llvm
+        key: llvm-18.1.8-macos-${{ matrix.arch }}
+
     - name: Setup LLVM
+      if: steps.cache-llvm.outputs.cache-hit != 'true'
       run: |
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-arm64-apple-macos11.tar.xz"
@@ -33,27 +41,20 @@ jobs:
           LLVM_FILE="clang+llvm-18.1.8-x86_64-apple-darwin.tar.xz"
         fi
 
-        echo "Downloading LLVM from $LLVM_URL"
+        echo "Downloading LLVM..."
         curl -L -o "$LLVM_FILE" "$LLVM_URL"
 
-        echo "Verifying download..."
-        ls -lh "$LLVM_FILE"
-
-        echo "Extracting LLVM..."
-        tar -xvf "$LLVM_FILE"
-
-        echo "Checking extracted directory..."
-        ls -la
+        echo "Extracting LLVM (this may take a few minutes)..."
+        tar -xf "$LLVM_FILE"
 
         # Move to standard location
         LLVM_EXTRACTED=$(ls -d clang+llvm-*/ | head -1 | sed 's:/$::')
-        echo "Found extracted directory: $LLVM_EXTRACTED"
-
         sudo mv "$LLVM_EXTRACTED" /usr/local/llvm
 
-        echo "Verifying installation..."
-        ls -la /usr/local/llvm/bin/
+        echo "LLVM installation complete"
 
+    - name: Setup LLVM environment
+      run: |
         echo "LLVM_DIR=/usr/local/llvm/lib/cmake/llvm" >> $GITHUB_ENV
         echo "/usr/local/llvm/bin" >> $GITHUB_PATH
 
