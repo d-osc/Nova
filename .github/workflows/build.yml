@@ -31,10 +31,8 @@ jobs:
         # Get LLVM prefix from Homebrew
         LLVM_PREFIX=$(brew --prefix llvm@18)
 
-        # Fix header search path - Block ALL system headers and use only LLVM's
-        # -nostdinc++ blocks system C++ headers
-        # -nostdinc blocks system C headers
-        # Then explicitly add LLVM headers in correct order
+        # Complete isolation from macOS SDK - use ONLY LLVM toolchain
+        # Disable SDK sysroot completely and block all system includes
         CLANG_VERSION=$(ls ${LLVM_PREFIX}/lib/clang/ | head -1)
         CXX_FLAGS="-nostdinc++ -nostdinc -isystem ${LLVM_PREFIX}/include/c++/v1 -isystem ${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include -march=armv8-a"
 
@@ -43,8 +41,12 @@ jobs:
           -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_SYSROOT="" \
           -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
           -DCMAKE_C_FLAGS="${CXX_FLAGS}" \
+          -DCMAKE_SYSTEM_INCLUDE_PATH="" \
+          -DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES="" \
+          -DCMAKE_C_STANDARD_INCLUDE_DIRECTORIES="" \
           -DLLVM_DIR=$LLVM_DIR \
           ../..
 
