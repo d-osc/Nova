@@ -33,8 +33,8 @@ static const int STREAM_STATE_WRITABLE = 2;
 static const int STREAM_STATE_FLOWING = 4;
 static const int STREAM_STATE_PAUSED = 8;
 static const int STREAM_STATE_ENDED = 16;
-[[maybe_unused]] static const int STREAM_STATE_FINISHED = 32;
-[[maybe_unused]] static const int STREAM_STATE_DESTROYED = 64;
+static const int STREAM_STATE_FINISHED = 32;
+static const int STREAM_STATE_DESTROYED = 64;
 static const int STREAM_STATE_ERROR = 128;
 
 // Default high water mark - OPTIMIZED
@@ -164,8 +164,8 @@ private:
 
 // OPTIMIZATION: Pre-allocated buffer sizes
 static constexpr size_t SMALL_CHUNK_SIZE = 256;    // 256 bytes - inline storage
-[[maybe_unused]] static constexpr size_t MEDIUM_CHUNK_SIZE = 4096;  // 4KB - common size
-[[maybe_unused]] static constexpr size_t LARGE_CHUNK_SIZE = 16384;  // 16KB - high water mark
+static constexpr size_t MEDIUM_CHUNK_SIZE = 4096;  // 4KB - common size
+static constexpr size_t LARGE_CHUNK_SIZE = 16384;  // 16KB - high water mark
 
 struct alignas(64) StreamChunk {
     // OPTIMIZATION: Small vector with inline storage for common case
@@ -206,32 +206,6 @@ struct alignas(64) StreamChunk {
             other.data_ = nullptr;
         }
         other.size_ = 0;
-    }
-
-    // Move assignment
-    StreamChunk& operator=(StreamChunk&& other) noexcept {
-        if (this != &other) {
-            // Free existing data
-            if (!using_inline_ && data_) {
-                free(data_);
-            }
-
-            size_ = other.size_;
-            capacity_ = other.capacity_;
-            encoding = std::move(other.encoding);
-            isObject = other.isObject;
-            using_inline_ = other.using_inline_;
-
-            if (using_inline_) {
-                data_ = inline_data_.data();
-                memcpy(inline_data_.data(), other.inline_data_.data(), size_);
-            } else {
-                data_ = other.data_;
-                other.data_ = nullptr;
-            }
-            other.size_ = 0;
-        }
-        return *this;
     }
 
     // FAST PATH: Append data with zero-copy when possible

@@ -179,7 +179,7 @@ struct EventEmitter {
 
     // Constructor to reserve initial capacity
     EventEmitter() : id(0), maxListeners(defaultMaxListeners),
-                     captureRejections(false),
+                     captureRejections(captureRejections),
                      errorHandler(nullptr), newListenerHandler(nullptr),
                      removeListenerHandler(nullptr) {
         // Reserve capacity for common case (8 event types)

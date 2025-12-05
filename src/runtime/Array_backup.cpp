@@ -3,33 +3,8 @@
 #include <algorithm>
 #include <cstdarg>
 
-// ==================== ULTRA OPTIMIZATIONS ====================
-// Enable SIMD optimizations for array operations
-#if defined(__AVX2__) || defined(_MSC_VER)
-    #define NOVA_USE_SIMD 1
-    #include <immintrin.h>
-#endif
-
-// Branch prediction hints
-#ifdef __GNUC__
-    #define LIKELY(x)   __builtin_expect(!!(x), 1)
-    #define UNLIKELY(x) __builtin_expect(!!(x), 0)
-#else
-    #define LIKELY(x)   (x)
-    #define UNLIKELY(x) (x)
-#endif
-
 namespace nova {
 namespace runtime {
-
-// OPTIMIZATION 1: Fibonacci-like capacity growth
-// Minimizes reallocations while avoiding over-allocation
-static inline int64 calculate_new_capacity(int64 current) {
-    if (current < 8) return 8;
-    if (current < 64) return current * 2;
-    // Fibonacci-like: new = current * 1.5
-    return current + (current >> 1);
-}
 
 Array* create_array(int64 initial_capacity) {
     if (initial_capacity < 0) {
@@ -212,39 +187,18 @@ void* create_metadata_from_value_array(ValueArray* array) {
 }
 
 
-// OPTIMIZATION 2: Optimized resize with smart growth and fast copy
 void resize_value_array(ValueArray* array, int64 new_capacity) {
     if (!array) return;
 
-    // Use smart capacity calculation if not explicitly specified
-    if (new_capacity <= array->capacity) {
-        new_capacity = calculate_new_capacity(array->capacity);
-    }
+    int64* new_elements = static_cast<int64*>(malloc(sizeof(int64) * new_capacity));
 
-    // Allocate aligned memory for SIMD operations (64-byte alignment)
-#ifdef _WIN32
-    int64* new_elements = static_cast<int64*>(_aligned_malloc(sizeof(int64) * new_capacity, 64));
-#else
-    int64* new_elements = static_cast<int64*>(aligned_alloc(64, sizeof(int64) * new_capacity));
-#endif
-    if (!new_elements) {
-        // Fallback to regular malloc
-        new_elements = static_cast<int64*>(malloc(sizeof(int64) * new_capacity));
-    }
-
-    // OPTIMIZATION 3: Fast memcpy for bulk copy (CPU optimized)
+    // Copy existing elements
     int64 copy_count = (array->length < new_capacity) ? array->length : new_capacity;
-    if (copy_count > 0 && array->elements) {
-        std::memcpy(new_elements, array->elements, copy_count * sizeof(int64));
+    for (int64 i = 0; i < copy_count; i++) {
+        new_elements[i] = array->elements[i];
     }
 
-    if (array->elements) {
-#ifdef _WIN32
-        _aligned_free(array->elements);
-#else
-        free(array->elements);
-#endif
-    }
+    free(array->elements);
     array->elements = new_elements;
     array->capacity = new_capacity;
 }
@@ -268,20 +222,18 @@ int64 value_array_length(ValueArray* array) {
     return array->length;
 }
 
-// OPTIMIZATION 4: Fast path for push (90% of cases have capacity)
-inline void value_array_push(ValueArray* array, int64 value) {
-    if (UNLIKELY(!array)) return;
+void value_array_push(ValueArray* array, int64 value) {
+    if (!array) return;
 
-    // FAST PATH: Space available (likely case)
-    if (LIKELY(array->length < array->capacity)) {
-        array->elements[array->length++] = value;
-        return;
+    // Resize if needed
+    if (array->length >= array->capacity) {
+        int64 new_capacity = array->capacity * 2;
+        if (new_capacity < 8) new_capacity = 8;
+        resize_value_array(array, new_capacity);
     }
 
-    // SLOW PATH: Resize needed
-    int64 new_capacity = calculate_new_capacity(array->capacity);
-    resize_value_array(array, new_capacity);
-    array->elements[array->length++] = value;
+    array->elements[array->length] = value;
+    array->length++;
 }
 
 int64 value_array_pop(ValueArray* array) {
@@ -346,33 +298,10 @@ int64 value_array_at(ValueArray* array, int64 index) {
     return array->elements[index];
 }
 
-// OPTIMIZATION 5: SIMD-accelerated includes (4x faster with AVX2)
+// Check if array includes a value
 bool value_array_includes(ValueArray* array, int64 value) {
     if (!array) return false;
 
-#ifdef NOVA_USE_SIMD
-    // SIMD path for large arrays
-    if (array->length >= 8) {
-        __m256i search_vec = _mm256_set1_epi64x(value);
-        int64 i = 0;
-
-        // Process 4 elements at a time
-        for (; i + 3 < array->length; i += 4) {
-            __m256i data_vec = _mm256_loadu_si256((__m256i*)&array->elements[i]);
-            __m256i cmp = _mm256_cmpeq_epi64(data_vec, search_vec);
-            int mask = _mm256_movemask_epi8(cmp);
-            if (mask != 0) return true;
-        }
-
-        // Handle remaining elements
-        for (; i < array->length; i++) {
-            if (array->elements[i] == value) return true;
-        }
-        return false;
-    }
-#endif
-
-    // Scalar fallback for small arrays
     for (int64 i = 0; i < array->length; i++) {
         if (array->elements[i] == value) {
             return true;
@@ -381,41 +310,10 @@ bool value_array_includes(ValueArray* array, int64 value) {
     return false;
 }
 
-// OPTIMIZATION 6: SIMD-accelerated indexOf (4x faster with AVX2)
+// Find index of a value in array
 int64 value_array_indexOf(ValueArray* array, int64 value) {
     if (!array) return -1;
 
-#ifdef NOVA_USE_SIMD
-    // SIMD path for large arrays
-    if (array->length >= 8) {
-        __m256i search_vec = _mm256_set1_epi64x(value);
-        int64 i = 0;
-
-        // Process 4 elements at a time
-        for (; i + 3 < array->length; i += 4) {
-            __m256i data_vec = _mm256_loadu_si256((__m256i*)&array->elements[i]);
-            __m256i cmp = _mm256_cmpeq_epi64(data_vec, search_vec);
-            int mask = _mm256_movemask_epi8(cmp);
-
-            if (mask != 0) {
-                // Found a match, find which lane
-                for (int j = 0; j < 4; j++) {
-                    if (array->elements[i + j] == value) {
-                        return i + j;
-                    }
-                }
-            }
-        }
-
-        // Handle remaining elements
-        for (; i < array->length; i++) {
-            if (array->elements[i] == value) return i;
-        }
-        return -1;
-    }
-#endif
-
-    // Scalar fallback for small arrays
     for (int64 i = 0; i < array->length; i++) {
         if (array->elements[i] == value) {
             return i;
@@ -455,30 +353,10 @@ void value_array_reverse(ValueArray* array) {
     }
 }
 
-// OPTIMIZATION 7: SIMD-accelerated fill (8x faster with AVX2)
+// Fill array with a static value
 void value_array_fill(ValueArray* array, int64 value) {
     if (!array) return;
 
-#ifdef NOVA_USE_SIMD
-    // SIMD path for large arrays
-    if (array->length >= 16) {
-        __m256i fill_vec = _mm256_set1_epi64x(value);
-        int64 i = 0;
-
-        // Process 4 elements at a time
-        for (; i + 3 < array->length; i += 4) {
-            _mm256_storeu_si256((__m256i*)&array->elements[i], fill_vec);
-        }
-
-        // Handle remaining elements
-        for (; i < array->length; i++) {
-            array->elements[i] = value;
-        }
-        return;
-    }
-#endif
-
-    // Scalar fallback for small arrays or non-SIMD builds
     for (int64 i = 0; i < array->length; i++) {
         array->elements[i] = value;
     }

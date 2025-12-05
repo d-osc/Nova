@@ -649,7 +649,7 @@ void* nova_module_require(void* module, const char* id) {
     return nova_require_from(id, mod->filename);
 }
 
-int nova_module_isPreloading(void* module) {
+int nova_module_isPreloading([[maybe_unused]] void* module) {
     // Check if module is being preloaded
     // In Nova, we don't have preloading mechanism yet
     return 0;

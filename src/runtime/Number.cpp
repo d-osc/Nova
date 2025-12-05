@@ -427,7 +427,7 @@ const char* nova_number_toLocaleString(double num) {
 }
 
 // Number.prototype.toLocaleString with locale parameter (simplified - ignores locale)
-const char* nova_number_toLocaleString_locale(double num, const char* locale) {
+const char* nova_number_toLocaleString_locale(double num, [[maybe_unused]] const char* locale) {
     // For simplicity, ignore locale and use default formatting
     // A full implementation would use locale-specific formatting
     return nova_number_toLocaleString(num);

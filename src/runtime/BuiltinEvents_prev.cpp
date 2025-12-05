@@ -1,15 +1,13 @@
 /**
- * nova:events - ULTRA OPTIMIZED Events Module Implementation
+ * nova:events - OPTIMIZED Events Module Implementation
  *
- * EXTREME Performance optimizations:
- * 1. Small Vector Optimization - Inline storage for 1-2 listeners (most common)
- * 2. Fast Path for Single Listener - 90% of events have 1 listener
- * 3. Event Name Interning - Cache string hashes
- * 4. Branchless Code - Minimize branch mispredictions
- * 5. Memory Pool - Pre-allocated listener blocks
- * 6. Zero-Copy Event Data - Pass by reference always
- * 7. Cache-Friendly Layout - Optimize for CPU cache lines
- * 8. SIMD-Ready Structure - Aligned for vectorization
+ * Performance optimizations:
+ * 1. std::unordered_map instead of std::map (O(1) vs O(log n) lookup)
+ * 2. Avoid vector copying in emit (use references)
+ * 3. Reserve vector capacity to avoid reallocations
+ * 4. Inline hot path functions
+ * 5. Branch prediction hints
+ * 6. Minimal allocations
  */
 
 #include "nova/runtime/BuiltinModules.h"
@@ -21,7 +19,6 @@
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
-#include <array>
 
 namespace nova {
 namespace runtime {
@@ -44,142 +41,40 @@ static int defaultMaxListeners = 10;
 static int captureRejections = 0;
 
 // ============================================================================
-// Listener Structure - CACHE OPTIMIZED
+// Listener Structure
 // ============================================================================
 
 typedef void (*ListenerCallback)(void* emitter, void* arg1, void* arg2, void* arg3);
 
-// Aligned to 32 bytes for cache efficiency
-struct alignas(32) Listener {
+struct Listener {
     ListenerCallback callback;
     int once;       // Remove after first call
     int prepend;    // Was added with prepend
-    int _padding;   // Align to 32 bytes
 
     // Constructor for fast initialization
     inline Listener(ListenerCallback cb, int o, int p)
-        : callback(cb), once(o), prepend(p), _padding(0) {}
+        : callback(cb), once(o), prepend(p) {}
 
-    Listener() : callback(nullptr), once(0), prepend(0), _padding(0) {}
+    Listener() : callback(nullptr), once(0), prepend(0) {}
 };
 
 // ============================================================================
-// Small Vector Optimization - INLINE STORAGE
-// ============================================================================
-
-// Most events have 1-2 listeners, avoid heap allocation
-template<typename T, size_t InlineCapacity = 2>
-class SmallVector {
-private:
-    size_t size_;
-    size_t capacity_;
-    std::array<T, InlineCapacity> inline_storage_;
-    T* data_;
-
-public:
-    SmallVector() : size_(0), capacity_(InlineCapacity), data_(inline_storage_.data()) {}
-
-    ~SmallVector() {
-        if (data_ != inline_storage_.data()) {
-            free(data_);
-        }
-    }
-
-    // OPTIMIZATION: Inline storage for common case (1-2 listeners)
-    inline void push_back(const T& item) {
-        if (size_ < capacity_) [[likely]] {
-            data_[size_++] = item;
-        } else {
-            grow();
-            data_[size_++] = item;
-        }
-    }
-
-    inline void emplace_back(const T& item) {
-        push_back(item);
-    }
-
-    inline T& operator[](size_t idx) { return data_[idx]; }
-    inline const T& operator[](size_t idx) const { return data_[idx]; }
-
-    inline size_t size() const { return size_; }
-    inline bool empty() const { return size_ == 0; }
-
-    inline T* begin() { return data_; }
-    inline T* end() { return data_ + size_; }
-    inline const T* begin() const { return data_; }
-    inline const T* end() const { return data_ + size_; }
-
-    void insert(T* pos, const T& item) {
-        size_t idx = pos - data_;
-        if (size_ >= capacity_) grow();
-        // Shift elements
-        for (size_t i = size_; i > idx; --i) {
-            data_[i] = data_[i - 1];
-        }
-        data_[idx] = item;
-        size_++;
-    }
-
-    void erase(T* first, T* last) {
-        size_t start_idx = first - data_;
-        size_t end_idx = last - data_;
-        size_t count = end_idx - start_idx;
-
-        for (size_t i = start_idx; i < size_ - count; ++i) {
-            data_[i] = data_[i + count];
-        }
-        size_ -= count;
-    }
-
-    void reserve(size_t new_capacity) {
-        if (new_capacity > capacity_) {
-            grow_to(new_capacity);
-        }
-    }
-
-    inline size_t capacity() const { return capacity_; }
-
-private:
-    void grow() {
-        grow_to(capacity_ * 2);
-    }
-
-    void grow_to(size_t new_capacity) {
-        T* new_data = (T*)malloc(new_capacity * sizeof(T));
-        for (size_t i = 0; i < size_; ++i) {
-            new_data[i] = data_[i];
-        }
-
-        if (data_ != inline_storage_.data()) {
-            free(data_);
-        }
-
-        data_ = new_data;
-        capacity_ = new_capacity;
-    }
-};
-
-// ============================================================================
-// EventEmitter Structure - ULTRA OPTIMIZED
+// EventEmitter Structure - OPTIMIZED
 // ============================================================================
 
 struct EventEmitter {
     int id;
     int maxListeners;
     int captureRejections;
-
-    // OPTIMIZATION: Small vector with inline storage for 1-2 listeners
-    std::unordered_map<std::string, SmallVector<Listener, 2>> events;
-
-    // Special handlers
+    // OPTIMIZATION: Use unordered_map for O(1) average lookup instead of O(log n)
+    std::unordered_map<std::string, std::vector<Listener>> events;
     void (*errorHandler)(void* emitter, void* error);
     void (*newListenerHandler)(void* emitter, const char* event, void* listener);
     void (*removeListenerHandler)(void* emitter, const char* event, void* listener);
 
     // Constructor to reserve initial capacity
     EventEmitter() : id(0), maxListeners(defaultMaxListeners),
-                     captureRejections(false),
+                     captureRejections(captureRejections),
                      errorHandler(nullptr), newListenerHandler(nullptr),
                      removeListenerHandler(nullptr) {
         // Reserve capacity for common case (8 event types)
@@ -197,24 +92,24 @@ extern "C" {
 // ============================================================================
 
 // Get default max listeners
-inline int nova_events_getDefaultMaxListeners() {
+int nova_events_getDefaultMaxListeners() {
     return defaultMaxListeners;
 }
 
 // Set default max listeners
-inline void nova_events_setDefaultMaxListeners(int n) {
-    if (n >= 0) [[likely]] {
+void nova_events_setDefaultMaxListeners(int n) {
+    if (n >= 0) {
         defaultMaxListeners = n;
     }
 }
 
 // Get capture rejections setting
-inline int nova_events_getCaptureRejections() {
+int nova_events_getCaptureRejections() {
     return captureRejections;
 }
 
 // Set capture rejections
-inline void nova_events_setCaptureRejections(int value) {
+void nova_events_setCaptureRejections(int value) {
     captureRejections = value ? 1 : 0;
 }
 
@@ -232,7 +127,7 @@ void* nova_events_EventEmitter_new() {
 
 // Free EventEmitter
 void nova_events_EventEmitter_free(void* emitterPtr) {
-    if (!emitterPtr) [[unlikely]] return;
+    if (!emitterPtr) return;
 
     EventEmitter* emitter = (EventEmitter*)emitterPtr;
 
@@ -264,7 +159,7 @@ inline int nova_events_EventEmitter_getMaxListeners(void* emitterPtr) {
 }
 
 // Set max listeners
-inline void* nova_events_EventEmitter_setMaxListeners(void* emitterPtr, int n) {
+void* nova_events_EventEmitter_setMaxListeners(void* emitterPtr, int n) {
     if (emitterPtr && n >= 0) [[likely]] {
         ((EventEmitter*)emitterPtr)->maxListeners = n;
     }
@@ -272,10 +167,10 @@ inline void* nova_events_EventEmitter_setMaxListeners(void* emitterPtr, int n) {
 }
 
 // ============================================================================
-// Add Listeners - ULTRA OPTIMIZED
+// Add Listeners - OPTIMIZED
 // ============================================================================
 
-// on(eventName, listener) - ULTRA OPTIMIZED with Small Vector
+// on(eventName, listener) - Add listener - OPTIMIZED
 void* nova_events_EventEmitter_on(void* emitterPtr, const char* eventName, void* listener) {
     if (!emitterPtr || !eventName || !listener) [[unlikely]] return emitterPtr;
 
@@ -286,9 +181,16 @@ void* nova_events_EventEmitter_on(void* emitterPtr, const char* eventName, void*
         emitter->newListenerHandler(emitterPtr, eventName, listener);
     }
 
-    // OPTIMIZATION: Small vector with inline storage - no heap allocation for 1-2 listeners
+    // OPTIMIZATION: Single lookup and insert
     auto& listenerVec = emitter->events[eventName];
-    listenerVec.emplace_back(Listener((ListenerCallback)listener, 0, 0));
+
+    // OPTIMIZATION: Reserve capacity for common case (avoid reallocation)
+    if (listenerVec.capacity() == 0) {
+        listenerVec.reserve(4);  // Reserve for 4 listeners initially
+    }
+
+    // OPTIMIZATION: Construct listener in-place
+    listenerVec.emplace_back((ListenerCallback)listener, 0, 0);
 
     // Warn if exceeding max listeners
     if (emitter->maxListeners > 0 && (int)listenerVec.size() > emitter->maxListeners) [[unlikely]] {
@@ -305,7 +207,7 @@ inline void* nova_events_EventEmitter_addListener(void* emitterPtr, const char* 
     return nova_events_EventEmitter_on(emitterPtr, eventName, listener);
 }
 
-// once(eventName, listener) - OPTIMIZED
+// once(eventName, listener) - Add one-time listener - OPTIMIZED
 void* nova_events_EventEmitter_once(void* emitterPtr, const char* eventName, void* listener) {
     if (!emitterPtr || !eventName || !listener) [[unlikely]] return emitterPtr;
 
@@ -316,18 +218,21 @@ void* nova_events_EventEmitter_once(void* emitterPtr, const char* eventName, voi
         emitter->newListenerHandler(emitterPtr, eventName, listener);
     }
 
+    // OPTIMIZATION: Single lookup, reserve, and emplace
     auto& listenerVec = emitter->events[eventName];
-    listenerVec.emplace_back(Listener((ListenerCallback)listener, 1, 0));
+    if (listenerVec.capacity() == 0) {
+        listenerVec.reserve(4);
+    }
+    listenerVec.emplace_back((ListenerCallback)listener, 1, 0);
 
     return emitterPtr;
 }
 
 // ============================================================================
-// Emit Events - ULTRA OPTIMIZED HOT PATH
+// Emit Events - HIGHLY OPTIMIZED HOT PATH
 // ============================================================================
 
-// FAST PATH: Single listener optimization (most common case)
-// emit(eventName, ...args) - ULTRA OPTIMIZED with FAST PATH
+// emit(eventName, ...args) - Emit event - HIGHLY OPTIMIZED
 int nova_events_EventEmitter_emit(void* emitterPtr, const char* eventName, void* arg1, void* arg2, void* arg3) {
     if (!emitterPtr || !eventName) [[unlikely]] return 0;
 
@@ -346,63 +251,26 @@ int nova_events_EventEmitter_emit(void* emitterPtr, const char* eventName, void*
     auto& listeners = it->second;
     if (listeners.empty()) [[unlikely]] return 0;
 
-    size_t count = listeners.size();
-
-    // FAST PATH: Single listener (90% of cases)
-    if (count == 1) [[likely]] {
-        auto& l = listeners[0];
-        if (l.callback) [[likely]] {
-            l.callback(emitterPtr, arg1, arg2, arg3);
-
-            // Remove if once listener
-            if (l.once) [[unlikely]] {
-                listeners.erase(listeners.begin(), listeners.begin() + 1);
-            }
-        }
-        return 1;
-    }
-
-    // FAST PATH: 2-3 listeners (unrolled loop)
-    if (count <= 3) [[likely]] {
-        int onceCount = 0;
-
-        // Manually unrolled for 2-3 listeners
-        for (size_t i = 0; i < count; ++i) {
-            auto& l = listeners[i];
-            if (l.callback) [[likely]] {
-                l.callback(emitterPtr, arg1, arg2, arg3);
-                onceCount += l.once;  // Branchless accumulation
-            }
-        }
-
-        // Only remove once listeners if there were any
-        if (onceCount > 0) [[unlikely]] {
-            auto new_end = std::remove_if(listeners.begin(), listeners.end(),
-                [](const Listener& l) { return l.once; });
-            listeners.erase(new_end, listeners.end());
-        }
-
-        return 1;
-    }
-
-    // SLOW PATH: Many listeners (rare)
+    // OPTIMIZATION: Track once listeners count to avoid unnecessary work
     int onceCount = 0;
 
-    // Use SIMD-friendly iteration
-    for (size_t i = 0; i < count; ++i) {
+    // Call listeners WITHOUT copying the vector
+    // We can do this because we'll remove once listeners after
+    for (size_t i = 0; i < listeners.size(); ++i) {
         auto& l = listeners[i];
-        // Branchless callback invocation
         if (l.callback) [[likely]] {
             l.callback(emitterPtr, arg1, arg2, arg3);
-            onceCount += l.once;  // Branchless
+            if (l.once) onceCount++;
         }
     }
 
-    // Only remove once listeners if there were any
+    // OPTIMIZATION: Only remove once listeners if there are any
     if (onceCount > 0) [[unlikely]] {
-        auto new_end = std::remove_if(listeners.begin(), listeners.end(),
-            [](const Listener& l) { return l.once; });
-        listeners.erase(new_end, listeners.end());
+        listeners.erase(
+            std::remove_if(listeners.begin(), listeners.end(),
+                [](const Listener& l) { return l.once; }),
+            listeners.end()
+        );
     }
 
     return 1;
@@ -422,7 +290,7 @@ inline int nova_events_EventEmitter_emit0(void* emitterPtr, const char* eventNam
 // Query Listeners - OPTIMIZED
 // ============================================================================
 
-// listenerCount(eventName) - ULTRA OPTIMIZED
+// listenerCount(eventName) - Get number of listeners - OPTIMIZED
 inline int nova_events_EventEmitter_listenerCount(void* emitterPtr, const char* eventName) {
     if (!emitterPtr || !eventName) [[unlikely]] return 0;
 
@@ -436,7 +304,7 @@ inline int nova_events_EventEmitter_listenerCount(void* emitterPtr, const char* 
 
 // eventNames() - Get array of event names
 char** nova_events_EventEmitter_eventNames(void* emitterPtr, int* count) {
-    if (!emitterPtr) [[unlikely]] {
+    if (!emitterPtr) {
         *count = 0;
         return nullptr;
     }
@@ -444,7 +312,7 @@ char** nova_events_EventEmitter_eventNames(void* emitterPtr, int* count) {
     EventEmitter* emitter = (EventEmitter*)emitterPtr;
 
     *count = (int)emitter->events.size();
-    if (*count == 0) [[unlikely]] return nullptr;
+    if (*count == 0) return nullptr;
 
     char** names = (char**)malloc(*count * sizeof(char*));
     int i = 0;
@@ -455,7 +323,7 @@ char** nova_events_EventEmitter_eventNames(void* emitterPtr, int* count) {
     return names;
 }
 
-// listeners(eventName) - Get array of listeners
+// listeners(eventName) - Get array of listeners - OPTIMIZED
 void** nova_events_EventEmitter_listeners(void* emitterPtr, const char* eventName, int* count) {
     if (!emitterPtr || !eventName) [[unlikely]] {
         *count = 0;
@@ -491,7 +359,7 @@ inline void** nova_events_EventEmitter_rawListeners(void* emitterPtr, const char
 // Remove Listeners - OPTIMIZED
 // ============================================================================
 
-// off(eventName, listener) - OPTIMIZED
+// off(eventName, listener) - Remove listener - OPTIMIZED
 void* nova_events_EventEmitter_off(void* emitterPtr, const char* eventName, void* listener) {
     if (!emitterPtr || !eventName || !listener) [[unlikely]] return emitterPtr;
 
@@ -501,23 +369,13 @@ void* nova_events_EventEmitter_off(void* emitterPtr, const char* eventName, void
     if (it == emitter->events.end()) [[unlikely]] return emitterPtr;
 
     auto& listeners = it->second;
-
-    // FAST PATH: Single listener removal
-    if (listeners.size() == 1 && listeners[0].callback == (ListenerCallback)listener) [[likely]] {
-        if (emitter->removeListenerHandler) [[unlikely]] {
-            emitter->removeListenerHandler(emitterPtr, eventName, listener);
-        }
-        listeners.erase(listeners.begin(), listeners.begin() + 1);
-        return emitterPtr;
-    }
-
-    // SLOW PATH: Multiple listeners
     for (auto lit = listeners.begin(); lit != listeners.end(); ++lit) {
         if (lit->callback == (ListenerCallback)listener) [[likely]] {
+            // Emit 'removeListener' event
             if (emitter->removeListenerHandler) [[unlikely]] {
                 emitter->removeListenerHandler(emitterPtr, eventName, listener);
             }
-            listeners.erase(lit, lit + 1);
+            listeners.erase(lit);
             break;
         }
     }
@@ -530,15 +388,17 @@ inline void* nova_events_EventEmitter_removeListener(void* emitterPtr, const cha
     return nova_events_EventEmitter_off(emitterPtr, eventName, listener);
 }
 
-// removeAllListeners([eventName]) - OPTIMIZED
+// removeAllListeners([eventName]) - Remove all listeners - OPTIMIZED
 void* nova_events_EventEmitter_removeAllListeners(void* emitterPtr, const char* eventName) {
     if (!emitterPtr) [[unlikely]] return emitterPtr;
 
     EventEmitter* emitter = (EventEmitter*)emitterPtr;
 
     if (eventName) [[likely]] {
+        // Remove listeners for specific event
         auto it = emitter->events.find(eventName);
         if (it != emitter->events.end()) [[likely]] {
+            // Emit 'removeListener' for each
             if (emitter->removeListenerHandler) [[unlikely]] {
                 for (auto& l : it->second) {
                     emitter->removeListenerHandler(emitterPtr, eventName, (void*)l.callback);
@@ -547,6 +407,7 @@ void* nova_events_EventEmitter_removeAllListeners(void* emitterPtr, const char* 
             emitter->events.erase(it);
         }
     } else {
+        // Remove all listeners for all events
         if (emitter->removeListenerHandler) [[unlikely]] {
             for (auto& pair : emitter->events) {
                 for (auto& l : pair.second) {
@@ -564,33 +425,43 @@ void* nova_events_EventEmitter_removeAllListeners(void* emitterPtr, const char* 
 // Prepend Listeners - OPTIMIZED
 // ============================================================================
 
-// prependListener(eventName, listener)
+// prependListener(eventName, listener) - Add listener to beginning - OPTIMIZED
 void* nova_events_EventEmitter_prependListener(void* emitterPtr, const char* eventName, void* listener) {
     if (!emitterPtr || !eventName || !listener) [[unlikely]] return emitterPtr;
 
     EventEmitter* emitter = (EventEmitter*)emitterPtr;
 
+    // Emit 'newListener' event
     if (emitter->newListenerHandler) [[unlikely]] {
         emitter->newListenerHandler(emitterPtr, eventName, listener);
     }
 
     auto& listenerVec = emitter->events[eventName];
+    if (listenerVec.capacity() == 0) {
+        listenerVec.reserve(4);
+    }
+
     listenerVec.insert(listenerVec.begin(), Listener((ListenerCallback)listener, 0, 1));
 
     return emitterPtr;
 }
 
-// prependOnceListener(eventName, listener)
+// prependOnceListener(eventName, listener) - Add one-time listener to beginning - OPTIMIZED
 void* nova_events_EventEmitter_prependOnceListener(void* emitterPtr, const char* eventName, void* listener) {
     if (!emitterPtr || !eventName || !listener) [[unlikely]] return emitterPtr;
 
     EventEmitter* emitter = (EventEmitter*)emitterPtr;
 
+    // Emit 'newListener' event
     if (emitter->newListenerHandler) [[unlikely]] {
         emitter->newListenerHandler(emitterPtr, eventName, listener);
     }
 
     auto& listenerVec = emitter->events[eventName];
+    if (listenerVec.capacity() == 0) {
+        listenerVec.reserve(4);
+    }
+
     listenerVec.insert(listenerVec.begin(), Listener((ListenerCallback)listener, 1, 1));
 
     return emitterPtr;
@@ -600,18 +471,22 @@ void* nova_events_EventEmitter_prependOnceListener(void* emitterPtr, const char*
 // Static Methods
 // ============================================================================
 
+// EventEmitter.listenerCount(emitter, eventName) - deprecated
 inline int nova_events_listenerCount(void* emitterPtr, const char* eventName) {
     return nova_events_EventEmitter_listenerCount(emitterPtr, eventName);
 }
 
+// EventEmitter.getEventListeners(emitter, eventName)
 inline void** nova_events_getEventListeners(void* emitterPtr, const char* eventName, int* count) {
     return nova_events_EventEmitter_listeners(emitterPtr, eventName, count);
 }
 
+// EventEmitter.getMaxListeners(emitter)
 inline int nova_events_getMaxListeners(void* emitterPtr) {
     return nova_events_EventEmitter_getMaxListeners(emitterPtr);
 }
 
+// EventEmitter.setMaxListeners(n, ...emitters) - Set max for multiple
 void nova_events_setMaxListeners(int n, void** emitters, int count) {
     if (n < 0) [[unlikely]] return;
 
@@ -622,6 +497,7 @@ void nova_events_setMaxListeners(int n, void** emitters, int count) {
             }
         }
     } else {
+        // Set default
         defaultMaxListeners = n;
     }
 }
@@ -630,53 +506,86 @@ void nova_events_setMaxListeners(int n, void** emitters, int count) {
 // Special Event Handlers
 // ============================================================================
 
+// Set handler for 'newListener' event
 inline void nova_events_EventEmitter_onNewListener(void* emitterPtr, void* handler) {
     if (!emitterPtr) [[unlikely]] return;
     ((EventEmitter*)emitterPtr)->newListenerHandler =
         (void (*)(void*, const char*, void*))handler;
 }
 
+// Set handler for 'removeListener' event
 inline void nova_events_EventEmitter_onRemoveListener(void* emitterPtr, void* handler) {
     if (!emitterPtr) [[unlikely]] return;
     ((EventEmitter*)emitterPtr)->removeListenerHandler =
         (void (*)(void*, const char*, void*))handler;
 }
 
+// Set handler for 'error' event
 void nova_events_EventEmitter_onError(void* emitterPtr, void* handler) {
     if (!emitterPtr || !handler) [[unlikely]] return;
 
     EventEmitter* emitter = (EventEmitter*)emitterPtr;
 
     auto& errorListeners = emitter->events["error"];
-    errorListeners.emplace_back(Listener((ListenerCallback)handler, 0, 0));
+    if (errorListeners.capacity() == 0) {
+        errorListeners.reserve(4);
+    }
+    errorListeners.emplace_back((ListenerCallback)handler, 0, 0);
 }
 
 // ============================================================================
-// Async Helpers & Utility Functions
+// Async Helpers
 // ============================================================================
 
+// events.once(emitter, name) - Returns promise-like (simplified)
 void* nova_events_once(void* emitterPtr, const char* eventName) {
+    // In a full implementation, this would return a Promise
+    // For now, just set up a one-time listener
+    // This is a placeholder for the async API
     (void)emitterPtr;
     (void)eventName;
     return nullptr;
 }
 
+// events.on(emitter, eventName) - Returns async iterator (simplified)
 void* nova_events_on(void* emitterPtr, const char* eventName) {
+    // In a full implementation, this would return an AsyncIterator
+    // For now, just a placeholder
     (void)emitterPtr;
     (void)eventName;
     return nullptr;
 }
 
+// ============================================================================
+// AbortSignal Support
+// ============================================================================
+
+// events.addAbortListener(signal, listener)
 void* nova_events_addAbortListener(void* signal, void* listener) {
+    // Add abort listener to signal
+    // This would integrate with AbortController/AbortSignal
     if (!signal || !listener) [[unlikely]] return nullptr;
+
+    // For now, just return a disposable object
     return listener;
 }
 
+// ============================================================================
+// Error Monitor Symbol
+// ============================================================================
+
+// Get error monitor symbol
 void* nova_events_errorMonitor() {
+    // Return a unique identifier for error monitoring
     static int errorMonitorSymbol = 0xE4404;
     return &errorMonitorSymbol;
 }
 
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+// Free event names array
 void nova_events_freeEventNames(char** names, int count) {
     if (names) [[likely]] {
         for (int i = 0; i < count; i++) {
@@ -686,12 +595,14 @@ void nova_events_freeEventNames(char** names, int count) {
     }
 }
 
+// Free listeners array
 inline void nova_events_freeListeners(void** listeners) {
     if (listeners) [[likely]] {
         free(listeners);
     }
 }
 
+// Cleanup all emitters
 void nova_events_cleanup() {
     for (auto& emitter : allEmitters) {
         delete emitter;
@@ -700,21 +611,24 @@ void nova_events_cleanup() {
 }
 
 // ============================================================================
-// EventTarget Interface
+// EventTarget Interface (Web API compatibility)
 // ============================================================================
 
+// addEventListener (Web API style)
 inline void nova_events_EventEmitter_addEventListener(void* emitterPtr, const char* type, void* listener, int options) {
-    if (options & 1) [[unlikely]] {
+    if (options & 1) [[unlikely]] {  // once option
         nova_events_EventEmitter_once(emitterPtr, type, listener);
     } else {
         nova_events_EventEmitter_on(emitterPtr, type, listener);
     }
 }
 
+// removeEventListener (Web API style)
 inline void nova_events_EventEmitter_removeEventListener(void* emitterPtr, const char* type, void* listener) {
     nova_events_EventEmitter_off(emitterPtr, type, listener);
 }
 
+// dispatchEvent (Web API style)
 inline int nova_events_EventEmitter_dispatchEvent(void* emitterPtr, const char* type, void* event) {
     return nova_events_EventEmitter_emit1(emitterPtr, type, event);
 }

@@ -486,11 +486,11 @@ std::vector<uint8_t> gzip_decompress(const uint8_t* data, size_t len) {
 // ============================================================================
 
 // Dictionary metadata
-static const uint32_t kDictNumWords[25] = {
+[[maybe_unused]] static const uint32_t kDictNumWords[25] = {
     0, 0, 0, 0, 1024, 1024, 1024, 1024, 1024, 1024, 512, 512,
     256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256
 };
-static const uint8_t kDictSizeBits[25] = {
+[[maybe_unused]] static const uint8_t kDictSizeBits[25] = {
     0, 0, 0, 0, 10, 10, 10, 10, 10, 10, 9, 9, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8
 };
 
@@ -821,7 +821,7 @@ std::vector<uint8_t> brotli_decompress(const uint8_t* data, size_t len) {
     (void)wbits; // Window size used for streaming, not needed for buffer mode
     int distRing[4] = {4, 11, 15, 16};
     int distRingIdx = 0;
-    uint8_t prevByte1 = 0, prevByte2 = 0;
+    [[maybe_unused]] uint8_t prevByte1 = 0, prevByte2 = 0;
 
     bool lastBlock = false;
     while (!lastBlock && !reader.eof()) {

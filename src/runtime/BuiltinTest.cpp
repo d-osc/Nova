@@ -469,7 +469,7 @@ void nova_test_toThrow(void* ctx) {
 }
 
 // Skip test
-void nova_test_skip(const char* name, void (*fn)()) {
+void nova_test_skip(const char* name, [[maybe_unused]] void (*fn)()) {
     if (!name) return;
 
     if (g_currentSuite) {

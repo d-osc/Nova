@@ -168,7 +168,7 @@ void* nova_proxy_get_handler(void* proxy_ptr) {
 // ============== Trap Implementations ==============
 
 // get trap - intercepts property access
-void* nova_proxy_trap_get(void* proxy_ptr, const char* prop, void* receiver) {
+void* nova_proxy_trap_get(void* proxy_ptr, const char* prop, [[maybe_unused]] void* receiver) {
     if (!proxy_ptr) return nullptr;
     NovaProxy* proxy = static_cast<NovaProxy*>(proxy_ptr);
 
@@ -188,7 +188,7 @@ void* nova_proxy_trap_get(void* proxy_ptr, const char* prop, void* receiver) {
 }
 
 // set trap - intercepts property assignment
-int64_t nova_proxy_trap_set(void* proxy_ptr, const char* prop, void* value, void* receiver) {
+int64_t nova_proxy_trap_set(void* proxy_ptr, const char* prop, void* value, [[maybe_unused]] void* receiver) {
     if (!proxy_ptr) return 0;
     NovaProxy* proxy = static_cast<NovaProxy*>(proxy_ptr);
 
@@ -357,7 +357,7 @@ void* nova_proxy_trap_getPrototypeOf(void* proxy_ptr) {
 }
 
 // setPrototypeOf trap
-int64_t nova_proxy_trap_setPrototypeOf(void* proxy_ptr, void* proto) {
+int64_t nova_proxy_trap_setPrototypeOf(void* proxy_ptr, [[maybe_unused]] void* proto) {
     if (!proxy_ptr) return 0;
     NovaProxy* proxy = static_cast<NovaProxy*>(proxy_ptr);
 
@@ -395,7 +395,7 @@ int64_t nova_proxy_trap_isExtensible(void* proxy_ptr) {
 }
 
 // apply trap - intercepts function calls
-void* nova_proxy_trap_apply(void* proxy_ptr, void* thisArg, void* args) {
+void* nova_proxy_trap_apply(void* proxy_ptr, [[maybe_unused]] void* thisArg, [[maybe_unused]] void* args) {
     if (!proxy_ptr) return nullptr;
     NovaProxy* proxy = static_cast<NovaProxy*>(proxy_ptr);
 
@@ -415,7 +415,7 @@ void* nova_proxy_trap_apply(void* proxy_ptr, void* thisArg, void* args) {
 }
 
 // construct trap - intercepts new operator
-void* nova_proxy_trap_construct(void* proxy_ptr, void* args, void* newTarget) {
+void* nova_proxy_trap_construct(void* proxy_ptr, [[maybe_unused]] void* args, [[maybe_unused]] void* newTarget) {
     if (!proxy_ptr) return nullptr;
     NovaProxy* proxy = static_cast<NovaProxy*>(proxy_ptr);
 

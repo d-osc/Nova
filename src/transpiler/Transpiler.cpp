@@ -1038,7 +1038,7 @@ std::string Transpiler::generateDeclaration(const std::string& source) {
     return result;
 }
 
-std::string Transpiler::generateDeclarationMap(const std::string& source, const std::string& dtsCode, const std::string& filename) {
+std::string Transpiler::generateDeclarationMap([[maybe_unused]] const std::string& source, const std::string& dtsCode, const std::string& filename) {
     std::stringstream ss;
     std::filesystem::path srcPath(filename);
 
@@ -1940,7 +1940,7 @@ TSConfig parseTSConfig(const std::string& jsonContent) {
     return config;
 }
 
-std::string serializeTSConfig(const TSConfig& config) {
+std::string serializeTSConfig([[maybe_unused]] const TSConfig& config) {
     // TODO: Implement serialization if needed
     return "{}";
 }

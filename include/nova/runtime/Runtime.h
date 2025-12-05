@@ -152,7 +152,7 @@ void* call_closure(Closure* closure, void** args, size_t arg_count);
 
 // Utility functions
 void print_value(void* value, TypeId type_id);
-void panic(const char* message);
+[[noreturn]] void panic(const char* message);
 void assert_impl(bool condition, const char* message);
 
 // Math functions

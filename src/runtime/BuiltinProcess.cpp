@@ -20,6 +20,7 @@
 #else
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/resource.h>
 #include <sys/utsname.h>
 #include <pwd.h>
@@ -430,7 +431,7 @@ void nova_process_abort() {
 }
 
 // process.kill(pid, signal)
-bool nova_process_kill(int pid, const char* signal) {
+bool nova_process_kill(int pid, [[maybe_unused]] const char* signal) {
 #ifdef _WIN32
     HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
     if (hProcess) {

@@ -13,6 +13,10 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <fcntl.h>
+#ifndef _WIN32
+#include <netinet/tcp.h>
+#endif
 
 // OPTIMIZED: Compiler hints for branch prediction
 #ifdef __GNUC__
@@ -119,7 +123,7 @@ static inline char* allocString(const std::string& str) {
 }
 
 // OPTIMIZED: Fast string allocation from C string with known length
-static inline char* allocStringFast(const char* str, size_t len) {
+[[maybe_unused]] static inline char* allocStringFast(const char* str, size_t len) {
     char* result = (char*)malloc(len + 1);
     if (result) {
         memcpy(result, str, len);
@@ -189,7 +193,7 @@ static inline uint32_t hashString(const char* str, size_t len) {
 }
 
 // OPTIMIZED: Intern common strings (content-type, etc.)
-HOT_FUNCTION static inline const char* internString(const char* str, size_t len) {
+[[maybe_unused]] HOT_FUNCTION static inline const char* internString(const char* str, size_t len) {
     uint32_t hash = hashString(str, len);
     size_t idx = hash % INTERN_TABLE_SIZE;
 
@@ -216,7 +220,7 @@ HOT_FUNCTION static inline const char* internString(const char* str, size_t len)
 }
 
 // OPTIMIZED: HOT function - called frequently
-HOT_FUNCTION static inline void* allocSmall(size_t size) {
+[[maybe_unused]] HOT_FUNCTION static inline void* allocSmall(size_t size) {
     if (UNLIKELY(size > SMALL_POOL_SIZE)) {
         return malloc(size);
     }
@@ -240,7 +244,7 @@ HOT_FUNCTION static inline void* allocSmall(size_t size) {
 }
 
 // OPTIMIZED: HOT function for deallocation
-HOT_FUNCTION static inline void freeSmall(void* ptr) {
+[[maybe_unused]] HOT_FUNCTION static inline void freeSmall(void* ptr) {
     if (UNLIKELY(!ptr)) return;
 
     // Check if ptr is in our pool

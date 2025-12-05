@@ -44,7 +44,7 @@ public:
     }
 
     // Get cached executable path for a source file
-    std::string getCachedExePath(const std::string& sourceFile, const std::string& sourceContent) {
+    std::string getCachedExePath([[maybe_unused]] const std::string& sourceFile, const std::string& sourceContent) {
         std::string hash = hashSource(sourceContent);
 
 #ifdef _WIN32

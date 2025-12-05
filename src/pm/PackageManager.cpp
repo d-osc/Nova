@@ -1557,7 +1557,7 @@ bool PackageManager::linkPackage(const std::string& packageName) {
 }
 
 // List installed packages
-std::vector<PackageInfo> PackageManager::list(bool includeTransitive) {
+std::vector<PackageInfo> PackageManager::list([[maybe_unused]] bool includeTransitive) {
     std::vector<PackageInfo> packages;
 
     std::filesystem::path basePath = std::filesystem::absolute(projectPath_);

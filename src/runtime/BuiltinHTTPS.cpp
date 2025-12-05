@@ -103,27 +103,27 @@ namespace {
 
 // TLS 1.3 Protocol Version
 constexpr uint16_t TLS_VERSION_1_3 = 0x0304;
-constexpr uint16_t TLS_VERSION_1_2 = 0x0303;
+[[maybe_unused]] constexpr uint16_t TLS_VERSION_1_2 = 0x0303;
 
 // TLS Record Types
 constexpr uint8_t TLS_CONTENT_TYPE_HANDSHAKE = 0x16;
 constexpr uint8_t TLS_CONTENT_TYPE_APPLICATION_DATA = 0x17;
-constexpr uint8_t TLS_CONTENT_TYPE_ALERT = 0x15;
+[[maybe_unused]] constexpr uint8_t TLS_CONTENT_TYPE_ALERT = 0x15;
 
 // TLS Handshake Types
-constexpr uint8_t TLS_HANDSHAKE_CLIENT_HELLO = 0x01;
+[[maybe_unused]] constexpr uint8_t TLS_HANDSHAKE_CLIENT_HELLO = 0x01;
 constexpr uint8_t TLS_HANDSHAKE_SERVER_HELLO = 0x02;
-constexpr uint8_t TLS_HANDSHAKE_CERTIFICATE = 0x0B;
-constexpr uint8_t TLS_HANDSHAKE_CERTIFICATE_VERIFY = 0x0F;
-constexpr uint8_t TLS_HANDSHAKE_FINISHED = 0x14;
+[[maybe_unused]] constexpr uint8_t TLS_HANDSHAKE_CERTIFICATE = 0x0B;
+[[maybe_unused]] constexpr uint8_t TLS_HANDSHAKE_CERTIFICATE_VERIFY = 0x0F;
+[[maybe_unused]] constexpr uint8_t TLS_HANDSHAKE_FINISHED = 0x14;
 
 // Cipher Suites (optimized for AES-NI)
 constexpr uint16_t TLS_AES_128_GCM_SHA256 = 0x1301;
-constexpr uint16_t TLS_AES_256_GCM_SHA384 = 0x1302;
-constexpr uint16_t TLS_CHACHA20_POLY1305_SHA256 = 0x1303;
+[[maybe_unused]] constexpr uint16_t TLS_AES_256_GCM_SHA384 = 0x1302;
+[[maybe_unused]] constexpr uint16_t TLS_CHACHA20_POLY1305_SHA256 = 0x1303;
 
 // Buffer sizes (cache-line aligned)
-constexpr size_t TLS_RECORD_MAX_SIZE = 16384;
+[[maybe_unused]] constexpr size_t TLS_RECORD_MAX_SIZE = 16384;
 constexpr size_t TLS_BUFFER_SIZE = 32768;  // 32KB for SIMD operations
 constexpr size_t TLS_SESSION_CACHE_SIZE = 10000;
 
@@ -850,7 +850,7 @@ HOT_FUNCTION int nova_https_Server_listen(void* serverPtr, int port, const char*
     // Accept loop
     while (server->running) {
         sockaddr_in client_addr;
-        int addr_len = sizeof(client_addr);
+        socklen_t addr_len = sizeof(client_addr);
 
         SOCKET client_socket = accept(server->listen_socket,
                                       (sockaddr*)&client_addr, &addr_len);

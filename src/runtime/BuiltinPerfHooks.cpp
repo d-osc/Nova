@@ -643,7 +643,7 @@ double nova_perf_Histogram_percentile(void* histogram, double percentile) {
     return h->mean * (percentile / 50.0);
 }
 
-void** nova_perf_Histogram_percentiles(void* histogram, int* count) {
+void** nova_perf_Histogram_percentiles([[maybe_unused]] void* histogram, int* count) {
     if (!count) return nullptr;
     *count = 0;
     return nullptr;  // Simplified

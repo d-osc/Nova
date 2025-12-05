@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <vector>
 #include <functional>
 
@@ -421,14 +422,14 @@ void nova_asyncdisposablestack_symbol_asyncDispose(void* stackPtr) {
 // ============================================================================
 
 // Check if an object has [Symbol.dispose]
-int64_t nova_has_symbol_dispose(void* objPtr) {
+int64_t nova_has_symbol_dispose([[maybe_unused]] void* objPtr) {
     // For now, we return 0 (false) as we don't have full object introspection
     // In a full implementation, this would check the object's properties
     return 0;
 }
 
 // Check if an object has [Symbol.asyncDispose]
-int64_t nova_has_symbol_asyncDispose(void* objPtr) {
+int64_t nova_has_symbol_asyncDispose([[maybe_unused]] void* objPtr) {
     return 0;
 }
 

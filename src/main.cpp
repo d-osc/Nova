@@ -351,8 +351,8 @@ int main(int argc, char** argv) {
     bool emitAsm = false;
     bool emitObj = false;
     bool verbose = false;
-    bool noGC = false;
-    bool noRuntime = false;
+    [[maybe_unused]] bool noGC = false;
+    [[maybe_unused]] bool noRuntime = false;
     bool noCache = false;
     bool showCacheStats = false;
     std::string targetTriple;

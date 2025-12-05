@@ -1,5 +1,6 @@
 #include "nova/MIR/MIRGen.h"
 #include "nova/MIR/MIRBuilder.h"
+#include <algorithm>
 #include <unordered_map>
 #include <iostream>
 #include <set>
@@ -1048,7 +1049,7 @@ private:
         builder_->createReturn();
     }
     
-void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mirBlock) {
         (void)hirInst;
 
         // Find target block from HIR
@@ -1282,7 +1283,7 @@ void generateBr(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         builder_->createAssign(dest, getFieldRValue);
     }
 
-    void generateSetField(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
+    void generateSetField(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mirBlock) {
         if (hirInst->operands.size() < 3) {
             std::cerr << "ERROR: SetField requires 3 operands (struct, index, value)" << std::endl;
             return;

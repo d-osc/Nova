@@ -425,7 +425,7 @@ void* nova_diagnostics_channel_TracingChannel_tracePromise(
 void nova_diagnostics_channel_TracingChannel_traceCallback(
     void* tcPtr,
     void (*fn)(void*, void (*)(void*, void*), void*),
-    int position,  // callback position in args
+    [[maybe_unused]] int position,  // callback position in args
     void* context,
     void* thisArg,
     void (*originalCallback)(void*, void*)

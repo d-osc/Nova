@@ -359,7 +359,7 @@ void nova_throw_cannot_convert_to_bigint(const char* value) {
     nova_throw_type_error(msg);
 }
 
-void nova_throw_invalid_instanceof(const char* name) {
+void nova_throw_invalid_instanceof([[maybe_unused]] const char* name) {
     char msg[256];
     snprintf(msg, sizeof(msg), "Right-hand side of 'instanceof' is not an object");
     nova_throw_type_error(msg);

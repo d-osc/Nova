@@ -374,8 +374,8 @@ public:
     HIRConstant* createNullConstant(HIRType* type);
     
 private:
-    HIRModule* module_;
-    HIRFunction* function_;
+    [[maybe_unused]] HIRModule* module_;
+    [[maybe_unused]] HIRFunction* function_;
     HIRBasicBlock* currentBlock_;
     
     uint32_t nextValueId_ = 0;

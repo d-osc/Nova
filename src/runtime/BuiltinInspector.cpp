@@ -207,7 +207,14 @@ void nova_inspector_waitForDebugger() {
         // Use select to wait for incoming connection with timeout
         fd_set readfds;
         FD_ZERO(&readfds);
+#ifdef _WIN32
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wsign-compare"
+#endif
         FD_SET(state->socket, &readfds);
+#ifdef _WIN32
+#pragma clang diagnostic pop
+#endif
 
         struct timeval tv;
         tv.tv_sec = 0;

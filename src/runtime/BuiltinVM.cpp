@@ -597,7 +597,8 @@ const char* nova_vm_measureMemory(int detailed) {
     static thread_local std::string result;
 
     // Get memory info (simplified)
-    size_t total = 0, jsMemory = 0;
+    [[maybe_unused]] size_t total = 0;
+    size_t jsMemory = 0;
 
 #ifdef _WIN32
     PROCESS_MEMORY_COUNTERS_EX pmc;

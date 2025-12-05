@@ -449,7 +449,7 @@ static const uint8_t aes_sbox[256] = {
 };
 
 // AES inverse S-box
-static const uint8_t aes_inv_sbox[256] = {
+[[maybe_unused]] static const uint8_t aes_inv_sbox[256] = {
     0x52,0x09,0x6a,0xd5,0x30,0x36,0xa5,0x38,0xbf,0x40,0xa3,0x9e,0x81,0xf3,0xd7,0xfb,
     0x7c,0xe3,0x39,0x82,0x9b,0x2f,0xff,0x87,0x34,0x8e,0x43,0x44,0xc4,0xde,0xe9,0xcb,
     0x54,0x7b,0x94,0x32,0xa6,0xc2,0x23,0x3d,0xee,0x4c,0x95,0x0b,0x42,0xfa,0xc3,0x4e,
@@ -589,7 +589,7 @@ static void hmac_sha256(const uint8_t* key, size_t keyLen,
     // If key > 64 bytes, hash it first
     if (keyLen > 64) {
         // Use SHA256 to reduce key
-        uint32_t state[8] = {
+        [[maybe_unused]] uint32_t state[8] = {
             0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
         };
@@ -872,7 +872,7 @@ void* nova_crypto_createDiffieHellman(int primeLength) {
     return ctx;
 }
 
-void* nova_crypto_createDiffieHellmanGroup(const char* groupName) {
+void* nova_crypto_createDiffieHellmanGroup([[maybe_unused]] const char* groupName) {
     // Use standard groups - default to 2048-bit
     return nova_crypto_createDiffieHellman(2048);
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NovaCompiler VERSION 1.0.0 LANGUAGES CXX)
+project(NovaCompiler VERSION 1.0.0 LANGUAGES C CXX)
 
 # Set C++20 standard
 set(CMAKE_CXX_STANDARD 20)
@@ -39,7 +39,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
         # /OPT:ICF - COMDAT folding
     else()
         # GCC/Clang aggressive optimization flags
-        add_compile_options(-O3 -march=native -ffast-math -finline-functions -funroll-loops)
+        if(WIN32)
+            # On Windows, skip -ffast-math as it conflicts with MSVC STL's infinity implementation
+            add_compile_options(-O3 -march=native -finline-functions -funroll-loops)
+        else()
+            add_compile_options(-O3 -march=native -ffast-math -finline-functions -funroll-loops)
+        endif()
     endif()
 endif()
 
@@ -233,16 +238,18 @@ target_link_libraries(novacore ${llvm_libs})
 # Create executable
 add_executable(nova src/main.cpp)
 target_include_directories(nova SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(nova novacore ${llvm_libs})
 
-# Try to use DIA SDK from VS 14.0 if available
-set(DIA_SDK_LIB "C:/Program Files (x86)/Microsoft Visual Studio 14.0/DIA SDK/lib/amd64/diaguids.lib")
-if(EXISTS "${DIA_SDK_LIB}")
-    target_link_libraries(nova novacore ${llvm_libs})
-    target_link_options(nova PRIVATE "/LIBPATH:C:/Program Files (x86)/Microsoft Visual Studio 14.0/DIA SDK/lib/amd64")
-else()
-    # diaguids.lib not essential for basic functionality - ignore if missing
-    target_link_libraries(nova novacore ${llvm_libs})
-    target_link_options(nova PRIVATE /IGNORE:4099 /FORCE:MULTIPLE)
+# Windows-specific DIA SDK configuration
+if(MSVC)
+    # Try to use DIA SDK from VS 14.0 if available
+    set(DIA_SDK_LIB "C:/Program Files (x86)/Microsoft Visual Studio 14.0/DIA SDK/lib/amd64/diaguids.lib")
+    if(EXISTS "${DIA_SDK_LIB}")
+        target_link_options(nova PRIVATE "/LIBPATH:C:/Program Files (x86)/Microsoft Visual Studio 14.0/DIA SDK/lib/amd64")
+    else()
+        # diaguids.lib not essential for basic functionality - ignore if missing
+        target_link_options(nova PRIVATE /IGNORE:4099 /FORCE:MULTIPLE)
+    endif()
 endif()
 
 # Install targets

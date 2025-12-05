@@ -90,7 +90,7 @@ void* nova_function_toString(void* funcPtr) {
 }
 
 // Function.prototype.call(thisArg, arg1, arg2, ...) - up to 8 args
-int64_t nova_function_call(void* funcPtr, void* thisArg,
+int64_t nova_function_call(void* funcPtr, [[maybe_unused]] void* thisArg,
                            int64_t a0, int64_t a1, int64_t a2, int64_t a3,
                            int64_t a4, int64_t a5, int64_t a6, int64_t a7,
                            int64_t argCount) {

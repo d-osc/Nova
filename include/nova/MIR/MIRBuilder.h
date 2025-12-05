@@ -10,7 +10,7 @@ class MIRBuilder {
 private:
     MIRFunction* currentFunction_;
     MIRBasicBlock* currentBlock_;
-    uint32_t tempCounter_;
+    [[maybe_unused]] uint32_t tempCounter_;
     
 public:
     explicit MIRBuilder(MIRFunction* func);

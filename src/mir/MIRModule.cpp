@@ -105,6 +105,8 @@ std::string MIRBinaryOpRValue::toString() const {
         case BinOp::BitXor: opStr = "BitXor"; break;
         case BinOp::Shl: opStr = "Shl"; break;
         case BinOp::Shr: opStr = "Shr"; break;
+        case BinOp::UShr: opStr = "UShr"; break;
+        case BinOp::Pow: opStr = "Pow"; break;
         case BinOp::Eq: opStr = "Eq"; break;
         case BinOp::Lt: opStr = "Lt"; break;
         case BinOp::Le: opStr = "Le"; break;

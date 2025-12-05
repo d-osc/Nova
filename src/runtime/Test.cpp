@@ -118,14 +118,14 @@ void* nova_expect_not(void* exp) {
 }
 
 // Matcher helpers
-static void reportFailure(const char* matcher, const char* expected, const char* actual) {
+static void reportFailure([[maybe_unused]] const char* matcher, const char* expected, const char* actual) {
     currentTestFailed = true;
     std::cout << "      " << RED << "Expected: " << RESET << expected << std::endl;
     std::cout << "      " << RED << "Received: " << RESET << actual << std::endl;
 }
 
 // .toBe(expected) - Strict equality
-void nova_expect_toBe_number(void* exp, double expected) {
+void nova_expect_toBe_number([[maybe_unused]] void* exp, double expected) {
     bool pass = (currentExpect.numValue == expected);
     if (currentExpect.negated) pass = !pass;
 
@@ -135,7 +135,7 @@ void nova_expect_toBe_number(void* exp, double expected) {
     }
 }
 
-void nova_expect_toBe_string(void* exp, const char* expected) {
+void nova_expect_toBe_string([[maybe_unused]] void* exp, const char* expected) {
     bool pass = false;
     if (currentExpect.strValue && expected) {
         pass = (strcmp(currentExpect.strValue, expected) == 0);
@@ -150,7 +150,7 @@ void nova_expect_toBe_string(void* exp, const char* expected) {
     }
 }
 
-void nova_expect_toBe_bool(void* exp, int expected) {
+void nova_expect_toBe_bool([[maybe_unused]] void* exp, int expected) {
     bool pass = (currentExpect.boolValue == (expected != 0));
     if (currentExpect.negated) pass = !pass;
 
@@ -174,7 +174,7 @@ void nova_expect_toEqual_bool(void* exp, int expected) {
 }
 
 // .toBeTruthy()
-void nova_expect_toBeTruthy(void* exp) {
+void nova_expect_toBeTruthy([[maybe_unused]] void* exp) {
     bool pass = false;
     if (currentExpect.isNumber) {
         pass = (currentExpect.numValue != 0);
@@ -192,7 +192,7 @@ void nova_expect_toBeTruthy(void* exp) {
 }
 
 // .toBeFalsy()
-void nova_expect_toBeFalsy(void* exp) {
+void nova_expect_toBeFalsy([[maybe_unused]] void* exp) {
     bool pass = false;
     if (currentExpect.isNumber) {
         pass = (currentExpect.numValue == 0);
@@ -210,7 +210,7 @@ void nova_expect_toBeFalsy(void* exp) {
 }
 
 // .toBeNull()
-void nova_expect_toBeNull(void* exp) {
+void nova_expect_toBeNull([[maybe_unused]] void* exp) {
     bool pass = currentExpect.isNull;
     if (currentExpect.negated) pass = !pass;
 
@@ -221,7 +221,7 @@ void nova_expect_toBeNull(void* exp) {
 }
 
 // .toBeDefined()
-void nova_expect_toBeDefined(void* exp) {
+void nova_expect_toBeDefined([[maybe_unused]] void* exp) {
     bool pass = !currentExpect.isNull;
     if (currentExpect.negated) pass = !pass;
 
@@ -237,7 +237,7 @@ void nova_expect_toBeUndefined(void* exp) {
 }
 
 // .toBeGreaterThan(expected)
-void nova_expect_toBeGreaterThan(void* exp, double expected) {
+void nova_expect_toBeGreaterThan([[maybe_unused]] void* exp, double expected) {
     bool pass = (currentExpect.numValue > expected);
     if (currentExpect.negated) pass = !pass;
 
@@ -249,7 +249,7 @@ void nova_expect_toBeGreaterThan(void* exp, double expected) {
 }
 
 // .toBeGreaterThanOrEqual(expected)
-void nova_expect_toBeGreaterThanOrEqual(void* exp, double expected) {
+void nova_expect_toBeGreaterThanOrEqual([[maybe_unused]] void* exp, double expected) {
     bool pass = (currentExpect.numValue >= expected);
     if (currentExpect.negated) pass = !pass;
 
@@ -261,7 +261,7 @@ void nova_expect_toBeGreaterThanOrEqual(void* exp, double expected) {
 }
 
 // .toBeLessThan(expected)
-void nova_expect_toBeLessThan(void* exp, double expected) {
+void nova_expect_toBeLessThan([[maybe_unused]] void* exp, double expected) {
     bool pass = (currentExpect.numValue < expected);
     if (currentExpect.negated) pass = !pass;
 
@@ -273,7 +273,7 @@ void nova_expect_toBeLessThan(void* exp, double expected) {
 }
 
 // .toBeLessThanOrEqual(expected)
-void nova_expect_toBeLessThanOrEqual(void* exp, double expected) {
+void nova_expect_toBeLessThanOrEqual([[maybe_unused]] void* exp, double expected) {
     bool pass = (currentExpect.numValue <= expected);
     if (currentExpect.negated) pass = !pass;
 
@@ -285,7 +285,7 @@ void nova_expect_toBeLessThanOrEqual(void* exp, double expected) {
 }
 
 // .toBeCloseTo(expected, precision)
-void nova_expect_toBeCloseTo(void* exp, double expected, int precision) {
+void nova_expect_toBeCloseTo([[maybe_unused]] void* exp, double expected, int precision) {
     double diff = std::abs(currentExpect.numValue - expected);
     double threshold = std::pow(10, -precision) / 2;
     bool pass = (diff < threshold);
@@ -299,7 +299,7 @@ void nova_expect_toBeCloseTo(void* exp, double expected, int precision) {
 }
 
 // .toContain(item) - For strings
-void nova_expect_toContain(void* exp, const char* item) {
+void nova_expect_toContain([[maybe_unused]] void* exp, const char* item) {
     bool pass = false;
     if (currentExpect.strValue && item) {
         pass = (strstr(currentExpect.strValue, item) != nullptr);
@@ -314,7 +314,7 @@ void nova_expect_toContain(void* exp, const char* item) {
 }
 
 // .toHaveLength(length)
-void nova_expect_toHaveLength(void* exp, int length) {
+void nova_expect_toHaveLength([[maybe_unused]] void* exp, int length) {
     int actualLength = 0;
     if (currentExpect.strValue) {
         actualLength = strlen(currentExpect.strValue);
@@ -335,7 +335,7 @@ void nova_expect_toMatch(void* exp, const char* pattern) {
 }
 
 // .toThrow() - Check if function throws
-void nova_expect_toThrow(void* exp) {
+void nova_expect_toThrow([[maybe_unused]] void* exp) {
     // This would need special handling - mark as pass for now
     // In real implementation, fn() would be stored and called here
 }

@@ -104,7 +104,9 @@ char* nova_child_process_execSync(const char* command, int* exitCode) {
         return nullptr;
     }
 
-    STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+    STARTUPINFOA si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(STARTUPINFOA);
     si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.hStdOutput = hWritePipe;
     si.hStdError = hWritePipe;
@@ -238,7 +240,9 @@ void* nova_child_process_spawn(const char* command, const char** args, int argCo
     SetHandleInformation(hStdoutRead, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(hStderrRead, HANDLE_FLAG_INHERIT, 0);
 
-    STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+    STARTUPINFOA si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(STARTUPINFOA);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = hStdinRead;
     si.hStdOutput = hStdoutWrite;

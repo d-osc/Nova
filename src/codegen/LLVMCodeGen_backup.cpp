@@ -26,8 +26,6 @@
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
-// ==================== LOOP OPTIMIZATION INCLUDES ====================
-// Note: Using legacy pass headers compatible with LLVM 16
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Scalar/Reassociate.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
@@ -322,16 +320,6 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         FPM->add(llvm::createReassociatePass());
         FPM->add(llvm::createGVNPass());
         FPM->add(llvm::createCFGSimplificationPass());
-
-        // ==================== LOOP OPTIMIZATIONS (Level 1) ====================
-        // OPTIMIZATION 1: Loop Rotation - Converts loops to do-while form for better optimization
-        FPM->add(llvm::createLoopRotatePass());
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added LoopRotatePass" << std::endl;
-
-        // OPTIMIZATION 2: LICM - Move loop-invariant code out of loops
-        FPM->add(llvm::createLICMPass());
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added LICM (Loop Invariant Code Motion)" << std::endl;
-
         // We're now allowing CFGSimplificationPass since it doesn't affect loop body operations
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added CFGSimplificationPass for basic optimizations" << std::endl;
     }
@@ -342,12 +330,6 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         // incorrect optimizations with generator pointer handling
         FPM->add(llvm::createDeadCodeEliminationPass());
         FPM->add(llvm::createCFGSimplificationPass());
-
-        // ==================== LOOP OPTIMIZATIONS (Level 2) ====================
-        // OPTIMIZATION 3: Loop Simplification - Additional loop transformations
-        // Note: Using available pass creators from LLVM 16
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loop optimizations enabled at level 2" << std::endl;
-
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added DeadCodeEliminationPass and CFGSimplificationPass" << std::endl;
     }
     
@@ -357,16 +339,6 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         FPM->add(llvm::createInstructionCombiningPass());
         FPM->add(llvm::createCFGSimplificationPass());
         FPM->add(llvm::createAlwaysInlinerLegacyPass());
-
-        // ==================== LOOP OPTIMIZATIONS (Level 3 - AGGRESSIVE) ====================
-        // OPTIMIZATION 6: Loop Unrolling - Unroll small loops for better performance
-        FPM->add(llvm::createLoopUnrollPass());
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added LoopUnrollPass" << std::endl;
-
-        // Run LICM again after unrolling for better cleanup
-        FPM->add(llvm::createLICMPass());
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added LICM pass after unrolling" << std::endl;
-
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added advanced optimizations and function inlining" << std::endl;
     }
     

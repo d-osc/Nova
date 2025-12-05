@@ -422,7 +422,7 @@ char** nova_dns_resolve(const char* hostname, const char* rrtype, int* count, in
 // dns.resolveCname() - Resolve CNAME records
 // ============================================================================
 
-char** nova_dns_resolveCname(const char* hostname, int* count, int* errorCode) {
+char** nova_dns_resolveCname([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -474,7 +474,7 @@ struct MxRecord {
     int priority;
 };
 
-void* nova_dns_resolveMx(const char* hostname, int* count, int* errorCode) {
+void* nova_dns_resolveMx([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -532,7 +532,7 @@ int nova_dns_MxRecord_priority(void* record) {
 // dns.resolveNs() - Resolve NS records
 // ============================================================================
 
-char** nova_dns_resolveNs(const char* hostname, int* count, int* errorCode) {
+char** nova_dns_resolveNs([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -577,7 +577,7 @@ char** nova_dns_resolveNs(const char* hostname, int* count, int* errorCode) {
 // dns.resolveTxt() - Resolve TXT records
 // ============================================================================
 
-char** nova_dns_resolveTxt(const char* hostname, int* count, int* errorCode) {
+char** nova_dns_resolveTxt([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -629,7 +629,7 @@ struct SrvRecord {
     int weight;
 };
 
-void* nova_dns_resolveSrv(const char* hostname, int* count, int* errorCode) {
+void* nova_dns_resolveSrv([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -698,7 +698,7 @@ int nova_dns_SrvRecord_weight(void* record) {
 // dns.resolvePtr() - Resolve PTR records (reverse DNS)
 // ============================================================================
 
-char** nova_dns_resolvePtr(const char* ip, int* count, int* errorCode) {
+char** nova_dns_resolvePtr([[maybe_unused]] const char* ip, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -776,7 +776,7 @@ struct SoaRecord {
     int minttl;
 };
 
-void* nova_dns_resolveSoa(const char* hostname, int* errorCode) {
+void* nova_dns_resolveSoa([[maybe_unused]] const char* hostname, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -859,7 +859,7 @@ struct CaaRecord {
     char* value;
 };
 
-void* nova_dns_resolveCaa(const char* hostname, int* count, int* errorCode) {
+void* nova_dns_resolveCaa([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -931,7 +931,7 @@ struct NaptrRecord {
     int preference;
 };
 
-void* nova_dns_resolveNaptr(const char* hostname, int* count, int* errorCode) {
+void* nova_dns_resolveNaptr([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -1071,7 +1071,7 @@ struct AnyRecord {
     int ttl;           // TTL in seconds
 };
 
-void* nova_dns_resolveAny(const char* hostname, int* count, int* errorCode) {
+void* nova_dns_resolveAny([[maybe_unused]] const char* hostname, int* count, int* errorCode) {
 #ifdef _WIN32
     initWinsock();
 
@@ -1146,7 +1146,7 @@ void* nova_dns_resolveAny(const char* hostname, int* count, int* errorCode) {
                 results[i].typeName = allocString("TXT");
                 break;
             case DNS_TYPE_SOA:
-                snprintf(buf, sizeof(buf), "%S %S %u %u %u %u %u",
+                snprintf(buf, sizeof(buf), "%S %S %lu %lu %lu %lu %lu",
                     p->Data.SOA.pNamePrimaryServer,
                     p->Data.SOA.pNameAdministrator,
                     p->Data.SOA.dwSerialNo,

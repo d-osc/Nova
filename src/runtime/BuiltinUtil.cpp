@@ -220,13 +220,15 @@ void nova_util_debuglog(const char* section, const char* msg) {
 
     std::string sec = section;
     std::transform(sec.begin(), sec.end(), sec.begin(), ::toupper);
-    fprintf(stderr, "%s %d: %s\n", sec.c_str(),
 #ifdef _WIN32
-            GetCurrentProcessId(),
-#else
-            getpid(),
-#endif
+    fprintf(stderr, "%s %lu: %s\n", sec.c_str(),
+            (unsigned long)GetCurrentProcessId(),
             msg ? msg : "");
+#else
+    fprintf(stderr, "%s %d: %s\n", sec.c_str(),
+            getpid(),
+            msg ? msg : "");
+#endif
 }
 
 // ============================================================================

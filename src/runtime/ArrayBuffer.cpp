@@ -75,7 +75,7 @@ void* nova_arraybuffer_slice(void* bufferPtr, int64_t begin, int64_t end) {
 }
 
 // ArrayBuffer.isView(arg) - checks if arg is a TypedArray or DataView
-int64_t nova_arraybuffer_isView(void* arg) {
+int64_t nova_arraybuffer_isView([[maybe_unused]] void* arg) {
     // This would check if arg is a TypedArray or DataView
     // For now, return 0 (false) - will be enhanced when TypedArrays are added
     return 0;

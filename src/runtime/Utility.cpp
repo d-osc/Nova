@@ -5,6 +5,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <thread>
 #include <unordered_map>
 #include <string>
 #include <csetjmp>
@@ -12,8 +14,8 @@
 // Global exception handling state
 static thread_local bool g_exception_pending = false;
 static thread_local int64_t g_exception_value = 0;
-static thread_local jmp_buf* g_exception_handler = nullptr;
-static thread_local jmp_buf g_exception_buffer;  // The actual buffer
+[[maybe_unused]] static thread_local jmp_buf* g_exception_handler = nullptr;
+[[maybe_unused]] static thread_local jmp_buf g_exception_buffer;  // The actual buffer
 static thread_local int g_try_depth = 0;  // Track try nesting
 
 namespace nova {

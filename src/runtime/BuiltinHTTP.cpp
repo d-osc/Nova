@@ -1520,10 +1520,10 @@ int nova_http_Server_acceptOne(void* serverPtr, int timeoutMs) {
     }
 
     // Keep-Alive: Set socket timeout and handle multiple requests
-    struct timeval tv;
-    tv.tv_sec = 5;   // 5 seconds idle timeout
-    tv.tv_usec = 0;
-    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    struct timeval tv2;
+    tv2.tv_sec = 5;   // 5 seconds idle timeout
+    tv2.tv_usec = 0;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv2, sizeof(tv2));
 
     // Loop to handle multiple requests on this connection
     int requestsOnConnection = 1;  // Already handled first request

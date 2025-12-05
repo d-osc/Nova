@@ -264,7 +264,11 @@ int nova_buffer_isEncoding(const char* encoding) {
     const char* valid[] = {"utf8", "utf-8", "ascii", "binary", "base64",
                            "hex", "latin1", "ucs2", "ucs-2", "utf16le", "utf-16le"};
     for (int i = 0; i < 11; i++) {
+#ifdef _WIN32
         if (_stricmp(encoding, valid[i]) == 0) return 1;
+#else
+        if (strcasecmp(encoding, valid[i]) == 0) return 1;
+#endif
     }
     return 0;
 }

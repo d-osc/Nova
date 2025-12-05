@@ -863,7 +863,7 @@ const char* nova_string_toLocaleUpperCase(const char* str) {
 // String.prototype.normalize(form) - ES2015
 // Unicode normalization forms: NFC, NFD, NFKC, NFKD
 // Simplified implementation: returns original string (full Unicode normalization requires ICU)
-const char* nova_string_normalize(const char* str, const char* form) {
+const char* nova_string_normalize(const char* str, [[maybe_unused]] const char* form) {
     if (!str) return "";
 
     // For a full implementation, we would use ICU library
@@ -879,7 +879,7 @@ const char* nova_string_normalize(const char* str, const char* form) {
 // String.raw(template, ...substitutions) - ES2015
 // Template literal tag function that returns raw string
 // Simplified: concatenates strings array with substitutions
-const char* nova_string_raw(void* stringsArray, void* subsArray) {
+const char* nova_string_raw([[maybe_unused]] void* stringsArray, [[maybe_unused]] void* subsArray) {
     // For AOT compiler, this is simplified
     // In practice, String.raw is usually used with template literals
     // which are handled at compile time
@@ -1065,7 +1065,7 @@ const char* nova_i64_to_string(int64_t value) {
         return "";
     }
 
-    int written = std::snprintf(result, 24, "%lld", value);
+    int written = std::snprintf(result, 24, "%ld", static_cast<long>(value));
     if (written < 0) {
         std::cerr << "ERROR: snprintf failed in nova_i64_to_string" << std::endl;
         std::free(result);

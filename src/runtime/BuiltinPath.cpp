@@ -205,7 +205,7 @@ char* nova_path_join(const char** parts, int count) {
     if (count == 1 && parts[0]) return allocString(parts[0], strlen(parts[0]));
 
     // Estimate total length to reduce reallocations
-    size_t totalLen = 0;
+    [[maybe_unused]] size_t totalLen = 0;
     for (int i = 0; i < count; i++) {
         if (parts[i]) {
             totalLen += strlen(parts[i]) + 1; // +1 for separator

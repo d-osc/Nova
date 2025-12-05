@@ -24,7 +24,7 @@ struct NovaNumberFormat {
     int64_t useGrouping;   // Boolean: use thousand separators
 };
 
-void* nova_intl_numberformat_create(const char* locale, const char* options) {
+void* nova_intl_numberformat_create(const char* locale, [[maybe_unused]] const char* options) {
     NovaNumberFormat* fmt = static_cast<NovaNumberFormat*>(malloc(sizeof(NovaNumberFormat)));
     fmt->locale = locale ? strdup(locale) : strdup("en");
     fmt->style = strdup("decimal");
@@ -66,20 +66,20 @@ void nova_intl_numberformat_free(void* fmtPtr) {
 }
 
 // formatToParts returns JSON array of parts
-void* nova_intl_numberformat_formattoparts(void* fmtPtr, double value) {
+void* nova_intl_numberformat_formattoparts([[maybe_unused]] void* fmtPtr, double value) {
     char buffer[512];
     snprintf(buffer, sizeof(buffer), "[{\"type\":\"integer\",\"value\":\"%g\"}]", value);
     return strdup(buffer);
 }
 
 // formatRange for number ranges
-void* nova_intl_numberformat_formatrange(void* fmtPtr, double start, double end) {
+void* nova_intl_numberformat_formatrange([[maybe_unused]] void* fmtPtr, double start, double end) {
     char buffer[256];
     snprintf(buffer, sizeof(buffer), "%g – %g", start, end);
     return strdup(buffer);
 }
 
-void* nova_intl_numberformat_formatrangetoparts(void* fmtPtr, double start, double end) {
+void* nova_intl_numberformat_formatrangetoparts([[maybe_unused]] void* fmtPtr, double start, double end) {
     char buffer[512];
     snprintf(buffer, sizeof(buffer),
         "[{\"type\":\"integer\",\"value\":\"%g\",\"source\":\"startRange\"},"
@@ -103,7 +103,7 @@ struct NovaDateTimeFormat {
     char* timeZone;
 };
 
-void* nova_intl_datetimeformat_create(const char* locale, const char* options) {
+void* nova_intl_datetimeformat_create(const char* locale, [[maybe_unused]] const char* options) {
     NovaDateTimeFormat* fmt = static_cast<NovaDateTimeFormat*>(malloc(sizeof(NovaDateTimeFormat)));
     fmt->locale = locale ? strdup(locale) : strdup("en");
     fmt->dateStyle = strdup("medium");
@@ -153,7 +153,7 @@ void nova_intl_datetimeformat_free(void* fmtPtr) {
     }
 }
 
-void* nova_intl_datetimeformat_formattoparts(void* fmtPtr, int64_t timestamp) {
+void* nova_intl_datetimeformat_formattoparts([[maybe_unused]] void* fmtPtr, int64_t timestamp) {
     time_t t = static_cast<time_t>(timestamp / 1000);
     struct tm* tm_info = gmtime(&t);
     if (!tm_info) return strdup("[]");
@@ -169,7 +169,7 @@ void* nova_intl_datetimeformat_formattoparts(void* fmtPtr, int64_t timestamp) {
     return strdup(buffer);
 }
 
-void* nova_intl_datetimeformat_formatrange(void* fmtPtr, int64_t start, int64_t end) {
+void* nova_intl_datetimeformat_formatrange([[maybe_unused]] void* fmtPtr, int64_t start, int64_t end) {
     time_t t1 = static_cast<time_t>(start / 1000);
     time_t t2 = static_cast<time_t>(end / 1000);
     struct tm* tm1 = gmtime(&t1);
@@ -187,7 +187,7 @@ void* nova_intl_datetimeformat_formatrange(void* fmtPtr, int64_t start, int64_t 
     return strdup(buffer);
 }
 
-void* nova_intl_datetimeformat_formatrangetoparts(void* fmtPtr, int64_t start, int64_t end) {
+void* nova_intl_datetimeformat_formatrangetoparts([[maybe_unused]] void* fmtPtr, [[maybe_unused]] int64_t start, [[maybe_unused]] int64_t end) {
     char buffer[512];
     snprintf(buffer, sizeof(buffer),
         "[{\"type\":\"month\",\"value\":\"1\",\"source\":\"startRange\"},"
@@ -211,7 +211,7 @@ struct NovaCollator {
     int64_t numeric;    // Boolean: numeric collation
 };
 
-void* nova_intl_collator_create(const char* locale, const char* options) {
+void* nova_intl_collator_create(const char* locale, [[maybe_unused]] const char* options) {
     NovaCollator* col = static_cast<NovaCollator*>(malloc(sizeof(NovaCollator)));
     col->locale = locale ? strdup(locale) : strdup("en");
     col->usage = strdup("sort");
@@ -220,7 +220,7 @@ void* nova_intl_collator_create(const char* locale, const char* options) {
     return col;
 }
 
-int64_t nova_intl_collator_compare(void* colPtr, const char* str1, const char* str2) {
+int64_t nova_intl_collator_compare([[maybe_unused]] void* colPtr, const char* str1, const char* str2) {
     int result = strcmp(str1 ? str1 : "", str2 ? str2 : "");
     if (result < 0) return -1;
     if (result > 0) return 1;
@@ -255,7 +255,7 @@ struct NovaPluralRules {
     char* type;  // "cardinal" or "ordinal"
 };
 
-void* nova_intl_pluralrules_create(const char* locale, const char* options) {
+void* nova_intl_pluralrules_create(const char* locale, [[maybe_unused]] const char* options) {
     NovaPluralRules* rules = static_cast<NovaPluralRules*>(malloc(sizeof(NovaPluralRules)));
     rules->locale = locale ? strdup(locale) : strdup("en");
     rules->type = strdup("cardinal");
@@ -294,7 +294,7 @@ void nova_intl_pluralrules_free(void* rulesPtr) {
     }
 }
 
-void* nova_intl_pluralrules_selectrange(void* rulesPtr, double start, double end) {
+void* nova_intl_pluralrules_selectrange(void* rulesPtr, [[maybe_unused]] double start, double end) {
     // For ranges, return category based on end value
     return nova_intl_pluralrules_select(rulesPtr, end);
 }
@@ -313,7 +313,7 @@ struct NovaRelativeTimeFormat {
     char* numeric;
 };
 
-void* nova_intl_relativetimeformat_create(const char* locale, const char* options) {
+void* nova_intl_relativetimeformat_create(const char* locale, [[maybe_unused]] const char* options) {
     NovaRelativeTimeFormat* fmt = static_cast<NovaRelativeTimeFormat*>(malloc(sizeof(NovaRelativeTimeFormat)));
     fmt->locale = locale ? strdup(locale) : strdup("en");
     fmt->style = strdup("long");
@@ -321,7 +321,7 @@ void* nova_intl_relativetimeformat_create(const char* locale, const char* option
     return fmt;
 }
 
-void* nova_intl_relativetimeformat_format(void* fmtPtr, double value, const char* unit) {
+void* nova_intl_relativetimeformat_format([[maybe_unused]] void* fmtPtr, double value, const char* unit) {
     char buffer[256];
     int64_t absVal = static_cast<int64_t>(value < 0 ? -value : value);
     const char* unitStr = unit ? unit : "second";
@@ -362,7 +362,7 @@ void nova_intl_relativetimeformat_free(void* fmtPtr) {
     }
 }
 
-void* nova_intl_relativetimeformat_formattoparts(void* fmtPtr, double value, const char* unit) {
+void* nova_intl_relativetimeformat_formattoparts([[maybe_unused]] void* fmtPtr, double value, const char* unit) {
     int64_t absVal = static_cast<int64_t>(value < 0 ? -value : value);
     char buffer[512];
 
@@ -399,7 +399,7 @@ struct NovaListFormat {
     char* style;
 };
 
-void* nova_intl_listformat_create(const char* locale, const char* options) {
+void* nova_intl_listformat_create(const char* locale, [[maybe_unused]] const char* options) {
     NovaListFormat* fmt = static_cast<NovaListFormat*>(malloc(sizeof(NovaListFormat)));
     fmt->locale = locale ? strdup(locale) : strdup("en");
     fmt->type = strdup("conjunction");
@@ -636,55 +636,55 @@ void* nova_intl_locale_minimize(void* locPtr) {
     return strdup(loc->language);
 }
 
-void* nova_intl_locale_get_calendar(void* locPtr) {
+void* nova_intl_locale_get_calendar([[maybe_unused]] void* locPtr) {
     return strdup("gregory");
 }
 
-void* nova_intl_locale_get_casefirst(void* locPtr) {
+void* nova_intl_locale_get_casefirst([[maybe_unused]] void* locPtr) {
     return strdup("false");
 }
 
-void* nova_intl_locale_get_collation(void* locPtr) {
+void* nova_intl_locale_get_collation([[maybe_unused]] void* locPtr) {
     return strdup("default");
 }
 
-void* nova_intl_locale_get_hourcycle(void* locPtr) {
+void* nova_intl_locale_get_hourcycle([[maybe_unused]] void* locPtr) {
     return strdup("h23");
 }
 
-void* nova_intl_locale_get_numberingsystem(void* locPtr) {
+void* nova_intl_locale_get_numberingsystem([[maybe_unused]] void* locPtr) {
     return strdup("latn");
 }
 
-int64_t nova_intl_locale_get_numeric(void* locPtr) {
+int64_t nova_intl_locale_get_numeric([[maybe_unused]] void* locPtr) {
     return 0;
 }
 
-void* nova_intl_locale_get_calendars(void* locPtr) {
+void* nova_intl_locale_get_calendars([[maybe_unused]] void* locPtr) {
     return strdup("gregory");
 }
 
-void* nova_intl_locale_get_collations(void* locPtr) {
+void* nova_intl_locale_get_collations([[maybe_unused]] void* locPtr) {
     return strdup("default");
 }
 
-void* nova_intl_locale_get_hourcycles(void* locPtr) {
+void* nova_intl_locale_get_hourcycles([[maybe_unused]] void* locPtr) {
     return strdup("h23,h12");
 }
 
-void* nova_intl_locale_get_numberingsystems(void* locPtr) {
+void* nova_intl_locale_get_numberingsystems([[maybe_unused]] void* locPtr) {
     return strdup("latn");
 }
 
-void* nova_intl_locale_get_timezones(void* locPtr) {
+void* nova_intl_locale_get_timezones([[maybe_unused]] void* locPtr) {
     return strdup("UTC");
 }
 
-void* nova_intl_locale_get_textinfo(void* locPtr) {
+void* nova_intl_locale_get_textinfo([[maybe_unused]] void* locPtr) {
     return strdup("ltr");
 }
 
-void* nova_intl_locale_get_weekinfo(void* locPtr) {
+void* nova_intl_locale_get_weekinfo([[maybe_unused]] void* locPtr) {
     return strdup("{\"firstDay\":1,\"weekend\":[6,7],\"minimalDays\":1}");
 }
 
@@ -835,7 +835,7 @@ void* nova_intl_durationformat_format(void* fmtPtr, int64_t hours, int64_t minut
     return strdup(buffer);
 }
 
-void* nova_intl_durationformat_formattoparts(void* fmtPtr, int64_t hours, int64_t minutes, int64_t seconds) {
+void* nova_intl_durationformat_formattoparts([[maybe_unused]] void* fmtPtr, int64_t hours, int64_t minutes, int64_t seconds) {
     char buffer[512];
     snprintf(buffer, sizeof(buffer),
         "[{\"type\":\"hours\",\"value\":\"%lld\"},"

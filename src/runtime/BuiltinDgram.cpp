@@ -37,7 +37,7 @@ extern "C" {
 // Winsock initialization (Windows only)
 // ============================================================================
 
-static std::atomic<bool> wsaInitialized{false};
+[[maybe_unused]] static std::atomic<bool> wsaInitialized{false};
 
 static void ensureWsaInitialized() {
 #ifdef _WIN32
@@ -208,7 +208,7 @@ int nova_dgram_bind(void* socketPtr, int port, const char* address) {
 // Bind with exclusive flag
 int nova_dgram_bindExclusive(void* socketPtr, int port, const char* address, int exclusive) {
     if (!socketPtr) return -1;
-    NovaDgramSocket* sock = (NovaDgramSocket*)socketPtr;
+    [[maybe_unused]] NovaDgramSocket* sock = (NovaDgramSocket*)socketPtr;
 
 #ifdef _WIN32
     if (exclusive) {
@@ -629,7 +629,7 @@ int nova_dgram_getSendQueueSize(void* socketPtr) {
 #ifdef _WIN32
     return 0;  // Not directly available on Windows
 #else
-    NovaDgramSocket* sock = (NovaDgramSocket*)socketPtr;
+    [[maybe_unused]] NovaDgramSocket* sock = (NovaDgramSocket*)socketPtr;
     int size = 0;
 #ifdef SIOCOUTQ
     ioctl(sock->fd, SIOCOUTQ, &size);

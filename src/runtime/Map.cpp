@@ -408,7 +408,7 @@ void* nova_map_entries(void* mapPtr) {
 // Note: Callback support requires function pointer handling
 // For now, this is a placeholder that iterates internally
 // =========================================
-void nova_map_foreach(void* mapPtr, void* callback) {
+void nova_map_foreach(void* mapPtr, [[maybe_unused]] void* callback) {
     if (!mapPtr) return;
     // NovaMap* map = static_cast<NovaMap*>(mapPtr);
     // Full callback implementation would require function pointer invocation
@@ -419,7 +419,7 @@ void nova_map_foreach(void* mapPtr, void* callback) {
 // Map.groupBy (ES2024) - Static method
 // Groups items by key returned from callback
 // =========================================
-void* nova_map_groupby(void* iterable, void* callback) {
+void* nova_map_groupby([[maybe_unused]] void* iterable, [[maybe_unused]] void* callback) {
     // Creates a new Map where keys are results of callback
     // and values are arrays of elements with that key
     void* result = nova_map_create();

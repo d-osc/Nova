@@ -507,8 +507,8 @@ Token Lexer::lexOperator() {
         case '?':
             if (currentChar() == '?') {
                 advance();
-                if (currentChar() == '=') { advance(); return Token(TokenType::QuestionQuestionEqual, "??=", loc); }
-                return Token(TokenType::QuestionQuestion, "??", loc);
+                if (currentChar() == '=') { advance(); return Token(TokenType::QuestionQuestionEqual, "?\?=", loc); }
+                return Token(TokenType::QuestionQuestion, "?\?", loc);
             }
             if (currentChar() == '.') { advance(); return Token(TokenType::QuestionDot, "?.", loc); }
             return Token(TokenType::Question, "?", loc);

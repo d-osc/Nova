@@ -32,6 +32,7 @@
 #include <utime.h>
 #include <sys/uio.h>  // For readv/writev
 #include <sys/time.h> // For lutimes
+#include <sys/inotify.h>  // For file watching
 #endif
 
 namespace nova {
@@ -112,8 +113,13 @@ static NovaStats* createStats(const std::filesystem::path& path, bool followSyml
     // Get timestamps
     auto ftime = std::filesystem::last_write_time(path, ec);
     if (!ec) {
-        auto sctp = std::chrono::time_point_cast<std::chrono::milliseconds>(
-            std::chrono::clock_cast<std::chrono::system_clock>(ftime));
+        // Manual conversion from file_time to system_clock without clock_cast
+        auto ftimeSinceEpoch = ftime.time_since_epoch();
+        auto systemNow = std::chrono::system_clock::now();
+        auto fileNow = std::filesystem::file_time_type::clock::now();
+        auto diff = fileNow.time_since_epoch() - ftimeSinceEpoch;
+        auto systemTime = systemNow - std::chrono::duration_cast<std::chrono::system_clock::duration>(diff);
+        auto sctp = std::chrono::time_point_cast<std::chrono::milliseconds>(systemTime);
         stats->mtimeMs = (double)sctp.time_since_epoch().count();
         stats->atimeMs = stats->mtimeMs;  // Approximate
         stats->ctimeMs = stats->mtimeMs;  // Approximate
@@ -224,7 +230,7 @@ char* nova_fs_readFileSync(const char* path) {
 }
 
 // fs.readFileSync with encoding option
-char* nova_fs_readFileSyncEncoding(const char* path, const char* encoding) {
+char* nova_fs_readFileSyncEncoding(const char* path, [[maybe_unused]] const char* encoding) {
     // For now, we treat all encodings as utf-8
     return nova_fs_readFileSync(path);
 }
@@ -454,7 +460,7 @@ int nova_fs_mkdirSync(const char* path) {
 }
 
 // fs.mkdirSync with options (recursive, mode)
-int nova_fs_mkdirSyncOptions(const char* path, int recursive, int mode) {
+int nova_fs_mkdirSyncOptions(const char* path, int recursive, [[maybe_unused]] int mode) {
     if (!path) return 0;
 
     std::error_code ec;
@@ -525,7 +531,7 @@ int nova_fs_chmodSync(const char* path, int mode) {
 }
 
 // fs.chownSync(path, uid, gid) - Changes file ownership
-int nova_fs_chownSync(const char* path, int uid, int gid) {
+int nova_fs_chownSync(const char* path, [[maybe_unused]] int uid, [[maybe_unused]] int gid) {
     if (!path) return 0;
 
 #ifdef _WIN32
@@ -537,7 +543,7 @@ int nova_fs_chownSync(const char* path, int uid, int gid) {
 }
 
 // fs.lchownSync(path, uid, gid) - Changes symbolic link ownership
-int nova_fs_lchownSync(const char* path, int uid, int gid) {
+int nova_fs_lchownSync(const char* path, [[maybe_unused]] int uid, [[maybe_unused]] int gid) {
     if (!path) return 0;
 
 #ifdef _WIN32
@@ -552,12 +558,16 @@ int nova_fs_lchownSync(const char* path, int uid, int gid) {
 // ============================================================================
 
 // fs.utimesSync(path, atime, mtime) - Changes file timestamps
-int nova_fs_utimesSync(const char* path, double atime, double mtime) {
+int nova_fs_utimesSync(const char* path, [[maybe_unused]] double atime, double mtime) {
     if (!path) return 0;
 
+    // Manual conversion from system_clock to file_time without clock_cast
     auto mtimePoint = std::chrono::system_clock::time_point(
         std::chrono::milliseconds((int64_t)mtime));
-    auto ftimePoint = std::chrono::clock_cast<std::filesystem::file_time_type::clock>(mtimePoint);
+    auto systemNow = std::chrono::system_clock::now();
+    auto fileNow = std::filesystem::file_time_type::clock::now();
+    auto diff = systemNow - mtimePoint;
+    auto ftimePoint = fileNow - std::chrono::duration_cast<std::filesystem::file_time_type::duration>(diff);
 
     std::error_code ec;
     std::filesystem::last_write_time(path, ftimePoint, ec);
@@ -701,7 +711,7 @@ void* nova_fs_fstatSync(int fd) {
 }
 
 // fs.fchmodSync(fd, mode) - Changes file permissions via descriptor
-int nova_fs_fchmodSync(int fd, int mode) {
+int nova_fs_fchmodSync([[maybe_unused]] int fd, [[maybe_unused]] int mode) {
 #ifdef _WIN32
     // Windows doesn't support fchmod, but we can try via handle
     return 1;  // Silent success
@@ -711,7 +721,7 @@ int nova_fs_fchmodSync(int fd, int mode) {
 }
 
 // fs.fchownSync(fd, uid, gid) - Changes file ownership via descriptor
-int nova_fs_fchownSync(int fd, int uid, int gid) {
+int nova_fs_fchownSync([[maybe_unused]] int fd, [[maybe_unused]] int uid, [[maybe_unused]] int gid) {
 #ifdef _WIN32
     return 1;  // Silent success - Windows doesn't support Unix ownership
 #else
@@ -2788,7 +2798,7 @@ struct NovaWriteStream {
 };
 
 // createReadStream(path, options)
-void* nova_fs_createReadStream(const char* path, const char* options) {
+void* nova_fs_createReadStream(const char* path, [[maybe_unused]] const char* options) {
     int fd = nova_fs_openSync(path, "r");
     if (fd < 0) return nullptr;
 
@@ -3005,7 +3015,7 @@ int nova_fs_readstream_readableObjectMode(void* stream) {
 }
 
 // createWriteStream(path, options)
-void* nova_fs_createWriteStream(const char* path, const char* options) {
+void* nova_fs_createWriteStream(const char* path, [[maybe_unused]] const char* options) {
     int fd = nova_fs_openSync(path, "w");
     if (fd < 0) return nullptr;
 

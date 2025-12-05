@@ -1,0 +1,207 @@
+name: Build Nova Compiler
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        brew update
+        brew install llvm cmake ninja
+        echo "LLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm" >> $GITHUB_ENV
+        echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+
+    - name: Configure CMake
+      run: |
+        mkdir -p build/macos-${{ matrix.arch }}
+        cd build/macos-${{ matrix.arch }}
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          cmake -G Ninja \
+            -DCMAKE_C_COMPILER=$(brew --prefix llvm)/bin/clang \
+            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DLLVM_DIR=$LLVM_DIR \
+            ../..
+        else
+          cmake -G Ninja \
+            -DCMAKE_C_COMPILER=$(brew --prefix llvm)/bin/clang \
+            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DLLVM_DIR=$LLVM_DIR \
+            ../..
+        fi
+
+    - name: Build
+      run: |
+        cd build/macos-${{ matrix.arch }}
+        ninja nova
+
+    - name: Test executable
+      run: |
+        ./build/macos-${{ matrix.arch }}/nova --version
+
+    - name: Package binary
+      run: |
+        mkdir -p dist
+        cp build/macos-${{ matrix.arch }}/nova dist/nova-macos-${{ matrix.arch }}
+        chmod +x dist/nova-macos-${{ matrix.arch }}
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nova-macos-${{ matrix.arch }}
+        path: dist/nova-macos-${{ matrix.arch }}
+        retention-days: 30
+
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          clang-18 \
+          llvm-18 \
+          llvm-18-dev \
+          cmake \
+          ninja-build \
+          libc++-18-dev \
+          libc++abi-18-dev
+        echo "LLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm" >> $GITHUB_ENV
+
+    - name: Configure CMake
+      run: |
+        mkdir -p build/linux-x64
+        cd build/linux-x64
+        cmake -G Ninja \
+          -DCMAKE_C_COMPILER=clang-18 \
+          -DCMAKE_CXX_COMPILER=clang++-18 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_DIR=$LLVM_DIR \
+          ../..
+
+    - name: Build
+      run: |
+        cd build/linux-x64
+        ninja nova
+
+    - name: Test executable
+      run: |
+        ./build/linux-x64/nova --version
+
+    - name: Package binary
+      run: |
+        mkdir -p dist
+        cp build/linux-x64/nova dist/nova-linux-x64
+        chmod +x dist/nova-linux-x64
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nova-linux-x64
+        path: dist/nova-linux-x64
+        retention-days: 30
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup LLVM
+      run: |
+        choco install llvm --version=18.1.7 -y
+        echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "LLVM_DIR=C:\Program Files\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Setup Build Tools
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Install Ninja
+      run: choco install ninja -y
+
+    - name: Configure CMake
+      shell: pwsh
+      run: |
+        mkdir -p build/windows-x64
+        cd build/windows-x64
+        cmake -G Ninja `
+          -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang.exe" `
+          -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang++.exe" `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_CXX_FLAGS="-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH" `
+          -DLLVM_DIR="C:/Program Files/LLVM/lib/cmake/llvm" `
+          ../..
+
+    - name: Build
+      shell: pwsh
+      run: |
+        cd build/windows-x64
+        ninja nova
+
+    - name: Test executable
+      shell: pwsh
+      run: |
+        ./build/windows-x64/nova.exe --version
+
+    - name: Package binary
+      shell: pwsh
+      run: |
+        mkdir -p dist
+        cp build/windows-x64/nova.exe dist/nova-windows-x64.exe
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nova-windows-x64
+        path: dist/nova-windows-x64.exe
+        retention-days: 30
+
+  create-release:
+    name: Create Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/nova-macos-x64/nova-macos-x64
+          artifacts/nova-macos-arm64/nova-macos-arm64
+          artifacts/nova-linux-x64/nova-linux-x64
+          artifacts/nova-windows-x64/nova-windows-x64.exe
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

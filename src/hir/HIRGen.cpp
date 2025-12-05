@@ -1379,7 +1379,7 @@ public:
                     // Check for numeric literal
                     bool isNumber = true;
                     bool hasDecimal = false;
-                    bool isNegative = false;
+                    [[maybe_unused]] bool isNegative = false;
                     size_t numStart = 0;
 
                     if (!code.empty() && code[0] == '-') {
@@ -10566,7 +10566,7 @@ public:
                         std::vector<HIRTypePtr> paramTypes;
                         HIRTypePtr returnType = intType;
                         int expectedArgs = 0;
-                        bool isGetter = true;  // getters vs setters have different arg counts
+                        [[maybe_unused]] bool isGetter = true;  // getters vs setters have different arg counts
 
                         // DataView getter methods
                         if (methodName == "getInt8" || methodName == "getUint8") {
@@ -12821,12 +12821,42 @@ public:
                             lastValue_ = builder_->createGetField(object, 1);
                         }
                     } else {
-                        // Property not found, return 0 as placeholder
-                        std::cerr << "Warning: Property '" << propertyName << "' not found in struct" << std::endl;
-                        if (object && object->type) {
-                            std::cerr << "  Object type: kind=" << static_cast<int>(object->type->kind) << std::endl;
+                        // Check if this is a builtin object method access (e.g., emitter.on, readable.read)
+                        bool foundBuiltinMethod = false;
+                        if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                            auto typeIt = variableObjectTypes_.find(objIdent->name);
+                            if (typeIt != variableObjectTypes_.end()) {
+                                std::string objectType = typeIt->second;  // e.g., "events:EventEmitter"
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Found builtin object type: " << objIdent->name
+                                          << " -> " << objectType << std::endl;
+
+                                // Map method name to runtime function
+                                // e.g., "events:EventEmitter" + "on" -> "nova_events_EventEmitter_on"
+                                size_t colonPos = objectType.find(':');
+                                if (colonPos != std::string::npos) {
+                                    std::string moduleName = objectType.substr(0, colonPos);
+                                    std::string typeName = objectType.substr(colonPos + 1);
+                                    std::string runtimeFunc = "nova_" + moduleName + "_" + typeName + "_" + propertyName;
+
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Method access: " << propertyName
+                                              << " -> " << runtimeFunc << std::endl;
+
+                                    // For now, return a placeholder indicating method was found
+                                    // The actual call will be handled in CallExpr visitor
+                                    lastValue_ = builder_->createIntConstant(1);
+                                    foundBuiltinMethod = true;
+                                }
+                            }
                         }
-                        lastValue_ = builder_->createIntConstant(0);
+
+                        if (!foundBuiltinMethod) {
+                            // Property not found, return 0 as placeholder
+                            std::cerr << "Warning: Property '" << propertyName << "' not found in struct" << std::endl;
+                            if (object && object->type) {
+                                std::cerr << "  Object type: kind=" << static_cast<int>(object->type->kind) << std::endl;
+                            }
+                            lastValue_ = builder_->createIntConstant(0);
+                        }
                     }
                 }
             }
@@ -13091,9 +13121,17 @@ public:
                 // Arrow function with block body: x => { return x + 1; }
                 node.body->accept(*this);
 
-                // Add implicit return if needed
-                if (!entryBlock->hasTerminator()) {
-                    builder_->createReturn(nullptr);
+                // Add implicit return to ALL blocks that don't have terminators
+                // This is needed because closure variable access may create additional blocks
+                if(NOVA_DEBUG) std::cerr << "DEBUG: Arrow function has " << func->basicBlocks.size() << " blocks" << std::endl;
+                for (auto& block : func->basicBlocks) {
+                    if(NOVA_DEBUG) std::cerr << "DEBUG: Block '" << block->label << "' hasTerminator=" << block->hasTerminator() << std::endl;
+                    if (!block->hasTerminator()) {
+                        // Set insert point to this block
+                        builder_->setInsertPoint(block.get());
+                        builder_->createReturn(nullptr);
+                        if(NOVA_DEBUG) std::cerr << "DEBUG: Added return terminator to block '" << block->label << "'" << std::endl;
+                    }
                 }
             }
         }
@@ -14587,6 +14625,48 @@ public:
             args.push_back(lastValue_);
         }
 
+        // Check if this is a builtin module constructor (e.g., EventEmitter, Readable)
+        auto builtinIt = builtinFunctionImports_.find(className);
+        if (builtinIt != builtinFunctionImports_.end()) {
+            std::string runtimeFuncName = builtinIt->second + "_new";
+            if(NOVA_DEBUG) std::cerr << "  DEBUG: Handling builtin constructor: " << className << " -> " << runtimeFuncName << std::endl;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            std::vector<HIRTypePtr> paramTypes;  // Most constructors take no args
+            std::vector<HIRValue*> callArgs;
+
+            // Check if function exists or create it
+            auto existingFunc = module_->getFunction(runtimeFuncName);
+            HIRFunction* func = nullptr;
+            if (existingFunc) {
+                func = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                func = funcPtr.get();
+                if(NOVA_DEBUG) std::cerr << "  DEBUG: Created external function: " << runtimeFuncName << std::endl;
+            }
+
+            lastValue_ = builder_->createCall(func, callArgs, "builtin_obj");
+            lastValue_->type = ptrType;
+
+            // Determine the object type from the runtime function name
+            // e.g., "nova_events_EventEmitter" -> "events:EventEmitter"
+            std::string runtimeFunc = builtinIt->second;  // e.g., "nova_events_EventEmitter"
+            if (runtimeFunc.substr(0, 5) == "nova_") {
+                size_t firstUnderscore = runtimeFunc.find('_', 5);
+                if (firstUnderscore != std::string::npos) {
+                    std::string moduleName = runtimeFunc.substr(5, firstUnderscore - 5);  // "events"
+                    std::string typeName = runtimeFunc.substr(firstUnderscore + 1);  // "EventEmitter"
+                    lastBuiltinObjectType_ = moduleName + ":" + typeName;  // "events:EventEmitter"
+                    if(NOVA_DEBUG) std::cerr << "  DEBUG: Set builtin object type: " << lastBuiltinObjectType_ << std::endl;
+                }
+            }
+
+            return;
+        }
+
         // Call constructor function
         auto constructorFunc = module_->getFunction(constructorName);
         if (!constructorFunc) {
@@ -15677,6 +15757,14 @@ public:
                 responseVars_.insert(decl.name);
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Response variable: " << decl.name << std::endl;
                 lastWasResponse_ = false;
+            }
+
+            // Check if this is a builtin object type assignment (stream, events, http, etc.)
+            if (!lastBuiltinObjectType_.empty()) {
+                variableObjectTypes_[decl.name] = lastBuiltinObjectType_;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered builtin object type: " << decl.name
+                          << " -> " << lastBuiltinObjectType_ << std::endl;
+                lastBuiltinObjectType_.clear();  // Clear for next declaration
             }
 
             // Inside generators, use generator local storage for variables that may cross yield boundaries
@@ -17129,7 +17217,7 @@ public:
                 // if state == 1 goto resume_1
                 // if state == 2 goto resume_2
                 // ... else goto body
-                HIRBasicBlock* currentCheckBlock = generatorDispatchBlock_;
+                [[maybe_unused]] HIRBasicBlock* currentCheckBlock = generatorDispatchBlock_;
 
                 for (size_t i = 0; i < yieldResumeBlocks_.size(); ++i) {
                     int stateNum = static_cast<int>(i + 1);  // States are 1-indexed
@@ -17287,7 +17375,7 @@ public:
     void generateConstructorFunction(const std::string& className,
                                      const ClassDecl::Method& constructor,
                                      hir::HIRStructType* structType,
-                                     std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
+                                     [[maybe_unused]] std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
         // Constructor function name: ClassName_constructor
         std::string funcName = className + "_constructor";
 
@@ -17660,7 +17748,7 @@ public:
     void generateSetterFunction(const std::string& className,
                                 const ClassDecl::Method& method,
                                 hir::HIRStructType* structType,
-                                std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
+                                [[maybe_unused]] std::function<HIRType::Kind(Type::Kind)> convertTypeKind) {
         // Setter function name: ClassName_set_propertyName
         std::string funcName = className + "_set_" + method.name;
 
@@ -18015,8 +18103,8 @@ private:
     std::string currentLabel_;  // Current label for labeled break/continue
     // Exception handling support
     HIRBasicBlock* currentCatchBlock_ = nullptr;  // Current catch block for throw statements
-    HIRBasicBlock* currentFinallyBlock_ = nullptr;  // Current finally block
-    HIRBasicBlock* currentTryEndBlock_ = nullptr;  // End block after try-catch-finally
+    [[maybe_unused]] HIRBasicBlock* currentFinallyBlock_ = nullptr;  // Current finally block
+    [[maybe_unused]] HIRBasicBlock* currentTryEndBlock_ = nullptr;  // End block after try-catch-finally
     // globalThis tracking (ES2020)
     bool lastWasGlobalThis_ = false;  // Temporarily stores if last identifier was globalThis
     // Intl tracking (Internationalization API)
@@ -18077,6 +18165,9 @@ private:
     // Response tracking (Web API)
     std::unordered_set<std::string> responseVars_;  // Set of variable names that are Responses
     bool lastWasResponse_ = false;  // Temporarily stores if last expression was Response
+    // Builtin object type tracking (for property resolution)
+    std::unordered_map<std::string, std::string> variableObjectTypes_;  // variable name -> object type (e.g., "http:Server", "stream:Readable")
+    std::string lastBuiltinObjectType_;  // Temporarily stores the type of the last created builtin object
     // Built-in module imports (nova:fs, nova:test, nova:path, nova:os)
     std::unordered_map<std::string, std::string> builtinModuleImports_;  // namespace -> module name
     std::unordered_map<std::string, std::string> builtinFunctionImports_;  // local name -> runtime function name

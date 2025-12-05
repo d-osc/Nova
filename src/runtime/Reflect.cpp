@@ -34,7 +34,7 @@ void* nova_value_array_at(void* arr, int64_t index);
 // Reflect.apply(target, thisArg, argumentsList)
 // Calls a target function with arguments as specified
 // ============================================================================
-void* nova_reflect_apply(void* target, void* thisArg, void* argumentsList) {
+void* nova_reflect_apply([[maybe_unused]] void* target, [[maybe_unused]] void* thisArg, [[maybe_unused]] void* argumentsList) {
     // In a full implementation, this would call the target function
     // with the specified this value and arguments
     // For now, return undefined (null)
@@ -45,7 +45,7 @@ void* nova_reflect_apply(void* target, void* thisArg, void* argumentsList) {
 // Reflect.construct(target, argumentsList[, newTarget])
 // Acts like the new operator, but as a function
 // ============================================================================
-void* nova_reflect_construct(void* target, void* argumentsList, void* newTarget) {
+void* nova_reflect_construct([[maybe_unused]] void* target, [[maybe_unused]] void* argumentsList, [[maybe_unused]] void* newTarget) {
     // In a full implementation, this would construct a new instance
     // For now, create an empty object
     return nova_object_create_empty();
@@ -76,7 +76,7 @@ int64_t nova_reflect_deleteProperty(void* target, const char* propertyKey) {
 // Reflect.get(target, propertyKey[, receiver])
 // Returns the value of the property
 // ============================================================================
-void* nova_reflect_get(void* target, const char* propertyKey, void* receiver) {
+void* nova_reflect_get(void* target, const char* propertyKey, [[maybe_unused]] void* receiver) {
     if (!target || !propertyKey) return nullptr;
 
     // receiver is used for getter functions - for simplicity, we use target
@@ -173,7 +173,7 @@ int64_t nova_reflect_preventExtensions(void* target) {
 // Reflect.set(target, propertyKey, value[, receiver])
 // Sets the value of a property. Returns Boolean
 // ============================================================================
-int64_t nova_reflect_set(void* target, const char* propertyKey, void* value, void* receiver) {
+int64_t nova_reflect_set(void* target, const char* propertyKey, void* value, [[maybe_unused]] void* receiver) {
     if (!target || !propertyKey) return 0;
 
     // receiver is used for setter functions - for simplicity, we use target

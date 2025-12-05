@@ -40,8 +40,8 @@ static char* allocString(const std::string& str) {
 // Scheduling Policies
 // ============================================================================
 
-static const int SCHED_NONE = 1;
-static const int SCHED_RR = 2;  // Round-robin (default on non-Windows)
+static const int NOVA_SCHED_NONE = 1;
+static const int NOVA_SCHED_RR = 2;  // Round-robin (default on non-Windows)
 
 // ============================================================================
 // Cluster Settings
@@ -67,7 +67,7 @@ static ClusterSettings settings = {
     0,        // argsCount
     nullptr,  // cwd
     0,        // silent
-    SCHED_RR, // schedulingPolicy (default: round-robin)
+    NOVA_SCHED_RR, // schedulingPolicy (default: round-robin)
     -1,       // uid
     -1,       // gid
     0,        // inspectPort
@@ -124,11 +124,11 @@ extern "C" {
 // ============================================================================
 
 int nova_cluster_SCHED_NONE() {
-    return SCHED_NONE;
+    return NOVA_SCHED_NONE;
 }
 
 int nova_cluster_SCHED_RR() {
-    return SCHED_RR;
+    return NOVA_SCHED_RR;
 }
 
 // ============================================================================
@@ -217,7 +217,7 @@ void nova_cluster_setupPrimary(
     }
     settings.cwd = cwd ? allocString(cwd) : nullptr;
     settings.silent = silent;
-    settings.schedulingPolicy = schedulingPolicy > 0 ? schedulingPolicy : SCHED_RR;
+    settings.schedulingPolicy = schedulingPolicy > 0 ? schedulingPolicy : NOVA_SCHED_RR;
 
     // Trigger setup event
     if (clusterOnSetup) {

@@ -433,7 +433,7 @@ void* nova_promise_race(void** promises, int64_t count) {
 }
 
 // Promise.allSettled(promises) - Wait for all to settle (ES2020)
-void* nova_promise_allSettled(void** promises, int64_t count) {
+void* nova_promise_allSettled([[maybe_unused]] void** promises, int64_t count) {
     // For simplicity, just wait for all and return count
     return nova_promise_resolve(count);
 }
