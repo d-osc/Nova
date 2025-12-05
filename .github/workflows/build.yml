@@ -19,12 +19,30 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Install build tools
       run: |
-        brew update
-        brew install llvm@18 cmake ninja
-        echo "LLVM_DIR=$(brew --prefix llvm@18)/lib/cmake/llvm" >> $GITHUB_ENV
-        echo "$(brew --prefix llvm@18)/bin" >> $GITHUB_PATH
+        brew install cmake ninja
+
+    - name: Setup LLVM
+      run: |
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-arm64-apple-macos11.tar.xz"
+        else
+          LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-apple-darwin.tar.xz"
+        fi
+
+        echo "Downloading LLVM from $LLVM_URL"
+        curl -L -O "$LLVM_URL"
+
+        echo "Extracting LLVM..."
+        tar -xf clang+llvm-*.tar.xz
+
+        # Move to standard location
+        LLVM_EXTRACTED=$(ls -d clang+llvm-* | head -1)
+        sudo mv "$LLVM_EXTRACTED" /usr/local/llvm
+
+        echo "LLVM_DIR=/usr/local/llvm/lib/cmake/llvm" >> $GITHUB_ENV
+        echo "/usr/local/llvm/bin" >> $GITHUB_PATH
 
     - name: Configure CMake
       run: |
@@ -32,7 +50,7 @@ jobs:
         cd build/macos-${{ matrix.arch }}
 
         # Fix header search path - LLVM headers must come before system headers
-        LLVM_PREFIX=$(brew --prefix llvm@18)
+        LLVM_PREFIX=/usr/local/llvm
         # Include LLVM's clang resource directory for compiler-rt headers (stddef.h, etc.)
         BASE_CXX_FLAGS="-nostdinc++ -isystem ${LLVM_PREFIX}/lib/clang/18/include -isystem ${LLVM_PREFIX}/include/c++/v1"
 
