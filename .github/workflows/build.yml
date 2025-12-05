@@ -141,7 +141,7 @@ jobs:
         Invoke-WebRequest -Uri $llvmUrl -OutFile llvm.tar.xz
 
         Write-Host "Extracting .tar.xz to .tar..."
-        7z x llvm.tar.xz -o. -y
+        7z x llvm.tar.xz -y
 
         Write-Host "Checking for .tar file..."
         Get-ChildItem . -File | Where-Object Name -like "*.tar"
