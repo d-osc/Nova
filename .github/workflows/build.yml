@@ -49,6 +49,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
+            -DCMAKE_C_FLAGS="${CXX_FLAGS}" \
+            -DCMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES="" \
+            -DCMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES="" \
             -DLLVM_DIR=$LLVM_DIR \
             ../..
         else
@@ -60,6 +63,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
+            -DCMAKE_C_FLAGS="${CXX_FLAGS}" \
+            -DCMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES="" \
+            -DCMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES="" \
             -DLLVM_DIR=$LLVM_DIR \
             ../..
         fi
