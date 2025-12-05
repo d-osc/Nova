@@ -27,19 +27,32 @@ jobs:
       run: |
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-arm64-apple-macos11.tar.xz"
+          LLVM_FILE="clang+llvm-18.1.8-arm64-apple-macos11.tar.xz"
         else
           LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-apple-darwin.tar.xz"
+          LLVM_FILE="clang+llvm-18.1.8-x86_64-apple-darwin.tar.xz"
         fi
 
         echo "Downloading LLVM from $LLVM_URL"
-        curl -L -O "$LLVM_URL"
+        curl -L -o "$LLVM_FILE" "$LLVM_URL"
+
+        echo "Verifying download..."
+        ls -lh "$LLVM_FILE"
 
         echo "Extracting LLVM..."
-        tar -xf clang+llvm-*.tar.xz
+        tar -xvf "$LLVM_FILE"
+
+        echo "Checking extracted directory..."
+        ls -la
 
         # Move to standard location
-        LLVM_EXTRACTED=$(ls -d clang+llvm-* | head -1)
+        LLVM_EXTRACTED=$(ls -d clang+llvm-*/ | head -1 | sed 's:/$::')
+        echo "Found extracted directory: $LLVM_EXTRACTED"
+
         sudo mv "$LLVM_EXTRACTED" /usr/local/llvm
+
+        echo "Verifying installation..."
+        ls -la /usr/local/llvm/bin/
 
         echo "LLVM_DIR=/usr/local/llvm/lib/cmake/llvm" >> $GITHUB_ENV
         echo "/usr/local/llvm/bin" >> $GITHUB_PATH
