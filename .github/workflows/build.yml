@@ -135,14 +135,18 @@ jobs:
     - name: Setup LLVM
       run: |
         $llvmUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.7/clang+llvm-18.1.7-x86_64-pc-windows-msvc.tar.xz"
-        $llvmArchive = "llvm.tar.xz"
         $llvmDir = "C:\LLVM"
 
         Write-Host "Downloading LLVM..."
-        Invoke-WebRequest -Uri $llvmUrl -OutFile $llvmArchive
+        Invoke-WebRequest -Uri $llvmUrl -OutFile llvm.tar.xz
 
-        Write-Host "Extracting LLVM..."
-        7z x $llvmArchive -y
+        Write-Host "Extracting .tar.xz to .tar..."
+        7z x llvm.tar.xz -o. -y
+
+        Write-Host "Checking for .tar file..."
+        Get-ChildItem . -File | Where-Object Name -like "*.tar"
+
+        Write-Host "Extracting .tar to C:\..."
         7z x "clang+llvm-18.1.7-x86_64-pc-windows-msvc.tar" -o"C:\" -y
 
         Write-Host "Checking extracted directory..."
