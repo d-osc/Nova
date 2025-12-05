@@ -183,14 +183,19 @@ jobs:
     - name: Configure CMake
       shell: pwsh
       run: |
+        # Clean build directory to avoid cached DIA SDK dependencies
+        if (Test-Path build/windows-x64) {
+          Remove-Item -Recurse -Force build/windows-x64
+        }
         mkdir -p build/windows-x64
         cd build/windows-x64
         cmake -G Ninja `
-          -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang.exe" `
-          -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang++.exe" `
+          -DCMAKE_C_COMPILER="C:/LLVM/bin/clang.exe" `
+          -DCMAKE_CXX_COMPILER="C:/LLVM/bin/clang++.exe" `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_CXX_FLAGS="-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH" `
-          -DLLVM_DIR="C:/Program Files/LLVM/lib/cmake/llvm" `
+          -DLLVM_DIR="C:/LLVM/lib/cmake/llvm" `
+          -DLLVM_ENABLE_DIA_SDK=OFF `
           ../..
 
     - name: Build

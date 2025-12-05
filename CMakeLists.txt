@@ -246,9 +246,16 @@ target_link_libraries(nova novacore ${llvm_libs})
 # Windows-specific DIA SDK configuration
 if(MSVC)
     # diaguids.lib not essential for basic functionality - ignore if missing
-    # Always add these flags to handle missing DIA SDK regardless of VS version
-    target_link_options(nova PRIVATE /IGNORE:4099)
-    target_link_options(novacore PRIVATE /IGNORE:4099)
+    # Filter out DIA SDK library from LLVM dependencies
+    set_target_properties(nova PROPERTIES LINK_FLAGS "/IGNORE:4099")
+    set_target_properties(novacore PROPERTIES LINK_FLAGS "/IGNORE:4099")
+
+    # Alternative: try to remove the library from link interface
+    get_target_property(LLVM_LIBS nova LINK_LIBRARIES)
+    if(LLVM_LIBS)
+        list(FILTER LLVM_LIBS EXCLUDE REGEX ".*diaguids.*")
+        set_target_properties(nova PROPERTIES LINK_LIBRARIES "${LLVM_LIBS}")
+    endif()
 endif()
 
 # Install targets
