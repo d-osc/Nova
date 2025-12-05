@@ -32,5 +32,6 @@ set(CMAKE_CXX_COMPILER_WORKS TRUE CACHE BOOL "" FORCE)
 
 # CRITICAL: Use -I (high priority) instead of -isystem (low priority)
 # Add LLVM headers FIRST with -I so they override any -isystem paths
-set(CMAKE_C_FLAGS_INIT "-nostdinc -nostdlibinc -I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include --sysroot=" CACHE STRING "" FORCE)
-set(CMAKE_CXX_FLAGS_INIT "-nostdinc++ -nostdinc -nostdlibinc -I${LLVM_PREFIX}/include/c++/v1 -I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include --sysroot=" CACHE STRING "" FORCE)
+# Add -Wno-gnu-include-next to allow LLVM headers to use #include_next
+set(CMAKE_C_FLAGS_INIT "-nostdinc -nostdlibinc -I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include --sysroot= -Wno-gnu-include-next" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_INIT "-nostdinc++ -nostdinc -nostdlibinc -I${LLVM_PREFIX}/include/c++/v1 -I${LLVM_PREFIX}/lib/clang/${CLANG_VERSION}/include --sysroot= -Wno-gnu-include-next" CACHE STRING "" FORCE)
