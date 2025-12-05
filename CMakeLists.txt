@@ -245,14 +245,10 @@ target_link_libraries(nova novacore ${llvm_libs})
 
 # Windows-specific DIA SDK configuration
 if(MSVC)
-    # Try to use DIA SDK from VS 14.0 if available
-    set(DIA_SDK_LIB "C:/Program Files (x86)/Microsoft Visual Studio 14.0/DIA SDK/lib/amd64/diaguids.lib")
-    if(EXISTS "${DIA_SDK_LIB}")
-        target_link_options(nova PRIVATE "/LIBPATH:C:/Program Files (x86)/Microsoft Visual Studio 14.0/DIA SDK/lib/amd64")
-    else()
-        # diaguids.lib not essential for basic functionality - ignore if missing
-        target_link_options(nova PRIVATE /IGNORE:4099 /FORCE:MULTIPLE)
-    endif()
+    # diaguids.lib not essential for basic functionality - ignore if missing
+    # Always add these flags to handle missing DIA SDK regardless of VS version
+    target_link_options(nova PRIVATE /IGNORE:4099)
+    target_link_options(novacore PRIVATE /IGNORE:4099)
 endif()
 
 # Install targets
