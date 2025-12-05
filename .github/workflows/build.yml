@@ -35,21 +35,16 @@ jobs:
       run: |
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-arm64-apple-macos11.tar.xz"
-          LLVM_FILE="clang+llvm-18.1.8-arm64-apple-macos11.tar.xz"
         else
           LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-apple-darwin.tar.xz"
-          LLVM_FILE="clang+llvm-18.1.8-x86_64-apple-darwin.tar.xz"
         fi
 
-        echo "Downloading LLVM..."
-        curl -L -o "$LLVM_FILE" "$LLVM_URL"
+        echo "Downloading and extracting LLVM (streaming)..."
+        sudo mkdir -p /tmp/llvm-extract
+        curl -L "$LLVM_URL" | tar -xJ -C /tmp/llvm-extract
 
-        echo "Extracting LLVM (this may take a few minutes)..."
-        tar -xf "$LLVM_FILE"
-
-        # Move to standard location
-        LLVM_EXTRACTED=$(ls -d clang+llvm-*/ | head -1 | sed 's:/$::')
-        sudo mv "$LLVM_EXTRACTED" /usr/local/llvm
+        echo "Moving to final location..."
+        sudo mv /tmp/llvm-extract/clang+llvm-* /usr/local/llvm
 
         echo "LLVM installation complete"
 
