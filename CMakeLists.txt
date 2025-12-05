@@ -23,8 +23,9 @@ if(MSVC)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Werror)
     # On macOS, allow #include_next extension and unused parameters in LLVM headers
+    # Also disable deprecated declarations warning (sprintf, etc.)
     if(APPLE)
-        add_compile_options(-Wno-gnu-include-next -Wno-unused-parameter)
+        add_compile_options(-Wno-gnu-include-next -Wno-unused-parameter -Wno-deprecated-declarations)
     endif()
 endif()
 
