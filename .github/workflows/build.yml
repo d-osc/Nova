@@ -22,9 +22,9 @@ jobs:
     - name: Install dependencies
       run: |
         brew update
-        brew install llvm cmake ninja
-        echo "LLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm" >> $GITHUB_ENV
-        echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+        brew install llvm@18 cmake ninja
+        echo "LLVM_DIR=$(brew --prefix llvm@18)/lib/cmake/llvm" >> $GITHUB_ENV
+        echo "$(brew --prefix llvm@18)/bin" >> $GITHUB_PATH
 
     - name: Configure CMake
       run: |
@@ -32,16 +32,16 @@ jobs:
         cd build/macos-${{ matrix.arch }}
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           cmake -G Ninja \
-            -DCMAKE_C_COMPILER=$(brew --prefix llvm)/bin/clang \
-            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++ \
+            -DCMAKE_C_COMPILER=$(brew --prefix llvm@18)/bin/clang \
+            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm@18)/bin/clang++ \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DLLVM_DIR=$LLVM_DIR \
             ../..
         else
           cmake -G Ninja \
-            -DCMAKE_C_COMPILER=$(brew --prefix llvm)/bin/clang \
-            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++ \
+            -DCMAKE_C_COMPILER=$(brew --prefix llvm@18)/bin/clang \
+            -DCMAKE_CXX_COMPILER=$(brew --prefix llvm@18)/bin/clang++ \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DLLVM_DIR=$LLVM_DIR \
@@ -134,7 +134,7 @@ jobs:
 
     - name: Setup LLVM
       run: |
-        choco install llvm --version=18.1.7 -y
+        choco install llvm --version=18.1.7 -y --force --allow-downgrade
         echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         echo "LLVM_DIR=C:\Program Files\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 

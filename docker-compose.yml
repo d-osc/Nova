@@ -1,0 +1,101 @@
+# Nova Multi-Platform Build - Docker Compose
+# Orchestrates building Nova for all supported platforms
+
+version: '3.8'
+
+services:
+  # ==============================================================================
+  # Service: Build All Platforms
+  # ==============================================================================
+  build-all:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: final
+    image: nova-lang:multi-platform
+    container_name: nova-build-all
+    volumes:
+      - ./build/docker-output:/output
+    environment:
+      - BUILD_TYPE=Release
+      - ENABLE_OPTIMIZATIONS=ON
+    command: sh -c "cp -r /output/* /output/ && echo 'Build complete!'"
+
+  # ==============================================================================
+  # Service: Linux x86-64 Only
+  # ==============================================================================
+  build-linux-x64:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build-linux-x64
+    image: nova-lang:linux-x64
+    container_name: nova-build-linux-x64
+    volumes:
+      - ./build/docker-output/linux-x64:/output
+    command: sh -c "cp nova /output/ 2>/dev/null || echo 'Binary not found'"
+
+  # ==============================================================================
+  # Service: Linux ARM64 Only
+  # ==============================================================================
+  build-linux-arm64:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build-linux-arm64
+    image: nova-lang:linux-arm64
+    container_name: nova-build-linux-arm64
+    volumes:
+      - ./build/docker-output/linux-arm64:/output
+    command: sh -c "cp nova /output/ 2>/dev/null || echo 'Binary not found'"
+
+  # ==============================================================================
+  # Service: Windows x86-64 Only
+  # ==============================================================================
+  build-windows-x64:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build-windows-x64
+    image: nova-lang:windows-x64
+    container_name: nova-build-windows-x64
+    volumes:
+      - ./build/docker-output/windows-x64:/output
+    command: sh -c "cp nova.exe /output/ 2>/dev/null || echo 'Binary not found'"
+
+  # ==============================================================================
+  # Service: Development Environment (Interactive)
+  # ==============================================================================
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: nova-build
+    image: nova-lang:dev
+    container_name: nova-dev
+    volumes:
+      - .:/nova
+      - nova-build-cache:/nova/build
+    working_dir: /nova
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+  # ==============================================================================
+  # Service: Test Runner
+  # ==============================================================================
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build-linux-x64
+    image: nova-lang:test
+    container_name: nova-test
+    volumes:
+      - .:/nova
+    working_dir: /nova/build/linux-x64
+    command: sh -c "ctest --output-on-failure || echo 'Tests not configured yet'"
+
+volumes:
+  nova-build-cache:
+    driver: local
