@@ -254,12 +254,18 @@ set(NOVA_SOURCES
 
 # Create library
 add_library(novacore STATIC ${NOVA_SOURCES})
-target_include_directories(novacore SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+# On macOS, don't add LLVM_INCLUDE_DIRS as they conflict with explicit paths in CMAKE_CXX_FLAGS
+if(NOT APPLE)
+    target_include_directories(novacore SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+endif()
 target_link_libraries(novacore ${llvm_libs})
 
 # Create executable
 add_executable(nova src/main.cpp)
-target_include_directories(nova SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+# On macOS, don't add LLVM_INCLUDE_DIRS as they conflict with explicit paths in CMAKE_CXX_FLAGS
+if(NOT APPLE)
+    target_include_directories(nova SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+endif()
 target_link_libraries(nova novacore ${llvm_libs})
 
 # Windows-specific DIA SDK configuration
