@@ -62,13 +62,16 @@ jobs:
       run: |
         mkdir -p dist
         cp build/macos-arm64/nova dist/nova-macos-arm64
+        cp build/macos-arm64/libnovacore.a dist/libnovacore.a
         chmod +x dist/nova-macos-arm64
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: nova-macos-arm64
-        path: dist/nova-macos-arm64
+        path: |
+          dist/nova-macos-arm64
+          dist/libnovacore.a
         retention-days: 30
 
   build-linux:
@@ -116,13 +119,16 @@ jobs:
       run: |
         mkdir -p dist
         cp build/linux-x64/nova dist/nova-linux-x64
+        cp build/linux-x64/libnovacore.a dist/libnovacore.a
         chmod +x dist/nova-linux-x64
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: nova-linux-x64
-        path: dist/nova-linux-x64
+        path: |
+          dist/nova-linux-x64
+          dist/libnovacore.a
         retention-days: 30
 
   build-windows:
@@ -292,12 +298,15 @@ jobs:
       run: |
         mkdir -p dist
         cp build/windows-x64/nova.exe dist/nova-windows-x64.exe
+        cp build/windows-x64/novacore.lib dist/novacore.lib
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: nova-windows-x64
-        path: dist/nova-windows-x64.exe
+        path: |
+          dist/nova-windows-x64.exe
+          dist/novacore.lib
         retention-days: 30
 
   create-release:
@@ -317,8 +326,11 @@ jobs:
       with:
         files: |
           artifacts/nova-macos-arm64/nova-macos-arm64
+          artifacts/nova-macos-arm64/libnovacore.a
           artifacts/nova-linux-x64/nova-linux-x64
+          artifacts/nova-linux-x64/libnovacore.a
           artifacts/nova-windows-x64/nova-windows-x64.exe
+          artifacts/nova-windows-x64/novacore.lib
         draft: false
         prerelease: false
       env:
