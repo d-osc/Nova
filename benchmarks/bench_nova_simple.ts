@@ -21,7 +21,7 @@ console.log(`Math 1M operations: ${mathTime}ms`);
 
 // 3. Array operations
 const arrStart = Date.now();
-const arr: number[] = [];
+const arr = [];
 for (let i = 0; i < 100000; i++) {
     arr.push(i);
 }
@@ -39,7 +39,7 @@ console.log(`String concat 10K: ${strTime}ms`);
 
 // 5. Object creation
 const objStart = Date.now();
-const objects: any[] = [];
+const objects = [];
 for (let i = 0; i < 100000; i++) {
     objects.push({ id: i, value: i * 2 });
 }

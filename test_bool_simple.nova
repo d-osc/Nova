@@ -1,0 +1,2 @@
+// Simple boolean test
+console.log("Boolean: " + true);

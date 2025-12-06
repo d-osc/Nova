@@ -1,0 +1,3 @@
+const b = true;
+const msg = b + " test";
+console.log(msg);

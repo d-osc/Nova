@@ -25,7 +25,35 @@ HIRInstruction* HIRBuilder::createAdd(HIRValue* lhs, HIRValue* rhs, const std::s
               << ", rhs type kind="
               << (rhs && rhs->type ? static_cast<int>(rhs->type->kind) : -1) << std::endl;
 
-    auto resultType = lhs->type;
+    // Determine result type with proper type promotion
+    HIRTypePtr resultType;
+
+    // String concatenation: if either operand is a string, result is string
+    if ((lhs->type && lhs->type->kind == HIRType::Kind::String) ||
+        (rhs->type && rhs->type->kind == HIRType::Kind::String)) {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::String);
+    }
+    // Numeric addition: promote to larger type
+    else {
+        // JavaScript numbers are always 64-bit (either i64 or f64)
+        // Apply type promotion rules:
+        // 1. If either is F64 or F32, result is F64
+        // 2. Otherwise, result is I64 (JavaScript's default integer type)
+
+        bool lhsIsFloat = (lhs->type && (lhs->type->kind == HIRType::Kind::F64 ||
+                                         lhs->type->kind == HIRType::Kind::F32));
+        bool rhsIsFloat = (rhs->type && (rhs->type->kind == HIRType::Kind::F64 ||
+                                         rhs->type->kind == HIRType::Kind::F32));
+
+        if (lhsIsFloat || rhsIsFloat) {
+            // Promote to F64 for floating-point arithmetic
+            resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
+        } else {
+            // Integer arithmetic: always use I64 (JavaScript's default)
+            resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+        }
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Add, resultType, generateName(name));
 
@@ -43,12 +71,24 @@ HIRInstruction* HIRBuilder::createAdd(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createSub(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Apply type promotion: F64 if either is float, otherwise I64
+    HIRTypePtr resultType;
+    bool lhsIsFloat = (lhs->type && (lhs->type->kind == HIRType::Kind::F64 ||
+                                     lhs->type->kind == HIRType::Kind::F32));
+    bool rhsIsFloat = (rhs->type && (rhs->type->kind == HIRType::Kind::F64 ||
+                                     rhs->type->kind == HIRType::Kind::F32));
+
+    if (lhsIsFloat || rhsIsFloat) {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
+    } else {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Sub, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
     inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
-    
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
@@ -56,12 +96,24 @@ HIRInstruction* HIRBuilder::createSub(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createMul(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Apply type promotion: F64 if either is float, otherwise I64
+    HIRTypePtr resultType;
+    bool lhsIsFloat = (lhs->type && (lhs->type->kind == HIRType::Kind::F64 ||
+                                     lhs->type->kind == HIRType::Kind::F32));
+    bool rhsIsFloat = (rhs->type && (rhs->type->kind == HIRType::Kind::F64 ||
+                                     rhs->type->kind == HIRType::Kind::F32));
+
+    if (lhsIsFloat || rhsIsFloat) {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
+    } else {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Mul, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
     inst->addOperand(std::shared_ptr<HIRValue>(rhs, [](HIRValue*){}));
-    
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
@@ -69,7 +121,19 @@ HIRInstruction* HIRBuilder::createMul(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createDiv(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Apply type promotion: F64 if either is float, otherwise I64
+    HIRTypePtr resultType;
+    bool lhsIsFloat = (lhs->type && (lhs->type->kind == HIRType::Kind::F64 ||
+                                     lhs->type->kind == HIRType::Kind::F32));
+    bool rhsIsFloat = (rhs->type && (rhs->type->kind == HIRType::Kind::F64 ||
+                                     rhs->type->kind == HIRType::Kind::F32));
+
+    if (lhsIsFloat || rhsIsFloat) {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
+    } else {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Div, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -82,7 +146,19 @@ HIRInstruction* HIRBuilder::createDiv(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createRem(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Apply type promotion: F64 if either is float, otherwise I64
+    HIRTypePtr resultType;
+    bool lhsIsFloat = (lhs->type && (lhs->type->kind == HIRType::Kind::F64 ||
+                                     lhs->type->kind == HIRType::Kind::F32));
+    bool rhsIsFloat = (rhs->type && (rhs->type->kind == HIRType::Kind::F64 ||
+                                     rhs->type->kind == HIRType::Kind::F32));
+
+    if (lhsIsFloat || rhsIsFloat) {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
+    } else {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Rem, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -95,7 +171,19 @@ HIRInstruction* HIRBuilder::createRem(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createPow(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Apply type promotion: F64 if either is float, otherwise I64
+    HIRTypePtr resultType;
+    bool lhsIsFloat = (lhs->type && (lhs->type->kind == HIRType::Kind::F64 ||
+                                     lhs->type->kind == HIRType::Kind::F32));
+    bool rhsIsFloat = (rhs->type && (rhs->type->kind == HIRType::Kind::F64 ||
+                                     rhs->type->kind == HIRType::Kind::F32));
+
+    if (lhsIsFloat || rhsIsFloat) {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
+    } else {
+        resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    }
+
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Pow, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -109,7 +197,8 @@ HIRInstruction* HIRBuilder::createPow(HIRValue* lhs, HIRValue* rhs, const std::s
 
 // Bitwise Operations
 HIRInstruction* HIRBuilder::createAnd(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Bitwise operations always return I64 in JavaScript
+    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::And, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -122,7 +211,8 @@ HIRInstruction* HIRBuilder::createAnd(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createOr(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Bitwise operations always return I64 in JavaScript
+    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Or, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -135,7 +225,8 @@ HIRInstruction* HIRBuilder::createOr(HIRValue* lhs, HIRValue* rhs, const std::st
 }
 
 HIRInstruction* HIRBuilder::createXor(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Bitwise operations always return I64 in JavaScript
+    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Xor, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -148,7 +239,8 @@ HIRInstruction* HIRBuilder::createXor(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createShl(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Bitwise operations always return I64 in JavaScript
+    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Shl, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -161,7 +253,8 @@ HIRInstruction* HIRBuilder::createShl(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createShr(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Bitwise operations always return I64 in JavaScript
+    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Shr, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -174,7 +267,8 @@ HIRInstruction* HIRBuilder::createShr(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createUShr(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    auto resultType = lhs->type;
+    // Bitwise operations always return I64 in JavaScript
+    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::UShr, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));

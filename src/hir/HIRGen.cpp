@@ -268,11 +268,23 @@ public:
 
         // Generate operation based on operator
         switch (node.op) {
-            case Op::Add:
-                lhs = convertBoolToInt(lhs);
-                rhs = convertBoolToInt(rhs);
+            case Op::Add: {
+                // Check if this is string concatenation (at least one operand is a string)
+                bool lhsIsString = (lhs && lhs->type && lhs->type->kind == HIRType::Kind::String);
+                bool rhsIsString = (rhs && rhs->type && rhs->type->kind == HIRType::Kind::String);
+
+                // For string concatenation, preserve boolean types (don't convert to int)
+                // This allows LLVM codegen to properly convert boolean to "true"/"false" strings
+                if (!lhsIsString && !rhsIsString) {
+                    // Pure numeric addition: convert booleans to integers
+                    lhs = convertBoolToInt(lhs);
+                    rhs = convertBoolToInt(rhs);
+                }
+                // else: String concatenation - keep booleans as-is for proper string conversion
+
                 lastValue_ = builder_->createAdd(lhs, rhs);
                 break;
+            }
             case Op::Sub:
                 lhs = convertBoolToInt(lhs);
                 rhs = convertBoolToInt(rhs);
@@ -3709,18 +3721,39 @@ public:
 
                     // Check if this is Math.random()
                     if (objIdent->name == "Math" && propIdent->name == "random") {
-                        // Math.random() returns a pseudo-random number
-                        // For simplicity in integer type system, return a fixed value
-                        // TODO: Implement proper PRNG when runtime support is added
+                        // Math.random() returns a pseudo-random number between 0.0 and 1.0
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.random() call" << std::endl;
                         if (node.arguments.size() != 0) {
                             std::cerr << "ERROR: Math.random() expects no arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
 
-                        // Return a deterministic value for now (42)
-                        // This allows testing without complex state management
-                        lastValue_ = builder_->createIntConstant(42);
+                        // Create call to nova_random() runtime function
+                        std::string runtimeFuncName = "nova_random";
+                        std::vector<HIRTypePtr> paramTypes;  // No parameters
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        // Find or create runtime function
+                        HIRFunction* runtimeFunc = nullptr;
+                        auto& functions = module_->functions;
+                        for (auto& func : functions) {
+                            if (func->name == runtimeFuncName) {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+
+                        std::vector<HIRValue*> args;  // Empty args vector
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "random_result");
                         return;
                     }
 
@@ -3864,23 +3897,53 @@ public:
                     }
 
                     if (objIdent->name == "Array" && propIdent->name == "from") {
-                        // Array.from(arrayLike) - creates new array from array-like object (ES2015)
+                        // Array.from(arrayLike, mapFn?) - creates new array from array-like object (ES2015)
+                        // mapFn is optional: (element, index) => transformed
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Array.from" << std::endl;
 
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Array.from() expects exactly 1 argument" << std::endl;
+                        if (node.arguments.size() < 1 || node.arguments.size() > 2) {
+                            std::cerr << "ERROR: Array.from() expects 1 or 2 arguments (arrayLike, mapFn?)" << std::endl;
                             lastValue_ = nullptr;
                             return;
                         }
 
-                        // Evaluate the argument (the array to copy)
+                        // Evaluate the first argument (the array to copy)
                         node.arguments[0]->accept(*this);
                         auto* arrayArg = lastValue_;
 
-                        // Setup function signature
-                        std::string runtimeFuncName = "nova_array_from";
+                        // Check if we have a mapper function (2nd argument)
+                        bool hasMapperFn = (node.arguments.size() == 2);
+                        HIRValue* mapperFnArg = nullptr;
+
+                        if (hasMapperFn) {
+                            // Clear lastFunctionName_ before processing argument
+                            std::string savedFuncName = lastFunctionName_;
+                            lastFunctionName_ = "";
+
+                            // Evaluate the mapper function argument
+                            node.arguments[1]->accept(*this);
+
+                            // Check if this argument was an arrow function
+                            if (!lastFunctionName_.empty()) {
+                                // For callback methods, pass function name as string constant
+                                // LLVM codegen will convert this to a function pointer
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected arrow function for Array.from mapper: " << lastFunctionName_ << std::endl;
+                                mapperFnArg = builder_->createStringConstant(lastFunctionName_);
+                                lastFunctionName_ = "";  // Reset
+                            } else {
+                                mapperFnArg = lastValue_;
+                            }
+                        }
+
+                        // Setup function signature based on whether we have a mapper
+                        std::string runtimeFuncName = hasMapperFn ? "nova_array_from_map" : "nova_array_from";
                         std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer));
+                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // array pointer
+
+                        if (hasMapperFn) {
+                            // Add function pointer parameter: (i64, i64) -> i64
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // function pointer
+                        }
 
                         // Return type: pointer to array of i64
                         auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -3905,7 +3968,12 @@ public:
                             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
+                        // Build arguments list
                         std::vector<HIRValue*> args = {arrayArg};
+                        if (hasMapperFn) {
+                            args.push_back(mapperFnArg);
+                        }
+
                         lastValue_ = builder_->createCall(runtimeFunc, args, "array_from_result");
                         return;
                     }
@@ -17947,12 +18015,22 @@ public:
         for (size_t i = 0; i < node.body.size(); ++i) {
             auto& stmt = node.body[i];
             if (!stmt) continue;
-            // Check if this is a function or class declaration
-            if (dynamic_cast<FunctionDecl*>(stmt.get()) ||
-                dynamic_cast<ClassDecl*>(stmt.get()) ||
-                dynamic_cast<InterfaceDecl*>(stmt.get()) ||
-                dynamic_cast<TypeAliasDecl*>(stmt.get()) ||
-                dynamic_cast<EnumDecl*>(stmt.get())) {
+
+            // Check if this is a DeclStmt containing a function or class declaration
+            bool isDeclaration = false;
+            if (auto* declStmt = dynamic_cast<DeclStmt*>(stmt.get())) {
+                if (declStmt->declaration) {
+                    if (dynamic_cast<FunctionDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<ClassDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<InterfaceDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<TypeAliasDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<EnumDecl*>(declStmt->declaration.get())) {
+                        isDeclaration = true;
+                    }
+                }
+            }
+
+            if (isDeclaration) {
                 functionDeclIndices.push_back(i);
             } else {
                 topLevelIndices.push_back(i);

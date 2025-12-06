@@ -192,7 +192,50 @@ void nova_console_log_string(const char* str) {
 }
 
 // console.log() - outputs number to stdout
+// In Nova, all numbers are represented as i64, but they may be bitcasted doubles
+// We need to detect and handle both cases for JavaScript number semantics
 void nova_console_log_number(int64_t value) {
+    // Heuristic to detect if this is a bitcasted double:
+    // Small integers (< 2^20) are very unlikely to have the bit pattern of a normal double
+    // Doubles have an exponent field that, when interpreted as an integer, results in very large values
+
+    // First, try interpreting as integer for small values
+    if (value >= 0 && value < (1LL << 20)) {
+        // Likely a small integer
+        printf("%lld\n", (long long)value);
+        return;
+    }
+    if (value < 0 && value > -(1LL << 20)) {
+        // Likely a small negative integer
+        printf("%lld\n", (long long)value);
+        return;
+    }
+
+    // For larger values, try interpreting as a bitcasted double
+    double double_value;
+    std::memcpy(&double_value, &value, sizeof(double));
+
+    // Check if it looks like a reasonable double
+    if (std::isfinite(double_value)) {
+        // If the double has a fractional part, it's definitely a bitcasted double
+        double int_part;
+        double frac_part = std::modf(double_value, &int_part);
+        if (frac_part != 0.0 || (double_value >= -1.0 && double_value <= 1.0)) {
+            // Print as double if it has fractional part OR if it's in range [-1, 1]
+            // (values in [-1, 1] from Math.random(), Math.sin(), etc. are likely bitcasted doubles)
+            printf("%g\n", double_value);
+            return;
+        }
+
+        // Check if this could be the bitcast of a double
+        // If the double value is small (< 2^20) but the int value is large, it's a bitcasted double
+        if (double_value >= -1e15 && double_value <= 1e15 && std::abs(double_value) < (1LL << 20) && std::abs(value) >= (1LL << 20)) {
+            printf("%g\n", double_value);
+            return;
+        }
+    }
+
+    // Default: print as integer
     printf("%lld\n", (long long)value);
 }
 

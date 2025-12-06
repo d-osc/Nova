@@ -1065,14 +1065,14 @@ const char* nova_i64_to_string(int64_t value) {
         return "";
     }
 
-    int written = std::snprintf(result, 24, "%ld", static_cast<long>(value));
+    // Use %lld for long long (64-bit) instead of %ld (32-bit on Windows MSVC)
+    int written = std::snprintf(result, 24, "%lld", static_cast<long long>(value));
     if (written < 0) {
         std::cerr << "ERROR: snprintf failed in nova_i64_to_string" << std::endl;
         std::free(result);
         return "";
     }
 
-    std::cerr << "DEBUG: nova_i64_to_string(" << value << ") = \"" << result << "\"" << std::endl;
     return result;
 }
 
@@ -1084,6 +1084,22 @@ const char* nova_f64_to_string(double value) {
 
     std::snprintf(result, 32, "%g", value);
     return result;
+}
+
+// Convert boolean to string
+const char* nova_bool_to_string(int64_t value) {
+    // JavaScript-style boolean to string conversion: true -> "true", false -> "false"
+    if (value) {
+        char* result = static_cast<char*>(std::malloc(5));  // "true" + null terminator
+        if (!result) return "";
+        std::strcpy(result, "true");
+        return result;
+    } else {
+        char* result = static_cast<char*>(std::malloc(6));  // "false" + null terminator
+        if (!result) return "";
+        std::strcpy(result, "false");
+        return result;
+    }
 }
 
 }

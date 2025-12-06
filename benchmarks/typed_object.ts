@@ -1,7 +1,7 @@
-// Typed object test with explicit return type
-type Point = { x: number, y: number };
+// Typed object test
+// Note: type aliases removed for Nova compatibility
 
-function makePoint(x: number, y: number): Point {
+function makePoint(x: number, y: number) {
     return { x: x, y: y };
 }
 

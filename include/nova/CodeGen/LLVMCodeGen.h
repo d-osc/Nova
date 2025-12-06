@@ -88,7 +88,9 @@ private:
     
     // Binary operations
     llvm::Value* generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
-                                  llvm::Value* lhs, llvm::Value* rhs);
+                                  llvm::Value* lhs, llvm::Value* rhs,
+                                  mir::MIROperand* lhsOperand = nullptr,
+                                  mir::MIROperand* rhsOperand = nullptr);
     
     // Unary operations
     llvm::Value* generateUnaryOp(mir::MIRUnaryOpRValue::UnOp op,

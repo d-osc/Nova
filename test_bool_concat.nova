@@ -1,0 +1,28 @@
+// Test boolean string concatenation with + operator
+const msg1 = "Boolean: " + true;
+const msg2 = "Boolean: " + false;
+const msg3 = true + " is a boolean";
+const msg4 = false + " is also a boolean";
+
+// Mixed cases
+const msg5 = "Result: " + true + " and " + false;
+
+// Template literals (should already work)
+const msg6 = `Boolean: ${true}`;
+const msg7 = `Boolean: ${false}`;
+
+// Numeric boolean operations (should still work - convert to 1/0)
+const num1 = true + true;   // Should be 2
+const num2 = true + false;  // Should be 1
+const num3 = false + false; // Should be 0
+
+console.log(msg1);  // Expected: "Boolean: true"
+console.log(msg2);  // Expected: "Boolean: false"
+console.log(msg3);  // Expected: "true is a boolean"
+console.log(msg4);  // Expected: "false is also a boolean"
+console.log(msg5);  // Expected: "Result: true and false"
+console.log(msg6);  // Expected: "Boolean: true"
+console.log(msg7);  // Expected: "Boolean: false"
+console.log(num1);  // Expected: 2
+console.log(num2);  // Expected: 1
+console.log(num3);  // Expected: 0

@@ -1,0 +1,79 @@
+// Test file for verifying Array.from(), Math.sqrt(), Math.pow(), and Date.now()
+
+function main() {
+    console.log("=== Testing Array.from() ===");
+
+    // Test 1: Array.from with 1 argument (simple copy)
+    let arr1 = [1, 2, 3, 4, 5];
+    let copied = Array.from(arr1);
+    console.log("Original array: ", arr1);
+    console.log("Copied array: ", copied);
+
+    // Test 2: Array.from with mapper function (double each element)
+    let doubled = Array.from(arr1, (x, i) => x * 2);
+    console.log("Doubled array: ", doubled);
+
+    // Test 3: Array.from with mapper function (add index to element)
+    let withIndex = Array.from(arr1, (x, i) => x + i);
+    console.log("Array with index added: ", withIndex);
+
+    // Test 4: Array.from with mapper function (square each element)
+    let squared = Array.from(arr1, (x, i) => x * x);
+    console.log("Squared array: ", squared);
+
+    console.log("");
+    console.log("=== Testing Math.sqrt() ===");
+
+    // Test Math.sqrt with various values
+    console.log("Math.sqrt(0) = ", Math.sqrt(0));
+    console.log("Math.sqrt(1) = ", Math.sqrt(1));
+    console.log("Math.sqrt(4) = ", Math.sqrt(4));
+    console.log("Math.sqrt(9) = ", Math.sqrt(9));
+    console.log("Math.sqrt(16) = ", Math.sqrt(16));
+    console.log("Math.sqrt(25) = ", Math.sqrt(25));
+    console.log("Math.sqrt(100) = ", Math.sqrt(100));
+    console.log("Math.sqrt(144) = ", Math.sqrt(144));
+    console.log("Math.sqrt(256) = ", Math.sqrt(256));
+
+    console.log("");
+    console.log("=== Testing Math.pow() ===");
+
+    // Test Math.pow with various values
+    console.log("Math.pow(2, 0) = ", Math.pow(2, 0));
+    console.log("Math.pow(2, 1) = ", Math.pow(2, 1));
+    console.log("Math.pow(2, 2) = ", Math.pow(2, 2));
+    console.log("Math.pow(2, 3) = ", Math.pow(2, 3));
+    console.log("Math.pow(2, 4) = ", Math.pow(2, 4));
+    console.log("Math.pow(3, 2) = ", Math.pow(3, 2));
+    console.log("Math.pow(3, 3) = ", Math.pow(3, 3));
+    console.log("Math.pow(5, 2) = ", Math.pow(5, 2));
+    console.log("Math.pow(10, 2) = ", Math.pow(10, 2));
+
+    console.log("");
+    console.log("=== Testing Date.now() ===");
+
+    // Test Date.now()
+    let timestamp1 = Date.now();
+    console.log("Current timestamp (ms since epoch): ", timestamp1);
+
+    // Verify it's a reasonable value (should be > 1700000000000 for dates after ~2023)
+    if (timestamp1 > 1700000000000) {
+        console.log("Date.now() returned a valid timestamp");
+    } else {
+        console.log("WARNING: Date.now() returned unexpected value");
+    }
+
+    // Call it again to verify it works multiple times
+    let timestamp2 = Date.now();
+    console.log("Second call to Date.now(): ", timestamp2);
+
+    // Verify timestamps are close (within reasonable range)
+    if (timestamp2 >= timestamp1) {
+        console.log("Date.now() is monotonically increasing");
+    }
+
+    console.log("");
+    console.log("=== All tests completed ===");
+
+    return 0;
+}

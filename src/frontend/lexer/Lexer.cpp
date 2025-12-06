@@ -354,13 +354,30 @@ Token Lexer::lexString(char quote) {
     SourceLocation loc = currentLocation();
     std::string value;
     advance();  // skip opening quote
-    
+
     while (position_ < source_.length() && currentChar() != quote) {
         if (currentChar() == '\\') {
             advance();
             if (position_ < source_.length()) {
-                value += '\\';
-                value += currentChar();
+                // Process escape sequences
+                char escapeChar = currentChar();
+                switch (escapeChar) {
+                    case 'n':  value += '\n'; break;  // newline
+                    case 't':  value += '\t'; break;  // tab
+                    case 'r':  value += '\r'; break;  // carriage return
+                    case 'b':  value += '\b'; break;  // backspace
+                    case 'f':  value += '\f'; break;  // form feed
+                    case 'v':  value += '\v'; break;  // vertical tab
+                    case '0':  value += '\0'; break;  // null
+                    case '\\': value += '\\'; break;  // backslash
+                    case '\'': value += '\''; break;  // single quote
+                    case '"':  value += '"';  break;  // double quote
+                    default:
+                        // For unknown escape sequences, keep the backslash and character
+                        value += '\\';
+                        value += escapeChar;
+                        break;
+                }
                 advance();
             }
         } else {
@@ -368,13 +385,13 @@ Token Lexer::lexString(char quote) {
             advance();
         }
     }
-    
+
     if (currentChar() == quote) {
         advance();  // skip closing quote
     } else {
         reportError("Unterminated string");
     }
-    
+
     return Token(TokenType::StringLiteral, value, loc);
 }
 

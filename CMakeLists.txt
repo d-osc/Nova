@@ -186,6 +186,7 @@ set(NOVA_SOURCES
     src/runtime/String.cpp
     src/runtime/Object.cpp
     src/runtime/Number.cpp
+    src/runtime/Math.cpp
     src/runtime/Function.cpp
     src/runtime/Utility.cpp
     src/runtime/Regex.cpp

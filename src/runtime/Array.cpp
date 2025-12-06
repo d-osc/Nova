@@ -2,6 +2,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdarg>
+#include <iostream>
 
 // ==================== ULTRA OPTIMIZATIONS ====================
 // Enable SIMD optimizations for array operations
@@ -159,6 +160,7 @@ ValueArray* create_value_array(int64 initial_capacity) {
     array->capacity = initial_capacity;
 
     // Allocate int64 array for direct value storage
+    // Use regular malloc for simplicity and compatibility
     array->elements = static_cast<int64*>(malloc(sizeof(int64) * initial_capacity));
 
     add_root(array);
@@ -221,15 +223,10 @@ void resize_value_array(ValueArray* array, int64 new_capacity) {
         new_capacity = calculate_new_capacity(array->capacity);
     }
 
-    // Allocate aligned memory for SIMD operations (64-byte alignment)
-#ifdef _WIN32
-    int64* new_elements = static_cast<int64*>(_aligned_malloc(sizeof(int64) * new_capacity, 64));
-#else
-    int64* new_elements = static_cast<int64*>(aligned_alloc(64, sizeof(int64) * new_capacity));
-#endif
+    // Allocate new memory - use regular malloc for compatibility
+    int64* new_elements = static_cast<int64*>(malloc(sizeof(int64) * new_capacity));
     if (!new_elements) {
-        // Fallback to regular malloc
-        new_elements = static_cast<int64*>(malloc(sizeof(int64) * new_capacity));
+        return;  // Allocation failed, keep old array
     }
 
     // OPTIMIZATION 3: Fast memcpy for bulk copy (CPU optimized)
@@ -238,13 +235,11 @@ void resize_value_array(ValueArray* array, int64 new_capacity) {
         std::memcpy(new_elements, array->elements, copy_count * sizeof(int64));
     }
 
+    // Free old memory
     if (array->elements) {
-#ifdef _WIN32
-        _aligned_free(array->elements);
-#else
         free(array->elements);
-#endif
     }
+
     array->elements = new_elements;
     array->capacity = new_capacity;
 }
@@ -675,7 +670,9 @@ static void write_back_to_metadata(void* metadata_ptr, nova::runtime::ValueArray
     if (!metadata_ptr || !array) return;
 
     // Update length in metadata struct (offset 24)
-    *reinterpret_cast<int64_t*>(static_cast<char*>(metadata_ptr) + 24) = array->length;
+    int64_t* length_ptr = reinterpret_cast<int64_t*>(static_cast<char*>(metadata_ptr) + 24);
+    *length_ptr = array->length;
+
     // Update capacity in metadata struct (offset 32)
     *reinterpret_cast<int64_t*>(static_cast<char*>(metadata_ptr) + 32) = array->capacity;
     // Update elements pointer in metadata struct (offset 40) to point to ValueArray's elements

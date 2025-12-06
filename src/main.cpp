@@ -338,12 +338,18 @@ Tips:
 }
 
 int main(int argc, char** argv) {
+    std::cerr << "TRACE: main() started, argc=" << argc << std::endl;
+    if (argc > 1) {
+        std::cerr << "TRACE: argv[1]=" << argv[1] << std::endl;
+    }
+
     // No arguments - enter interactive shell mode
     if (argc < 2) {
         return runShell();
     }
 
     std::string command = argv[1];
+    std::cerr << "TRACE: command=" << command << std::endl;
 
     if (command == "--help" || command == "-h") {
         printUsage();
@@ -592,11 +598,11 @@ int main(int argc, char** argv) {
     }
 
     // Handle run-script command (run npm scripts from package.json)
-    if (command == "run" || command == "run-script") {
+    if (command == "run-script" || command == "script") {
         if (inputFile.empty()) {
             std::cerr << "Error: No script name specified" << std::endl;
-            std::cerr << "Usage: nova run <script-name>" << std::endl;
-            std::cerr << "Example: nova run start" << std::endl;
+            std::cerr << "Usage: nova run-script <script-name>" << std::endl;
+            std::cerr << "Example: nova run-script start" << std::endl;
             return 1;
         }
 
@@ -991,10 +997,12 @@ int main(int argc, char** argv) {
     }
 
     // Read source code
+    std::cerr << "TRACE: Reading source file" << std::endl;
     std::stringstream buffer;
     buffer << file.rdbuf();
     std::string sourceCode = buffer.str();
     file.close();
+    std::cerr << "TRACE: Source code read, length=" << sourceCode.length() << std::endl;
 
     // ============================================================
     // FAST PATH: Check native executable cache for "run" command
@@ -1032,32 +1040,38 @@ int main(int argc, char** argv) {
     try {
         // TODO: Implement full compilation pipeline
         // For now, just demonstrate the structure
-        
+
+        std::cerr << "TRACE: Starting compilation phases" << std::endl;
         if (verbose) std::cout << "[*] Phase 1: Lexical Analysis..." << std::endl;
+        std::cerr << "TRACE: Creating lexer" << std::endl;
         Lexer lexer(inputFile, sourceCode);
+        std::cerr << "TRACE: Lexer created" << std::endl;
         if (lexer.hasErrors()) {
             for (const auto& error : lexer.getErrors()) {
                 std::cerr << error << std::endl;
             }
             return 1;
         }
-        
+
         if (verbose) std::cout << "[*] Phase 2: Parsing..." << std::endl;
+        std::cerr << "TRACE: Creating parser" << std::endl;
         Parser parser(lexer);
+        std::cerr << "TRACE: Calling parseProgram" << std::endl;
         auto ast = parser.parseProgram();
-        
+        std::cerr << "TRACE: Parsing completed" << std::endl;
+
+        std::cerr << "TRACE: Checking for parser errors" << std::endl;
         if (parser.hasErrors()) {
             for (const auto& error : parser.getErrors()) {
                 std::cerr << error << std::endl;
             }
             return 1;
         }
-        
         if (verbose) {
-            std::cout << "[OK] Successfully parsed " << ast->body.size() 
+            std::cout << "[OK] Successfully parsed " << ast->body.size()
                       << " top-level statements" << std::endl;
         }
-        
+
         if (command == "check") {
             if (verbose) std::cout << "⏳ Phase 3: Type Checking..." << std::endl;
             // TypeChecker checker;
@@ -1065,11 +1079,11 @@ int main(int argc, char** argv) {
             std::cout << "✅ Type checking completed successfully" << std::endl;
             return 0;
         }
-        
+
         if (verbose) std::cout << "⏳ Phase 3: Semantic Analysis..." << std::endl;
         // TODO: SemanticAnalyzer analyzer;
         // TODO: analyzer.analyze(ast);
-        
+
         if (verbose) std::cout << "⏳ Phase 4: HIR Generation..." << std::endl;
         auto* hirModule = hir::generateHIR(*ast, "main");
         if (!hirModule) {
@@ -1095,12 +1109,15 @@ int main(int argc, char** argv) {
         // TODO: hirOpt.optimize(hirModule);
         
         if (verbose) std::cout << "⏳ Phase 6: MIR Generation..." << std::endl;
+        std::cerr << "TRACE: Starting MIR generation" << std::endl;
         auto* mirModule = mir::generateMIR(hirModule, "main");
+        std::cerr << "TRACE: MIR generation completed" << std::endl;
         if (!mirModule) {
             std::cerr << "❌ Error: MIR generation failed" << std::endl;
             delete hirModule;
             return 1;
         }
+        std::cerr << "TRACE: MIR module is valid" << std::endl;
         
         if (emitMIR) {
             std::string mirFile = outputFile.empty() ? 

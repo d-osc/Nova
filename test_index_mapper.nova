@@ -1,0 +1,11 @@
+// Test Array.from with index-based mapper
+
+console.log("Testing index-based mapper...");
+
+const arr3 = [10, 20, 30];
+const withIndex = Array.from(arr3, (x, i) => x + i);
+console.log("First element (10 + 0 = 10): " + withIndex[0]);
+console.log("Second element (20 + 1 = 21): " + withIndex[1]);
+console.log("Third element (30 + 2 = 32): " + withIndex[2]);
+
+console.log("Test completed");

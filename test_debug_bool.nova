@@ -1,0 +1,3 @@
+// Minimal test
+const msg = true + " test";
+console.log(msg);

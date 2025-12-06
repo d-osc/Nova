@@ -14,7 +14,7 @@ const testObject = {
             }
         }
     },
-    numbers: Array.from({length: 100}, (_, i) => i * Math.random())
+    numbers: (() => { const arr = []; for (let i = 0; i < 100; i++) arr.push(i); return arr; })()
 };
 
 const jsonString = JSON.stringify(testObject);

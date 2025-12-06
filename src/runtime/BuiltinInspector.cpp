@@ -208,12 +208,21 @@ void nova_inspector_waitForDebugger() {
         fd_set readfds;
         FD_ZERO(&readfds);
 #ifdef _WIN32
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wsign-compare"
+#else
+#pragma warning(push)
+#pragma warning(disable: 4018 4389)  // Disable sign comparison warnings
+#endif
 #endif
         FD_SET(state->socket, &readfds);
 #ifdef _WIN32
+#ifdef __clang__
 #pragma clang diagnostic pop
+#else
+#pragma warning(pop)
+#endif
 #endif
 
         struct timeval tv;

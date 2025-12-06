@@ -4,10 +4,10 @@ interface User {
 }
 
 function greet(user: User): string {
-    return \Hello, \!\;
+    return 'Hello, ' + user.name + '!';
 }
 
-const users: User[] = [
+const users = [
     { name: 'Alice', age: 30 },
     { name: 'Bob', age: 25 }
 ];

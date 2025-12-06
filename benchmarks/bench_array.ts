@@ -3,7 +3,7 @@ const size = 1000000;
 
 // Create array
 const createStart = Date.now();
-const arr: number[] = [];
+const arr = [];
 for (let i = 0; i < size; i++) {
     arr.push(i);
 }

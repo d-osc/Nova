@@ -1,0 +1,17 @@
+// Test Array.from with mapper function
+
+console.log("Testing Array.from with mapper...");
+
+const arr = [1, 2, 3];
+console.log("Original array length: " + arr.length);
+
+const doubled = Array.from(arr, (x, i) => x * 2);
+console.log("Doubled array length: " + doubled.length);
+
+if (doubled.length > 0) {
+    console.log("First element: " + doubled[0]);
+    console.log("Second element: " + doubled[1]);
+    console.log("Third element: " + doubled[2]);
+}
+
+console.log("Test completed");
