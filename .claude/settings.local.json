@@ -53,7 +53,11 @@
       "Bash(do echo \"=== Testing $f ===\")",
       "Bash(done)",
       "Bash(for file in benchmarks/*.js)",
-      "Bash(do echo \"Testing: $file\")"
+      "Bash(do echo \"Testing: $file\")",
+      "Bash(ninja nova:*)",
+      "Bash(msbuild:*)",
+      "Bash(cmake --build:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []

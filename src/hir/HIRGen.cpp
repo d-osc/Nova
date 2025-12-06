@@ -18044,12 +18044,12 @@ public:
 
         // If there are top-level statements (not just declarations), create an implicit main function
         if (!topLevelIndices.empty()) {
-            // Create main function signature: int main()
+            // Create main function signature: int __nova_main()
             std::vector<HIRTypePtr> paramTypes;
             auto returnType = std::make_shared<HIRType>(HIRType::Kind::I32);
 
             HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-            HIRFunctionPtr mainFunc = module_->createFunction("main", funcType);
+            HIRFunctionPtr mainFunc = module_->createFunction("__nova_main", funcType);
             mainFunc->linkage = HIRFunction::Linkage::Public;
 
             // Create entry block

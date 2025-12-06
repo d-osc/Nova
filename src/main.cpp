@@ -338,9 +338,9 @@ Tips:
 }
 
 int main(int argc, char** argv) {
-    std::cerr << "TRACE: main() started, argc=" << argc << std::endl;
+    // std::cerr << "TRACE: main() started, argc=" << argc << std::endl;
     if (argc > 1) {
-        std::cerr << "TRACE: argv[1]=" << argv[1] << std::endl;
+        // std::cerr << "TRACE: argv[1]=" << argv[1] << std::endl;
     }
 
     // No arguments - enter interactive shell mode
@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
     }
 
     std::string command = argv[1];
-    std::cerr << "TRACE: command=" << command << std::endl;
+    // std::cerr << "TRACE: command=" << command << std::endl;
 
     if (command == "--help" || command == "-h") {
         printUsage();
@@ -997,12 +997,12 @@ int main(int argc, char** argv) {
     }
 
     // Read source code
-    std::cerr << "TRACE: Reading source file" << std::endl;
+    // std::cerr << "TRACE: Reading source file" << std::endl;
     std::stringstream buffer;
     buffer << file.rdbuf();
     std::string sourceCode = buffer.str();
     file.close();
-    std::cerr << "TRACE: Source code read, length=" << sourceCode.length() << std::endl;
+    // std::cerr << "TRACE: Source code read, length=" << sourceCode.length() << std::endl;
 
     // ============================================================
     // FAST PATH: Check native executable cache for "run" command
@@ -1041,11 +1041,11 @@ int main(int argc, char** argv) {
         // TODO: Implement full compilation pipeline
         // For now, just demonstrate the structure
 
-        std::cerr << "TRACE: Starting compilation phases" << std::endl;
+        // std::cerr << "TRACE: Starting compilation phases" << std::endl;
         if (verbose) std::cout << "[*] Phase 1: Lexical Analysis..." << std::endl;
-        std::cerr << "TRACE: Creating lexer" << std::endl;
+        // std::cerr << "TRACE: Creating lexer" << std::endl;
         Lexer lexer(inputFile, sourceCode);
-        std::cerr << "TRACE: Lexer created" << std::endl;
+        // std::cerr << "TRACE: Lexer created" << std::endl;
         if (lexer.hasErrors()) {
             for (const auto& error : lexer.getErrors()) {
                 std::cerr << error << std::endl;
@@ -1054,13 +1054,13 @@ int main(int argc, char** argv) {
         }
 
         if (verbose) std::cout << "[*] Phase 2: Parsing..." << std::endl;
-        std::cerr << "TRACE: Creating parser" << std::endl;
+        // std::cerr << "TRACE: Creating parser" << std::endl;
         Parser parser(lexer);
-        std::cerr << "TRACE: Calling parseProgram" << std::endl;
+        // std::cerr << "TRACE: Calling parseProgram" << std::endl;
         auto ast = parser.parseProgram();
-        std::cerr << "TRACE: Parsing completed" << std::endl;
+        // std::cerr << "TRACE: Parsing completed" << std::endl;
 
-        std::cerr << "TRACE: Checking for parser errors" << std::endl;
+        // std::cerr << "TRACE: Checking for parser errors" << std::endl;
         if (parser.hasErrors()) {
             for (const auto& error : parser.getErrors()) {
                 std::cerr << error << std::endl;
@@ -1109,15 +1109,15 @@ int main(int argc, char** argv) {
         // TODO: hirOpt.optimize(hirModule);
         
         if (verbose) std::cout << "⏳ Phase 6: MIR Generation..." << std::endl;
-        std::cerr << "TRACE: Starting MIR generation" << std::endl;
+        // std::cerr << "TRACE: Starting MIR generation" << std::endl;
         auto* mirModule = mir::generateMIR(hirModule, "main");
-        std::cerr << "TRACE: MIR generation completed" << std::endl;
+        // std::cerr << "TRACE: MIR generation completed" << std::endl;
         if (!mirModule) {
             std::cerr << "❌ Error: MIR generation failed" << std::endl;
             delete hirModule;
             return 1;
         }
-        std::cerr << "TRACE: MIR module is valid" << std::endl;
+        // std::cerr << "TRACE: MIR module is valid" << std::endl;
         
         if (emitMIR) {
             std::string mirFile = outputFile.empty() ? 

@@ -1,5 +1,5 @@
-function testMain() {
+function main() {
     console.log("Hello from test-nova!");
 }
 
-testMain();
+main();

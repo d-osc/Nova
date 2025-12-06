@@ -67,11 +67,11 @@ LLVMCodeGen::LLVMCodeGen(const std::string& moduleName)
 LLVMCodeGen::~LLVMCodeGen() = default;
 
 bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
-    std::cerr << "TRACE: LLVMCodeGen::generate() started" << std::endl;
+    // std::cerr << "TRACE: LLVMCodeGen::generate() started" << std::endl;
     try {
         // Declare runtime functions
         declareRuntimeFunctions();
-        std::cerr << "TRACE: Runtime functions declared" << std::endl;
+        // std::cerr << "TRACE: Runtime functions declared" << std::endl;
         
         // Disable constant folding to prevent runtime values from being folded
         // This is especially important for comparison operations in loops
@@ -80,9 +80,9 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
         
         // First pass: Create function declarations for all functions to support forward references
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: First pass - creating function declarations" << std::endl;
-        std::cerr << "TRACE: Starting first pass, " << mirModule.functions.size() << " functions" << std::endl;
+        // std::cerr << "TRACE: Starting first pass, " << mirModule.functions.size() << " functions" << std::endl;
         for (const auto& mirFunc : mirModule.functions) {
-            std::cerr << "TRACE: Declaring function: " << mirFunc->name << std::endl;
+            // std::cerr << "TRACE: Declaring function: " << mirFunc->name << std::endl;
             // Skip if already exists in functionMap
             if (functionMap.find(mirFunc->name) != functionMap.end()) {
                 continue;
@@ -117,15 +117,51 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
         }
         
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Second pass - generating function bodies" << std::endl;
-        std::cerr << "TRACE: Starting second pass - generating function bodies" << std::endl;
+        // std::cerr << "TRACE: Starting second pass - generating function bodies" << std::endl;
         // Generate all functions
         for (const auto& mirFunc : mirModule.functions) {
-            std::cerr << "TRACE: Generating function body: " << mirFunc->name << std::endl;
+            // std::cerr << "TRACE: Generating function body: " << mirFunc->name << std::endl;
             generateFunction(mirFunc.get());
-            std::cerr << "TRACE: Finished generating function: " << mirFunc->name << std::endl;
+            // std::cerr << "TRACE: Finished generating function: " << mirFunc->name << std::endl;
         }
-        std::cerr << "TRACE: All functions generated successfully" << std::endl;
-        
+        // std::cerr << "TRACE: All functions generated successfully" << std::endl;
+
+        // Create C main wrapper that calls __nova_main if it exists
+        if (functionMap.find("__nova_main") != functionMap.end()) {
+            // std::cerr << "TRACE: Creating C main wrapper to call __nova_main" << std::endl;
+
+            // Create int main() signature
+            llvm::FunctionType* mainType = llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(*context),
+                std::vector<llvm::Type*>(),
+                false
+            );
+
+            llvm::Function* cMain = llvm::Function::Create(
+                mainType,
+                llvm::Function::ExternalLinkage,
+                "main",
+                module.get()
+            );
+
+            // Create entry block for main
+            llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(*context, "entry", cMain);
+            llvm::IRBuilder<> mainBuilder(entryBB);
+
+            // Call __nova_main()
+            llvm::Function* novaMain = functionMap["__nova_main"];
+            llvm::Value* result = mainBuilder.CreateCall(novaMain);
+
+            // If __nova_main returns i32, use it; otherwise return 0
+            if (result->getType()->isIntegerTy(32)) {
+                mainBuilder.CreateRet(result);
+            } else {
+                mainBuilder.CreateRet(llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0));
+            }
+
+            // std::cerr << "TRACE: C main wrapper created successfully" << std::endl;
+        }
+
 // Verify the module
         std::string errMsg;
         llvm::raw_string_ostream errStream(errMsg);
