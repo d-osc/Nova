@@ -2061,66 +2061,192 @@ public:
                         } else if (propIdent->name == "log" || propIdent->name == "error" ||
                             propIdent->name == "warn" || propIdent->name == "info" ||
                             propIdent->name == "debug") {
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call" << std::endl;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected console." << propIdent->name << "() call with " << node.arguments.size() << " arguments" << std::endl;
 
                             // console methods can have any number of arguments
-                            // For simplicity, we'll handle the first argument
+                            // We'll handle all arguments by calling the console function for each one
                             if (node.arguments.size() < 1) {
-                                // No arguments - just return without error
-                                lastValue_ = builder_->createIntConstant(0);
+                                // No arguments - just print a newline
+                                std::string runtimeFuncName = "nova_console_log_string";
+                                std::vector<HIRTypePtr> paramTypes;
+                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                                auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                                HIRFunction* runtimeFunc = nullptr;
+                                auto& functions = module_->functions;
+                                for (auto& func : functions) {
+                                    if (func->name == runtimeFuncName) {
+                                        runtimeFunc = func.get();
+                                        break;
+                                    }
+                                }
+
+                                if (!runtimeFunc) {
+                                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                    funcPtr->linkage = HIRFunction::Linkage::External;
+                                    runtimeFunc = funcPtr.get();
+                                }
+
+                                auto* emptyStr = builder_->createStringConstant("");
+                                std::vector<HIRValue*> args = {emptyStr};
+                                lastValue_ = builder_->createCall(runtimeFunc, args, "console_result");
                                 return;
                             }
 
-                            // Evaluate the first argument
-                            node.arguments[0]->accept(*this);
-                            auto* arg = lastValue_;
-
-                            // Determine which runtime function to call based on method and argument type
-                            std::string runtimeFuncName;
-                            std::vector<HIRTypePtr> paramTypes;
-
-                            bool isString = arg->type && arg->type->kind == HIRType::Kind::String;
-                            if (propIdent->name == "log") {
-                                runtimeFuncName = isString ? "nova_console_log_string" : "nova_console_log_number";
-                            } else if (propIdent->name == "error") {
-                                runtimeFuncName = isString ? "nova_console_error_string" : "nova_console_error_number";
-                            } else if (propIdent->name == "warn") {
-                                runtimeFuncName = isString ? "nova_console_warn_string" : "nova_console_warn_number";
-                            } else if (propIdent->name == "info") {
-                                runtimeFuncName = isString ? "nova_console_info_string" : "nova_console_info_number";
-                            } else { // debug
-                                runtimeFuncName = isString ? "nova_console_debug_string" : "nova_console_debug_number";
-                            }
-
-                            // Setup function signature based on argument type
-                            if (isString) {
-                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                            } else {
-                                paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                            }
-                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
-
-                            // Find or create runtime function
-                            HIRFunction* runtimeFunc = nullptr;
+                            // Get functions reference once for all iterations
                             auto& functions = module_->functions;
+
+                            // Process each argument
+                            for (size_t i = 0; i < node.arguments.size(); i++) {
+                                // Evaluate the argument
+                                node.arguments[i]->accept(*this);
+                                auto* arg = lastValue_;
+
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: console.log arg " << i << ": ";
+                                if (arg && arg->type) {
+                                    std::cerr << "type=" << static_cast<int>(arg->type->kind);
+                                } else {
+                                    std::cerr << "NULL type!";
+                                }
+                                std::cerr << std::endl;
+
+                                // Determine which runtime function to call based on method and argument type
+                                std::string runtimeFuncName;
+                                std::vector<HIRTypePtr> paramTypes;
+
+                                bool isString = arg->type && arg->type->kind == HIRType::Kind::String;
+                                bool isPointer = arg->type && arg->type->kind == HIRType::Kind::Pointer;
+                                bool isBool = arg->type && arg->type->kind == HIRType::Kind::Bool;
+                                bool isDouble = arg->type && arg->type->kind == HIRType::Kind::F64;
+
+                                // Select the appropriate function based on type
+                                if (propIdent->name == "log") {
+                                    if (isString) {
+                                        runtimeFuncName = "nova_console_log_string";
+                                    } else if (isPointer) {
+                                        runtimeFuncName = "nova_console_log_object";
+                                    } else if (isBool) {
+                                        runtimeFuncName = "nova_console_log_bool";
+                                    } else if (isDouble) {
+                                        runtimeFuncName = "nova_console_log_double";
+                                    } else {
+                                        runtimeFuncName = "nova_console_log_number";
+                                    }
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Selected runtime function: " << runtimeFuncName << std::endl;
+                                } else if (propIdent->name == "error") {
+                                    if (isString) {
+                                        runtimeFuncName = "nova_console_error_string";
+                                    } else if (isDouble) {
+                                        runtimeFuncName = "nova_console_error_double";
+                                    } else if (isBool) {
+                                        runtimeFuncName = "nova_console_error_bool";
+                                    } else {
+                                        runtimeFuncName = "nova_console_error_number";
+                                    }
+                                } else if (propIdent->name == "warn") {
+                                    if (isString) {
+                                        runtimeFuncName = "nova_console_warn_string";
+                                    } else if (isDouble) {
+                                        runtimeFuncName = "nova_console_warn_double";
+                                    } else if (isBool) {
+                                        runtimeFuncName = "nova_console_warn_bool";
+                                    } else {
+                                        runtimeFuncName = "nova_console_warn_number";
+                                    }
+                                } else if (propIdent->name == "info") {
+                                    runtimeFuncName = isString ? "nova_console_info_string" : "nova_console_info_number";
+                                } else { // debug
+                                    runtimeFuncName = isString ? "nova_console_debug_string" : "nova_console_debug_number";
+                                }
+
+                                // Setup function signature based on argument type
+                                if (isString) {
+                                    paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                                } else if (isPointer) {
+                                    paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer));
+                                } else if (isBool) {
+                                    paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Bool));
+                                } else if (isDouble) {
+                                    paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));
+                                } else {
+                                    paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                                }
+                                auto returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                                // Find or create runtime function
+                                HIRFunction* runtimeFunc = nullptr;
+                                for (auto& func : functions) {
+                                    if (func->name == runtimeFuncName) {
+                                        runtimeFunc = func.get();
+                                        break;
+                                    }
+                                }
+
+                                if (!runtimeFunc) {
+                                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                    funcPtr->linkage = HIRFunction::Linkage::External;
+                                    runtimeFunc = funcPtr.get();
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                }
+
+                                // Add space before argument if not the first one
+                                if (i > 0) {
+                                    // Print a space separator
+                                    std::string spaceFunc = "nova_console_print_space";
+                                    HIRFunction* spaceFuncPtr = nullptr;
+                                    for (auto& func : functions) {
+                                        if (func->name == spaceFunc) {
+                                            spaceFuncPtr = func.get();
+                                            break;
+                                        }
+                                    }
+
+                                    if (!spaceFuncPtr) {
+                                        std::vector<HIRTypePtr> emptyParams;
+                                        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                                        HIRFunctionType* spaceFuncType = new HIRFunctionType(emptyParams, voidType);
+                                        HIRFunctionPtr spacePtr = module_->createFunction(spaceFunc, spaceFuncType);
+                                        spacePtr->linkage = HIRFunction::Linkage::External;
+                                        spaceFuncPtr = spacePtr.get();
+                                    }
+
+                                    std::vector<HIRValue*> emptyArgs;
+                                    builder_->createCall(spaceFuncPtr, emptyArgs, "space");
+                                }
+
+                                // Create call to runtime function
+                                std::vector<HIRValue*> args = {arg};
+                                lastValue_ = builder_->createCall(runtimeFunc, args, "console_result");
+                            }
+
+                            // Print newline at the end by calling nova_console_print_newline
+                            std::string newlineFunc = "nova_console_print_newline";
+                            HIRFunction* newlineFuncPtr = nullptr;
+
+                            // Find existing function declaration
                             for (auto& func : functions) {
-                                if (func->name == runtimeFuncName) {
-                                    runtimeFunc = func.get();
+                                if (func->name == newlineFunc) {
+                                    newlineFuncPtr = func.get();
                                     break;
                                 }
                             }
 
-                            if (!runtimeFunc) {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            // Create if doesn't exist
+                            if (!newlineFuncPtr) {
+                                std::vector<HIRTypePtr> params;
+                                auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                                HIRFunctionType* funcType = new HIRFunctionType(params, voidType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(newlineFunc, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
-                                runtimeFunc = funcPtr.get();
-                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                                newlineFuncPtr = funcPtr.get();
                             }
 
-                            // Create call to runtime function
-                            std::vector<HIRValue*> args = {arg};
-                            lastValue_ = builder_->createCall(runtimeFunc, args, "console_result");
+                            // Create the call
+                            std::vector<HIRValue*> noArgs;
+                            builder_->createCall(newlineFuncPtr, noArgs, "console_newline");
+
                             return;
                         }
                     }

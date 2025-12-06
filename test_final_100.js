@@ -1,0 +1,10 @@
+console.log("=== ทดสอบ Nova 100% ===");
+console.log("ภาษาไทย:", "สวัสดีครับ");
+console.log("ตัวเลข:", 42, 100);
+console.log("ทศนิยม:", 3.14, 2.718);
+console.log("Boolean:", true, false);
+console.log("Arrays:", [1, 2, 3]);
+console.log("Mixed:", "ราคา", 99.99, "บาท");
+const numbers = [10, 20, 30];
+console.log("Array from variable:", numbers);
+console.log("สำเร็จ 100%! 🚀");

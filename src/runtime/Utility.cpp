@@ -11,6 +11,25 @@
 #include <string>
 #include <csetjmp>
 
+// Windows UTF-8 console support
+#ifdef _WIN32
+#include <windows.h>
+
+// Static initializer to set console to UTF-8 mode on Windows
+namespace {
+    struct ConsoleUTF8Initializer {
+        ConsoleUTF8Initializer() {
+            // Set console code page to UTF-8 (65001)
+            SetConsoleOutputCP(CP_UTF8);
+            SetConsoleCP(CP_UTF8);
+        }
+    };
+
+    // This will run before main()
+    static ConsoleUTF8Initializer utf8_init;
+}
+#endif
+
 // Global exception handling state
 static thread_local bool g_exception_pending = false;
 static thread_local int64_t g_exception_value = 0;
@@ -181,13 +200,25 @@ char* read_line() {
 } // namespace runtime
 } // namespace nova
 
+// Cleanup handler using RAII - print final newline on exit
+struct ConsoleLogCleanup {
+    ~ConsoleLogCleanup() {
+        printf("\n");
+        fflush(stdout);
+    }
+};
+
+// Global cleanup object - destructor will be called on program exit
+static ConsoleLogCleanup cleanup_handler;
+
 // Extern "C" wrapper for console functions
 extern "C" {
 
 // console.log() - outputs string message to stdout
 void nova_console_log_string(const char* str) {
     if (str) {
-        printf("%s\n", str);
+        printf("%s ", str);
+        fflush(stdout);
     }
 }
 
@@ -202,12 +233,14 @@ void nova_console_log_number(int64_t value) {
     // First, try interpreting as integer for small values
     if (value >= 0 && value < (1LL << 20)) {
         // Likely a small integer
-        printf("%lld\n", (long long)value);
+        printf("%lld ", (long long)value);
+        fflush(stdout);
         return;
     }
     if (value < 0 && value > -(1LL << 20)) {
         // Likely a small negative integer
-        printf("%lld\n", (long long)value);
+        printf("%lld ", (long long)value);
+        fflush(stdout);
         return;
     }
 
@@ -223,20 +256,23 @@ void nova_console_log_number(int64_t value) {
         if (frac_part != 0.0 || (double_value >= -1.0 && double_value <= 1.0)) {
             // Print as double if it has fractional part OR if it's in range [-1, 1]
             // (values in [-1, 1] from Math.random(), Math.sin(), etc. are likely bitcasted doubles)
-            printf("%g\n", double_value);
+            printf("%g ", double_value);
+            fflush(stdout);
             return;
         }
 
         // Check if this could be the bitcast of a double
         // If the double value is small (< 2^20) but the int value is large, it's a bitcasted double
         if (double_value >= -1e15 && double_value <= 1e15 && std::abs(double_value) < (1LL << 20) && std::abs(value) >= (1LL << 20)) {
-            printf("%g\n", double_value);
+            printf("%g ", double_value);
+            fflush(stdout);
             return;
         }
     }
 
     // Default: print as integer
-    printf("%lld\n", (long long)value);
+    printf("%lld ", (long long)value);
+    fflush(stdout);
 }
 
 // console.error() - outputs error message to stderr
@@ -576,26 +612,99 @@ void nova_console_profileEnd_default() {
     nova_console_profileEnd_string("default");
 }
 
-// ============================================================================
-// Additional console overloads for various types
-// ============================================================================
+// Helper functions for console output
+void nova_console_print_space() {
+    printf(" ");
+}
+
+void nova_console_print_newline() {
+    printf("\n");
+    fflush(stdout);
+}
 
 // console.log for double/float
 void nova_console_log_double(double value) {
-    printf("%g\n", value);
+    printf("%g ", value);
+    fflush(stdout);
 }
 
 // console.log for bool
 void nova_console_log_bool(int value) {
-    printf("%s\n", value ? "true" : "false");
+    printf("%s ", value ? "true" : "false");
+    fflush(stdout);
 }
 
 // console.log for object
 void nova_console_log_object(void* obj) {
-    if (obj) {
-        printf("[object Object]\n");
-    } else {
-        printf("null\n");
+    using namespace nova::runtime;
+
+    if (!obj) {
+        printf("null ");
+        fflush(stdout);
+        return;
+    }
+
+    // Get the object type from the header
+    ObjectHeader* header = static_cast<ObjectHeader*>(obj);
+    TypeId type_id = static_cast<TypeId>(header->type_id);
+
+    switch (type_id) {
+        case TypeId::STRING: {
+            String* str = static_cast<String*>(obj);
+            if (str->data) {
+                printf("%s ", str->data);
+            }
+            fflush(stdout);
+            break;
+        }
+        case TypeId::ARRAY: {
+            Array* arr = static_cast<Array*>(obj);
+            printf("[ ");
+
+            // For primitive arrays (e.g., [1, 2, 3]), elements are stored as i64 values
+            // For object arrays (e.g., ["a", "b"]), elements are stored as void* pointers
+            // We'll treat elements as i64* for primitive arrays
+            int64_t* primitive_elements = static_cast<int64_t*>(arr->elements);
+
+            for (int64_t i = 0; i < arr->length; i++) {
+                // Read as i64 value
+                int64_t value = primitive_elements[i];
+
+                // Check if this looks like a pointer (high bit set, aligned)
+                // Primitive numbers are typically small or have recognizable patterns
+                bool looks_like_pointer = (value != 0) &&
+                                         ((value & 0xFFFF000000000000ULL) != 0) &&
+                                         ((value & 0x7) == 0);  // Pointer alignment
+
+                if (looks_like_pointer) {
+                    // Treat as pointer to object
+                    void* elem_ptr = reinterpret_cast<void*>(value);
+                    ObjectHeader* elem_header = static_cast<ObjectHeader*>(elem_ptr);
+                    TypeId elem_type = static_cast<TypeId>(elem_header->type_id);
+
+                    if (elem_type == TypeId::STRING) {
+                        String* elem_str = static_cast<String*>(elem_ptr);
+                        printf("'%s'", elem_str->data ? elem_str->data : "");
+                    } else {
+                        printf("[Object]");
+                    }
+                } else {
+                    // Treat as primitive number
+                    printf("%lld", (long long)value);
+                }
+
+                if (i < arr->length - 1) {
+                    printf(", ");
+                }
+            }
+            printf(" ] ");
+            fflush(stdout);
+            break;
+        }
+        default:
+            printf("[object Object] ");
+            fflush(stdout);
+            break;
     }
 }
 

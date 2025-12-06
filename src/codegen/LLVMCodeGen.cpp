@@ -3311,6 +3311,86 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_console_log_double") {
+                            // void @nova_console_log_double(double) - outputs double to stdout
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_log_double declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),        // Returns void
+                                {llvm::Type::getDoubleTy(*context)},    // Double (f64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_log_double",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_log_bool") {
+                            // void @nova_console_log_bool(i32) - outputs boolean to stdout
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_log_bool declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),        // Returns void
+                                {llvm::Type::getInt32Ty(*context)},     // Boolean (i32)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_log_bool",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_log_object") {
+                            // void @nova_console_log_object(ptr) - outputs object to stdout
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_log_object declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),         // Returns void
+                                {llvm::PointerType::getUnqual(*context)}, // Object pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_log_object",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_print_newline") {
+                            // void @nova_console_print_newline() - prints newline
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_print_newline declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),  // Returns void
+                                {},                                // No parameters
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_print_newline",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_console_print_space") {
+                            // void @nova_console_print_space() - prints space
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_print_space declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),  // Returns void
+                                {},                                // No parameters
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_print_space",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_console_error_string") {
                             // void @nova_console_error_string(ptr) - outputs string to stderr
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_error_string declaration" << std::endl;
@@ -5396,7 +5476,25 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
         }
 
         // Initialize metadata fields
-        // Field 0: ObjectHeader padding (skip initialization - not needed for stack arrays)
+        // Field 0: ObjectHeader - initialize type_id for runtime type detection
+        // ObjectHeader structure: { size_t size, uint32_t type_id, bool is_marked, ObjectHeader* next }
+        // We need to initialize type_id = 1 (TypeId::ARRAY) at offset 8 bytes (after size_t on 64-bit)
+        llvm::Value* headerPtr = builder->CreateStructGEP(arrayMetadataType, metadataAlloca, 0, "meta_header_ptr");
+        // Get pointer to type_id field at byte offset 8
+        llvm::Value* typeIdPtr = builder->CreateConstGEP1_64(
+            llvm::Type::getInt8Ty(*context),
+            headerPtr,
+            8,  // Offset to type_id field (after 8-byte size_t)
+            "type_id_ptr"
+        );
+        // Cast to uint32_t* and store TypeId::ARRAY (1)
+        llvm::Value* typeIdPtr32 = builder->CreateBitCast(
+            typeIdPtr,
+            llvm::PointerType::get(llvm::Type::getInt32Ty(*context), 0),
+            "type_id_ptr32"
+        );
+        llvm::Value* typeIdValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 1);  // TypeId::ARRAY = 1
+        builder->CreateStore(typeIdValue, typeIdPtr32);
 
         // Field 1: length
         llvm::Value* lengthPtr = builder->CreateStructGEP(arrayMetadataType, metadataAlloca, 1, "meta_length_ptr");

@@ -57,7 +57,16 @@
       "Bash(ninja nova:*)",
       "Bash(msbuild:*)",
       "Bash(cmake --build:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(time build/Release/nova.exe run:*)",
+      "Bash(Select-Object -First 10)",
+      "Bash(chcp)",
+      "Bash(build/Release/nova.exe emit:*)",
+      "Bash(cat:*)",
+      "Bash(.nova-cache/bin/1d63db4f468e88ee.exe)",
+      "Bash(.nova-cache/bin/2b73f4c2cfd1d47e.exe)",
+      "Bash(echo:*)",
+      "Bash(.nova-cache/bin/47c893c34b59894.exe)"
     ],
     "deny": [],
     "ask": []
