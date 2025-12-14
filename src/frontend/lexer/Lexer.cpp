@@ -1,4 +1,5 @@
 #include "nova/Frontend/Lexer.h"
+#include <iostream>
 #include "nova/Frontend/Token.h"
 #include <iostream>
 #include <fstream>
@@ -174,6 +175,16 @@ Token Lexer::nextToken() {
 
     char current = currentChar();
 
+    // Debug: Print EVERY character and check for backtick
+    static int tokenCount = 0;
+    tokenCount++;
+    if (tokenCount <= 50) {  // Only first 50 tokens to avoid spam
+        std::cerr << "Token #" << tokenCount << " pos=" << position_ << " char='" << current << "' (ASCII " << (int)current << ")" << std::endl;
+        if (current == '`') {
+            std::cerr << "  ^^^ THIS IS A BACKTICK!" << std::endl;
+        }
+    }
+
     // Comments
     if (current == '/' && peekChar() == '/') {
         skipLineComment();
@@ -209,7 +220,9 @@ Token Lexer::nextToken() {
 
     // Template literals
     if (current == '`') {
+        std::cerr << "*** LEXER: Found backtick, lexing template literal..." << std::endl;
         Token token = lexTemplateLiteral();
+        std::cerr << "*** LEXER: Template literal token value = '" << token.value << "'" << std::endl;
         lastTokenType_ = token.type;
         return token;
     }

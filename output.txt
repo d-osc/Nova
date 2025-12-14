@@ -1,0 +1,690 @@
+Token #1 pos=0 char='c' (ASCII 99)
+Token #2 pos=7 char='.' (ASCII 46)
+Token #3 pos=8 char='l' (ASCII 108)
+Token #4 pos=11 char='(' (ASCII 40)
+Token #5 pos=12 char='"' (ASCII 34)
+Token #6 pos=19 char=',' (ASCII 44)
+Token #7 pos=21 char='"' (ASCII 34)
+Token #8 pos=28 char=')' (ASCII 41)
+Token #9 pos=29 char=';' (ASCII 59)
+Token #10 pos=31 char='c' (ASCII 99)
+Token #11 pos=38 char='.' (ASCII 46)
+Token #12 pos=39 char='l' (ASCII 108)
+Token #13 pos=42 char='(' (ASCII 40)
+Token #14 pos=43 char='"' (ASCII 34)
+Token #15 pos=49 char=',' (ASCII 44)
+Token #16 pos=51 char='1' (ASCII 49)
+Token #17 pos=54 char=')' (ASCII 41)
+Token #18 pos=55 char=';' (ASCII 59)
+DEBUG HIRGen: Detected console.log() call with 2 arguments
+DEBUG HIRGen: console.log arg 0: type=17
+DEBUG HIRGen: Selected runtime function: nova_console_log_string (needsLoad=0)
+DEBUG HIRGen: Created external function: nova_console_log_string
+DEBUG HIRGen: console.log arg 1: type=17
+DEBUG HIRGen: Selected runtime function: nova_console_log_string (needsLoad=0)
+DEBUG HIRGen: Detected console.log() call with 2 arguments
+DEBUG HIRGen: console.log arg 0: type=17
+DEBUG HIRGen: Selected runtime function: nova_console_log_string (needsLoad=0)
+DEBUG HIRGen: console.log arg 1: type=6
+DEBUG HIRGen: Selected runtime function: nova_console_log_number (needsLoad=0)
+DEBUG HIRGen: Created external function: nova_console_log_number
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041C9520) with 2 operands
+  Function: nova_console_log_string
+  Operand 0: value present (ptr=00000191041F6270)
+DEBUG MIRGen: Translating string constant: nova_console_log_string
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Translating argument 0
+DEBUG MIRGen: Translating string constant: Hello
+DEBUG MIRGen: Collected 1 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041CA020) with 1 operands
+  Function: nova_console_print_space
+DEBUG MIRGen: Translating string constant: nova_console_print_space
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Collected 0 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041C95A0) with 2 operands
+  Function: nova_console_log_string
+  Operand 0: value present (ptr=00000191041F59B0)
+DEBUG MIRGen: Translating string constant: nova_console_log_string
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Translating argument 0
+DEBUG MIRGen: Translating string constant: World
+DEBUG MIRGen: Collected 1 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041CA120) with 1 operands
+  Function: nova_console_print_newline
+DEBUG MIRGen: Translating string constant: nova_console_print_newline
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Collected 0 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041C9220) with 2 operands
+  Function: nova_console_log_string
+  Operand 0: value present (ptr=00000191041F5D30)
+DEBUG MIRGen: Translating string constant: nova_console_log_string
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Translating argument 0
+DEBUG MIRGen: Translating string constant: Test
+DEBUG MIRGen: Collected 1 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041C93A0) with 1 operands
+  Function: nova_console_print_space
+DEBUG MIRGen: Translating string constant: nova_console_print_space
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Collected 0 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041C9A20) with 2 operands
+  Function: nova_console_log_number
+  Operand 0: value present (ptr=00000191041F6200)
+DEBUG MIRGen: Translating string constant: nova_console_log_number
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Translating argument 0
+DEBUG MIRGen: Collected 1 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=00000191041C9BA0) with 1 operands
+  Function: nova_console_print_newline
+DEBUG MIRGen: Translating string constant: nova_console_print_newline
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Collected 0 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing return statement in function '__nova_main'
+DEBUG MIRGen: Return value cast to constant: SUCCESS
+
+========== MIR DUMP ==========
+// MIR Module: main
+
+fn __nova_main() -> i32 {
+    // Local declarations
+    let mut _console_result.0: () // console_result.0;
+    let mut _space.1: () // space.1;
+    let mut _console_result.2: () // console_result.2;
+    let mut _console_newline.3: () // console_newline.3;
+    let mut _console_result.4: () // console_result.4;
+    let mut _space.5: () // space.5;
+    let mut _console_result.6: () // console_result.6;
+    let mut _console_newline.7: () // console_newline.7;
+
+    bb0:
+    StorageLive(_console_result.0);
+    _console_result.0 = call const "nova_console_log_string"(const "Hello") -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_space.1);
+    _space.1 = call const "nova_console_print_space"() -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_console_result.2);
+    _console_result.2 = call const "nova_console_log_string"(const "World") -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_console_newline.3);
+    _console_newline.3 = call const "nova_console_print_newline"() -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_console_result.4);
+    _console_result.4 = call const "nova_console_log_string"(const "Test") -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_space.5);
+    _space.5 = call const "nova_console_print_space"() -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_console_result.6);
+    _console_result.6 = call const "nova_console_log_number"(const 123) -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_console_newline.7);
+    _console_newline.7 = call const "nova_console_print_newline"() -> [return: call_cont];
+
+    call_cont:
+    _0 = Use(const 0);
+    return;
+
+}
+
+========== END MIR DUMP ==========
+
+DEBUG LLVM: Disabling constant folding to preserve runtime comparisons
+DEBUG LLVM: First pass - creating function declarations
+DEBUG LLVM: Declared function: __nova_main
+DEBUG LLVM: Second pass - generating function bodies
+DEBUG LLVM: Starting generateFunction for: __nova_main
+DEBUG LLVM: Cleared per-function context maps
+DEBUG LLVM: Created struct type struct.NovaObject with ObjectHeader + 8 fields
+DEBUG LLVM: Using existing declaration for function: __nova_main
+DEBUG LLVM: Creating alloca for variables to prevent constant folding
+DEBUG LLVM: Function has 9 basic blocks
+DEBUG LLVM: Processing block 0 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 0
+DEBUG LLVM: Call has destination place=00000191041F0D40
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041F0D40
+DEBUG LLVM: Finished processing block 0
+DEBUG LLVM: Processing block 1 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 1
+DEBUG LLVM: Call has destination place=00000191041F0D90
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041F0D90
+DEBUG LLVM: Finished processing block 1
+DEBUG LLVM: Processing block 2 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 2
+DEBUG LLVM: Call has destination place=00000191041F0DE0
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041F0DE0
+DEBUG LLVM: Finished processing block 2
+DEBUG LLVM: Processing block 3 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 3
+DEBUG LLVM: Call has destination place=00000191041FBFB0
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041FBFB0
+DEBUG LLVM: Finished processing block 3
+DEBUG LLVM: Processing block 4 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 4
+DEBUG LLVM: Call has destination place=00000191041FC320
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041FC320
+DEBUG LLVM: Finished processing block 4
+DEBUG LLVM: Processing block 5 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 5
+DEBUG LLVM: Call has destination place=00000191041FB830
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041FB830
+DEBUG LLVM: Finished processing block 5
+DEBUG LLVM: Processing block 6 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 6
+DEBUG LLVM: Call has destination place=00000191041FBDD0
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041FBDD0
+DEBUG LLVM: Finished processing block 6
+DEBUG LLVM: Processing block 7 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 7
+DEBUG LLVM: Call has destination place=00000191041FC000
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 00000191041FC000
+DEBUG LLVM: Finished processing block 7
+DEBUG LLVM: Processing block 8 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=0
+DEBUG LLVM: Found assign statement, place=00000191041F0CA0
+DEBUG LLVM: Converting type for place...
+DEBUG LLVM: Type converted successfully, type=i32
+DEBUG LLVM: Creating alloca instruction...
+DEBUG LLVM: Alloca created, adding to valueMap...
+DEBUG LLVM: Created alloca for variable 00000191041F0CA0
+DEBUG LLVM: Finished processing block 8
+DEBUG LLVM: Finished creating all allocas
+DEBUG LLVM: Created basic block bb0 with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created branch from entry to bb0
+DEBUG LLVM: Processing block bb0 with 1 statements
+DEBUG LLVM: ========== Generating basic block: bb0 ==========
+DEBUG LLVM: LLVM BB: %bb0
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_log_string
+DEBUG LLVM: Tried module->getFunction, result: 0000000000000000
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000000000000000, funcName=nova_console_log_string
+DEBUG LLVM: Creating external nova_console_log_string declaration
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 1
+DEBUG LLVM: Processing argument 0
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating string constant: Hello
+DEBUG LLVM: Argument converted, argValue = 00000191041FAB30
+DEBUG LLVM: About to create call with 1 arguments
+DEBUG LLVM: callee = 00000191042077A8
+DEBUG LLVM: callee name = nova_console_log_string
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %bb0
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 00000191042097C0
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_log_string(ptr @.str)
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %bb0
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont
+DEBUG LLVM: [CRITICAL] Current block before branch: %bb0
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block bb0 processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_print_space
+DEBUG LLVM: Tried module->getFunction, result: 0000000000000000
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000000000000000, funcName=nova_console_print_space
+DEBUG LLVM: Creating external nova_console_print_space declaration
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 0
+DEBUG LLVM: About to create call with 0 arguments
+DEBUG LLVM: callee = 0000019104209828
+DEBUG LLVM: callee name = nova_console_print_space
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 00000191041FA8B0
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_print_space()
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont8
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont8
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont8
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_log_string
+DEBUG LLVM: Tried module->getFunction, result: 00000191042077A8
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=00000191042077A8, funcName=nova_console_log_string
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 1
+DEBUG LLVM: Processing argument 0
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating string constant: World
+DEBUG LLVM: Argument converted, argValue = 00000191041FABB0
+DEBUG LLVM: About to create call with 1 arguments
+DEBUG LLVM: callee = 00000191042077A8
+DEBUG LLVM: callee name = nova_console_log_string
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont8
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 0000019104209900
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_log_string(ptr @.str.1)
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont8
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont9
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont8
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont9
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont9
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_print_newline
+DEBUG LLVM: Tried module->getFunction, result: 0000000000000000
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000000000000000, funcName=nova_console_print_newline
+DEBUG LLVM: Creating external nova_console_print_newline declaration
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 0
+DEBUG LLVM: About to create call with 0 arguments
+DEBUG LLVM: callee = 0000019104209968
+DEBUG LLVM: callee name = nova_console_print_newline
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont9
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 00000191041FADB0
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_print_newline()
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont9
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont10
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont9
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont10
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont10
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_log_string
+DEBUG LLVM: Tried module->getFunction, result: 00000191042077A8
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=00000191042077A8, funcName=nova_console_log_string
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 1
+DEBUG LLVM: Processing argument 0
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating string constant: Test
+DEBUG LLVM: Argument converted, argValue = 00000191041FB4B0
+DEBUG LLVM: About to create call with 1 arguments
+DEBUG LLVM: callee = 00000191042077A8
+DEBUG LLVM: callee name = nova_console_log_string
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont10
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 0000019104209A40
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_log_string(ptr @.str.2)
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont10
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont11
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont10
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont11
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont11
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_print_space
+DEBUG LLVM: Tried module->getFunction, result: 0000019104209828
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000019104209828, funcName=nova_console_print_space
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 0
+DEBUG LLVM: About to create call with 0 arguments
+DEBUG LLVM: callee = 0000019104209828
+DEBUG LLVM: callee name = nova_console_print_space
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont11
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 00000191041FAD30
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_print_space()
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont11
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont12
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont11
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont12
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont12
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_log_number
+DEBUG LLVM: Tried module->getFunction, result: 0000000000000000
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000000000000000, funcName=nova_console_log_number
+DEBUG LLVM: Creating external nova_console_log_number declaration
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 1
+DEBUG LLVM: Processing argument 0
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating int constant: 123
+DEBUG LLVM: constOp->type.get() = 00000191041FCCB0
+DEBUG LLVM: About to call convertType
+DEBUG LLVM: convertType returned: 00000191041FE568
+DEBUG LLVM: Argument converted, argValue = 0000019104208BC0
+DEBUG LLVM: About to create call with 1 arguments
+DEBUG LLVM: callee = 0000019104209AA8
+DEBUG LLVM: callee name = nova_console_log_number
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont12
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 000001910420A1A0
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_log_number(i64 123)
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont12
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont13
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont12
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont13
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont13
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_print_newline
+DEBUG LLVM: Tried module->getFunction, result: 0000019104209968
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000019104209968, funcName=nova_console_print_newline
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 0
+DEBUG LLVM: About to create call with 0 arguments
+DEBUG LLVM: callee = 0000019104209968
+DEBUG LLVM: callee name = nova_console_print_newline
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont13
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 00000191041FAEB0
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_print_newline()
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont13
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont14
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont13
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont14
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont14
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Generating assign statement
+DEBUG LLVM: Converting rvalue
+DEBUG LLVM: convertRValue called
+DEBUG LLVM: Processing Use rvalue
+DEBUG LLVM: Converting use operand
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating int constant: 0
+DEBUG LLVM: constOp->type.get() = 00000191041FC740
+DEBUG LLVM: About to call convertType
+DEBUG LLVM: convertType returned: 00000191041FE568
+DEBUG LLVM: Use operand converted to value: 0000019104208890
+DEBUG LLVM: RValue converted, value=0000019104208890
+DEBUG LLVM: Looking for alloca for variable 00000191041F0CA0
+DEBUG LLVM: Storing value in alloca
+DEBUG LLVM: Type mismatch detected!
+DEBUG LLVM:   Alloca type: i32
+DEBUG LLVM:   Value type: i64
+DEBUG LLVM: Created new alloca with correct type
+DEBUG LLVM: Statements generated
+DEBUG LLVM: Basic block has 1 instructions
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Generating return terminator
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Basic optimization passes are enabled
+DEBUG LLVM: runOptimizationPasses called with optLevel=2
+DEBUG LLVM: Creating function pass manager
+DEBUG LLVM: Adding basic optimization passes (optLevel >= 1)
+DEBUG LLVM: Added LoopRotatePass
+DEBUG LLVM: Added LICM (Loop Invariant Code Motion)
+DEBUG LLVM: Added CFGSimplificationPass for basic optimizations
+DEBUG LLVM: Adding intermediate optimization passes (optLevel >= 2)
+DEBUG LLVM: Loop optimizations enabled at level 2
+DEBUG LLVM: Added DeadCodeEliminationPass and CFGSimplificationPass
+DEBUG LLVM: Initializing function pass manager
+DEBUG LLVM: Running optimization passes on functions
+DEBUG LLVM: Running passes on function: __nova_main
+DEBUG LLVM: Running passes on function: main
+DEBUG LLVM: Optimization passes completed
+DEBUG LLVM: emitExecutable called for .nova-cache/bin/6e4f3aca8b0123d1.exe
+DEBUG LLVM: emitLLVMIR ENTRY POINT - filename=.nova-cache/bin/6e4f3aca8b0123d1.exe.ll
+DEBUG LLVM: emitLLVMIR called - Module has 7 functions
+DEBUG LLVM: emitLLVMIR - Function printf has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function __nova_main has 1 basic blocks
+DEBUG LLVM: emitLLVMIR - Basic block entry has 9 instructions
+DEBUG LLVM: emitLLVMIR - Function nova_console_log_string has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function nova_console_print_space has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function nova_console_print_newline has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function nova_console_log_number has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function main has 1 basic blocks
+DEBUG LLVM: emitLLVMIR - Basic block entry has 2 instructions
+DEBUG: Raw LLVM IR dumped to debug_output.ll
+DEBUG LLVM: Looking for novacore.lib at: C:\Users\ondev\Projects\Nova\build\Release/novacore.lib
+DEBUG LLVM: novacore.lib exists: yes
+DEBUG LLVM: Compile command: clang++ -O0 ".nova-cache/bin/6e4f3aca8b0123d1.exe.ll" "C:\Users\ondev\Projects\Nova\build\Release/novacore.lib" -o ".nova-cache/bin/6e4f3aca8b0123d1.exe" -lmsvcrt -lkernel32 -lWs2_32 -lAdvapi32 -Wno-override-module 2>&1
+novacore.lib(Utility.obj) : MSIL .netmodule or module compiled with /GL found; restarting link with /LTCG; add /LTCG to the link command line to improve linker performance
+LINK : warning LNK4098: defaultlib 'libcmt' conflicts with use of other libs; use /NODEFAULTLIB:library
+Generating code
+Finished generating code
+DEBUG LLVM: Successfully created executable: .nova-cache/bin/6e4f3aca8b0123d1.exe
+Hello World
+Test 123
+

@@ -1,0 +1,357 @@
+Token #1 pos=0 char='c' (ASCII 99)
+Token #2 pos=6 char='o' (ASCII 111)
+Token #3 pos=10 char='=' (ASCII 61)
+Token #4 pos=12 char='{' (ASCII 123)
+Token #5 pos=14 char='a' (ASCII 97)
+Token #6 pos=15 char=':' (ASCII 58)
+Token #7 pos=17 char='1' (ASCII 49)
+Token #8 pos=18 char=',' (ASCII 44)
+Token #9 pos=20 char='b' (ASCII 98)
+Token #10 pos=21 char=':' (ASCII 58)
+Token #11 pos=23 char='2' (ASCII 50)
+Token #12 pos=25 char='}' (ASCII 125)
+Token #13 pos=26 char=';' (ASCII 59)
+Token #14 pos=28 char='c' (ASCII 99)
+Token #15 pos=35 char='.' (ASCII 46)
+Token #16 pos=36 char='l' (ASCII 108)
+Token #17 pos=39 char='(' (ASCII 40)
+Token #18 pos=40 char='"' (ASCII 34)
+Token #19 pos=56 char=')' (ASCII 41)
+Token #20 pos=57 char=';' (ASCII 59)
+
+=== TRACE: ObjectExpr processing, ID=__obj_0 ===
+  TRACE: Property 'a' is a data field
+  TRACE: Property 'b' is a data field
+  TRACE: Creating struct type '__obj_0' with 2 data fields
+DEBUG HIRGen: Detected console.log() call with 1 arguments
+DEBUG HIRGen: console.log arg 0: type=17
+DEBUG HIRGen: Selected runtime function: nova_console_log_string (needsLoad=0)
+DEBUG HIRGen: Created external function: nova_console_log_string
+DEBUG MIRGen: Processing HIR Call instruction (ptr=000001F69CA85200) with 2 operands
+  Function: nova_console_log_string
+  Operand 0: value present (ptr=000001F69CAB4C10)
+DEBUG MIRGen: Translating string constant: nova_console_log_string
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Translating argument 0
+DEBUG MIRGen: Translating string constant: Object created
+DEBUG MIRGen: Collected 1 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing HIR Call instruction (ptr=000001F69CA85680) with 1 operands
+  Function: nova_console_print_newline
+DEBUG MIRGen: Translating string constant: nova_console_print_newline
+DEBUG MIRGen: Function operand is not a Copy (probably a constant)
+DEBUG MIRGen: Normal function call (not a closure)
+DEBUG MIRGen: Collected 0 arguments
+DEBUG MIRGen: Creating MIR Call terminator
+DEBUG MIRGen: MIR Call created successfully
+DEBUG MIRGen: Processing return statement in function '__nova_main'
+DEBUG MIRGen: Return value cast to constant: SUCCESS
+
+========== MIR DUMP ==========
+// MIR Module: main
+
+fn __nova_main() -> i32 {
+    // Local declarations
+    let mut ___obj_0.0: *const // __obj_0.0;
+    let mut _obj.1: *const // obj.1;
+    let mut _console_result.2: () // console_result.2;
+    let mut _console_newline.3: () // console_newline.3;
+
+    bb0:
+    StorageLive(___obj_0.0);
+    ___obj_0.0 = Aggregate(Struct, [const 1, const 2]);
+    StorageLive(_obj.1);
+    StorageLive(_obj.1);
+    _obj.1 = Use(copy ___obj_0.0);
+    StorageLive(_console_result.2);
+    _console_result.2 = call const "nova_console_log_string"(const "Object created") -> [return: call_cont];
+
+    call_cont:
+    StorageLive(_console_newline.3);
+    _console_newline.3 = call const "nova_console_print_newline"() -> [return: call_cont];
+
+    call_cont:
+    _0 = Use(const 0);
+    return;
+
+}
+
+========== END MIR DUMP ==========
+
+DEBUG LLVM: Disabling constant folding to preserve runtime comparisons
+DEBUG LLVM: First pass - creating function declarations
+DEBUG LLVM: Declared function: __nova_main
+DEBUG LLVM: Second pass - generating function bodies
+DEBUG LLVM: Starting generateFunction for: __nova_main
+DEBUG LLVM: Cleared per-function context maps
+DEBUG LLVM: Created struct type struct.NovaObject with ObjectHeader + 8 fields
+DEBUG LLVM: Using existing declaration for function: __nova_main
+DEBUG LLVM: Creating alloca for variables to prevent constant folding
+DEBUG LLVM: Function has 3 basic blocks
+DEBUG LLVM: Processing block 0 with 6 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Checking statement 1 kind=0
+DEBUG LLVM: Found assign statement, place=000001F69CAAF550
+DEBUG LLVM: Converting type for place...
+DEBUG LLVM: Type converted successfully, type=ptr
+DEBUG LLVM: WARNING - Creating alloca for pointer type variable 000001F69CAAF550
+DEBUG LLVM: Creating alloca instruction...
+DEBUG LLVM: Alloca created, adding to valueMap...
+DEBUG LLVM: Created alloca for variable 000001F69CAAF550
+DEBUG LLVM: Checking statement 2 kind=1
+DEBUG LLVM: Checking statement 3 kind=1
+DEBUG LLVM: Checking statement 4 kind=0
+DEBUG LLVM: Found assign statement, place=000001F69CAAE7E0
+DEBUG LLVM: Converting type for place...
+DEBUG LLVM: Type converted successfully, type=ptr
+DEBUG LLVM: WARNING - Creating alloca for pointer type variable 000001F69CAAE7E0
+DEBUG LLVM: Creating alloca instruction...
+DEBUG LLVM: Alloca created, adding to valueMap...
+DEBUG LLVM: Created alloca for variable 000001F69CAAE7E0
+DEBUG LLVM: Checking statement 5 kind=1
+DEBUG LLVM: Found Call terminator in block 0
+DEBUG LLVM: Call has destination place=000001F69CAB7A00
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 000001F69CAB7A00
+DEBUG LLVM: Finished processing block 0
+DEBUG LLVM: Processing block 1 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=1
+DEBUG LLVM: Found Call terminator in block 1
+DEBUG LLVM: Call has destination place=000001F69CAB7E10
+DEBUG LLVM: Call destination is void, using i64
+DEBUG LLVM: Creating alloca for Call destination...
+DEBUG LLVM: Created alloca for Call destination 000001F69CAB7E10
+DEBUG LLVM: Finished processing block 1
+DEBUG LLVM: Processing block 2 with 1 statements
+DEBUG LLVM: Checking statement 0 kind=0
+DEBUG LLVM: Found assign statement, place=000001F69CAAF5A0
+DEBUG LLVM: Converting type for place...
+DEBUG LLVM: Type converted successfully, type=i32
+DEBUG LLVM: Creating alloca instruction...
+DEBUG LLVM: Alloca created, adding to valueMap...
+DEBUG LLVM: Created alloca for variable 000001F69CAAF5A0
+DEBUG LLVM: Finished processing block 2
+DEBUG LLVM: Finished creating all allocas
+DEBUG LLVM: Created basic block bb0 with 6 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created basic block call_cont with 1 statements
+DEBUG LLVM: Created branch from entry to bb0
+DEBUG LLVM: Processing block bb0 with 6 statements
+DEBUG LLVM: ========== Generating basic block: bb0 ==========
+DEBUG LLVM: LLVM BB: %bb0
+DEBUG LLVM: Generating 6 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Generating assign statement
+DEBUG LLVM: Converting rvalue
+DEBUG LLVM: convertRValue called
+DEBUG LLVM: Processing Aggregate rvalue
+DEBUG LLVM: generateAggregate called with 2 elements
+DEBUG LLVM: Struct aggregate with 2 fields - checking if SetField
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating int constant: 1
+DEBUG LLVM: constOp->type.get() = 000001F69CAB7130
+DEBUG LLVM: About to call convertType
+DEBUG LLVM: convertType returned: 000001F69CABA208
+DEBUG LLVM: Field 0 type: i64
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating int constant: 2
+DEBUG LLVM: constOp->type.get() = 000001F69CAB7400
+DEBUG LLVM: About to call convertType
+DEBUG LLVM: convertType returned: 000001F69CABA208
+DEBUG LLVM: Field 1 type: i64
+DEBUG LLVM: Using heap allocation (malloc) for closure environment
+DEBUG LLVM: Allocated 16 bytes on heap for closure environment
+DEBUG LLVM: Struct allocated and initialized, returning pointer
+DEBUG LLVM: Stored struct type in arrayTypeMap
+DEBUG LLVM: RValue converted, value=000001F69CA90C70
+DEBUG LLVM: Looking for alloca for variable 000001F69CAAF550
+DEBUG LLVM: Storing value in alloca
+DEBUG LLVM: Propagated array type to variable alloca from value
+DEBUG LLVM:   Source value =   %closure_env = call ptr @nova_alloc_closure_env(i64 16)
+DEBUG LLVM:   Dest alloca =   %var = alloca ptr, align 8
+DEBUG LLVM:   Type = %anon_struct = type { i64, i64 }
+DEBUG LLVM:   arrayTypeMap now has 2 entries
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Generating assign statement
+DEBUG LLVM: Converting rvalue
+DEBUG LLVM: convertRValue called
+DEBUG LLVM: Processing Use rvalue
+DEBUG LLVM: Converting use operand
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Copy operand
+DEBUG LLVM: Looking for place 000001F69CAAF550 in valueMap (size: 5)
+DEBUG LLVM: valueMap entry: place=000001F69CAAF5A0, value=000001F69CA85B10
+DEBUG LLVM: valueMap entry: place=000001F69CAB7A00, value=000001F69CA85590
+DEBUG LLVM: valueMap entry: place=000001F69CAAF550, value=000001F69CA85890
+DEBUG LLVM: valueMap entry: place=000001F69CAAE7E0, value=000001F69CA85910
+DEBUG LLVM: valueMap entry: place=000001F69CAB7E10, value=000001F69CA85310
+DEBUG LLVM: Found place in valueMap
+DEBUG LLVM: Loading from alloca
+DEBUG LLVM: Use operand converted to value: 000001F69CA85490
+DEBUG LLVM: RValue converted, value=000001F69CA85490
+DEBUG LLVM: Looking for alloca for variable 000001F69CAAE7E0
+DEBUG LLVM: Storing value in alloca
+DEBUG LLVM: Propagated array type to variable alloca from source
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: Basic block has 8 instructions
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_log_string
+DEBUG LLVM: Tried module->getFunction, result: 0000000000000000
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000000000000000, funcName=nova_console_log_string
+DEBUG LLVM: Creating external nova_console_log_string declaration
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 1
+DEBUG LLVM: Processing argument 0
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating string constant: Object created
+DEBUG LLVM: Argument converted, argValue = 000001F69CA85F10
+DEBUG LLVM: About to create call with 1 arguments
+DEBUG LLVM: callee = 000001F69CAC4048
+DEBUG LLVM: callee name = nova_console_log_string
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %bb0
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 000001F69CAC4200
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_log_string(ptr @.str)
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %bb0
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont
+DEBUG LLVM: [CRITICAL] Current block before branch: %bb0
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 10 instructions after terminator
+DEBUG LLVM: Block bb0 processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Statements generated
+DEBUG LLVM: WARNING - Basic block is empty after statement generation
+DEBUG LLVM: Added dummy instruction to empty block
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Processing Call terminator
+DEBUG LLVM: Call func operand kind: 2
+DEBUG LLVM: func operand IS a const operand, constKind: 3
+DEBUG LLVM: Looking for function: nova_console_print_newline
+DEBUG LLVM: Tried module->getFunction, result: 0000000000000000
+[FORCE DEBUG] After module->getFunction, before if chain
+DEBUG LLVM: About to check if chain for external declarations, callee=0000000000000000, funcName=nova_console_print_newline
+DEBUG LLVM: Creating external nova_console_print_newline declaration
+DEBUG LLVM: Have callee, processing arguments...
+DEBUG LLVM: callTerm->args.size() = 0
+DEBUG LLVM: About to create call with 0 arguments
+DEBUG LLVM: callee = 000001F69CAC4268
+DEBUG LLVM: callee name = nova_console_print_newline
+DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: %call_cont
+DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = 000001F69CA85810
+DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:
+  call void @nova_console_print_newline()
+DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: %call_cont
+DEBUG LLVM: Checking for malloc in constructor...
+DEBUG LLVM: Got constOp
+DEBUG LLVM: Storing result in destination...
+DEBUG LLVM: Result type is void: 1
+DEBUG LLVM: Result storage completed
+DEBUG LLVM: About to create branch to target
+DEBUG LLVM: [CRITICAL] Target block: %call_cont4
+DEBUG LLVM: [CRITICAL] Current block before branch: %call_cont
+DEBUG LLVM: Branch created successfully
+DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:
+  br label %call_cont4
+DEBUG LLVM: Call terminator processing complete
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Processing block call_cont with 1 statements
+DEBUG LLVM: ========== Generating basic block: call_cont ==========
+DEBUG LLVM: LLVM BB: %call_cont4
+DEBUG LLVM: Generating 1 statements
+DEBUG LLVM: generateStatement called
+DEBUG LLVM: Generating assign statement
+DEBUG LLVM: Converting rvalue
+DEBUG LLVM: convertRValue called
+DEBUG LLVM: Processing Use rvalue
+DEBUG LLVM: Converting use operand
+DEBUG LLVM: convertOperand called
+DEBUG LLVM: Processing Constant operand
+DEBUG LLVM: Creating int constant: 0
+DEBUG LLVM: constOp->type.get() = 000001F69CAB75E0
+DEBUG LLVM: About to call convertType
+DEBUG LLVM: convertType returned: 000001F69CABA208
+DEBUG LLVM: Use operand converted to value: 000001F69CAC3750
+DEBUG LLVM: RValue converted, value=000001F69CAC3750
+DEBUG LLVM: Looking for alloca for variable 000001F69CAAF5A0
+DEBUG LLVM: Storing value in alloca
+DEBUG LLVM: Type mismatch detected!
+DEBUG LLVM:   Alloca type: i32
+DEBUG LLVM:   Value type: i64
+DEBUG LLVM: Created new alloca with correct type
+DEBUG LLVM: Statements generated
+DEBUG LLVM: Basic block has 1 instructions
+DEBUG LLVM: Generating terminator
+DEBUG LLVM: generateTerminator called
+DEBUG LLVM: Generating return terminator
+DEBUG LLVM: Terminator generated
+DEBUG LLVM: Basic block now has 2 instructions after terminator
+DEBUG LLVM: Block call_cont processed
+DEBUG LLVM: Basic optimization passes are enabled
+DEBUG LLVM: runOptimizationPasses called with optLevel=2
+DEBUG LLVM: Creating function pass manager
+DEBUG LLVM: Adding basic optimization passes (optLevel >= 1)
+DEBUG LLVM: Added LoopRotatePass
+DEBUG LLVM: Added LICM (Loop Invariant Code Motion)
+DEBUG LLVM: Added CFGSimplificationPass for basic optimizations
+DEBUG LLVM: Adding intermediate optimization passes (optLevel >= 2)
+DEBUG LLVM: Loop optimizations enabled at level 2
+DEBUG LLVM: Added DeadCodeEliminationPass and CFGSimplificationPass
+DEBUG LLVM: Initializing function pass manager
+DEBUG LLVM: Running optimization passes on functions
+DEBUG LLVM: Running passes on function: __nova_main
+DEBUG LLVM: Running passes on function: main
+DEBUG LLVM: Optimization passes completed
+DEBUG LLVM: emitExecutable called for .nova-cache/bin/e9f1bdbbe320faf.exe
+DEBUG LLVM: emitLLVMIR ENTRY POINT - filename=.nova-cache/bin/e9f1bdbbe320faf.exe.ll
+DEBUG LLVM: emitLLVMIR called - Module has 6 functions
+DEBUG LLVM: emitLLVMIR - Function printf has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function __nova_main has 1 basic blocks
+DEBUG LLVM: emitLLVMIR - Basic block entry has 7 instructions
+DEBUG LLVM: emitLLVMIR - Function nova_alloc_closure_env has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function nova_console_log_string has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function nova_console_print_newline has 0 basic blocks
+DEBUG LLVM: emitLLVMIR - Function main has 1 basic blocks
+DEBUG LLVM: emitLLVMIR - Basic block entry has 2 instructions
+DEBUG: Raw LLVM IR dumped to debug_output.ll
+DEBUG LLVM: Looking for novacore.lib at: C:\Users\ondev\Projects\Nova\build\Release/novacore.lib
+DEBUG LLVM: novacore.lib exists: yes
+DEBUG LLVM: Compile command: clang++ -O0 ".nova-cache/bin/e9f1bdbbe320faf.exe.ll" "C:\Users\ondev\Projects\Nova\build\Release/novacore.lib" -o ".nova-cache/bin/e9f1bdbbe320faf.exe" -lmsvcrt -lkernel32 -lWs2_32 -lAdvapi32 -Wno-override-module 2>&1
+novacore.lib(ClosureEnv.obj) : MSIL .netmodule or module compiled with /GL found; restarting link with /LTCG; add /LTCG to the link command line to improve linker performance
+LINK : warning LNK4098: defaultlib 'libcmt' conflicts with use of other libs; use /NODEFAULTLIB:library
+Generating code
+Finished generating code
+DEBUG LLVM: Successfully created executable: .nova-cache/bin/e9f1bdbbe320faf.exe
+Object created
+

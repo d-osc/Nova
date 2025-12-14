@@ -75,6 +75,8 @@ private:
     llvm::Function* currentFunction;
     mir::MIRPlace* currentReturnPlace;  // The _0 place for return values
     llvm::Value* currentReturnValue;    // The actual return value
+    std::string currentDestinationName;  // Track destination place name for struct naming
+    bool isAllocatingClosureEnv;        // Flag to indicate we're allocating a closure environment
     
     // Helper methods
     llvm::Type* convertType(mir::MIRType* type);

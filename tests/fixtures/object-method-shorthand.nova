@@ -1,0 +1,56 @@
+// Test object method shorthand syntax
+// This file tests ES6 method shorthand: { method() { ... } }
+
+// Test 1: Simple method shorthand without parameters
+const obj1 = {
+    getValue() {
+        return 42;
+    }
+};
+
+// Test 2: Method shorthand with parameters
+const obj2 = {
+    add(a, b) {
+        return a + b;
+    }
+};
+
+// Test 3: Multiple methods in one object
+const calculator = {
+    add(x, y) {
+        return x + y;
+    },
+    multiply(x, y) {
+        return x * y;
+    },
+    square(n) {
+        return n * n;
+    }
+};
+
+// Test 4: Mix of shorthand properties and methods
+const person = {
+    name: "Alice",
+    age: 30,
+    greet() {
+        return "Hello";
+    },
+    getAge() {
+        return age;  // Note: 'this' binding not tested here
+    }
+};
+
+// Test calls
+const result1 = obj1.getValue();
+const result2 = obj2.add(5, 3);
+const result3 = calculator.add(10, 20);
+const result4 = calculator.multiply(4, 5);
+const result5 = calculator.square(7);
+const result6 = person.greet();
+
+console.log(result1); // Should print: 42
+console.log(result2); // Should print: 8
+console.log(result3); // Should print: 30
+console.log(result4); // Should print: 20
+console.log(result5); // Should print: 49
+console.log(result6); // Should print: Hello

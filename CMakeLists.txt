@@ -149,6 +149,16 @@ set(NOVA_SOURCES
     
     # HIR Generation
     src/hir/HIRGen.cpp
+    src/hir/HIRGen_Advanced.cpp
+    src/hir/HIRGen_Arrays.cpp
+    src/hir/HIRGen_Calls.cpp
+    src/hir/HIRGen_Classes.cpp
+    src/hir/HIRGen_ControlFlow.cpp
+    src/hir/HIRGen_Functions.cpp
+    src/hir/HIRGen_Literals.cpp
+    src/hir/HIRGen_Objects.cpp
+    src/hir/HIRGen_Operators.cpp
+    src/hir/HIRGen_Statements.cpp
     src/hir/HIRBuilder.cpp
     src/hir/HIRModule.cpp
     src/hir/HIRPrinter.cpp
@@ -183,6 +193,8 @@ set(NOVA_SOURCES
     src/runtime/GarbageCollector.cpp
     src/runtime/AsyncRuntime.cpp
     src/runtime/Array.cpp
+    src/runtime/ArraySpread.cpp
+    src/runtime/ClosureEnv.cpp
     src/runtime/String.cpp
     src/runtime/Object.cpp
     src/runtime/Number.cpp

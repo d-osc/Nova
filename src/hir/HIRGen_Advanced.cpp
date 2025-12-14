@@ -1,0 +1,709 @@
+// HIRGen_Advanced.cpp - Advanced feature visitors
+// Extracted from HIRGen.cpp for better code organization
+// Contains: async/await, generators, spread, imports, JSX, patterns, decorators, TypeScript, declarations
+
+#include "nova/HIR/HIRGen_Internal.h"
+#define NOVA_DEBUG 1
+
+namespace nova::hir {
+
+void HIRGenerator::visit(SpreadExpr& node) {
+        std::cerr << "=== SPREAD EXPR VISITOR CALLED ===" << std::endl;
+        // Spread operator: ...expr
+        // Evaluate the argument - the array/iterable to spread
+        // The actual unpacking/spreading is handled by the context:
+        // - ArrayExpr: Handled by ArrayExpr visitor (see HIRGen_Arrays.cpp)
+        // - CallExpr: Would be handled by CallExpr visitor (for spreading arguments)
+        // - ObjectExpr: Would be handled by ObjectExpr visitor (for object spread)
+        // This visitor just evaluates the argument and passes it through
+        if (node.argument) {
+            node.argument->accept(*this);
+            // lastValue_ now contains the array/iterable to spread
+            // The parent expression (ArrayExpr, CallExpr, etc.) is responsible for unpacking
+        }
+    }
+    
+void HIRGenerator::visit(TemplateLiteralExpr& node) {
+        // Template literal: `Hello ${name}!` becomes "Hello " + name + "!"
+        // quasis: ["Hello ", "!"]
+        // expressions: [name]
+
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing template literal with " << node.quasis.size()
+                  << " quasis and " << node.expressions.size() << " expressions" << std::endl;
+
+        // If there are no expressions, this is just a simple string
+        if (node.expressions.empty()) {
+            if (!node.quasis.empty()) {
+                lastValue_ = builder_->createStringConstant(node.quasis[0]);
+            } else {
+                lastValue_ = builder_->createStringConstant("");
+            }
+            return;
+        }
+
+        // Start with the first quasi (string before first ${})
+        HIRValue* result = builder_->createStringConstant(node.quasis[0]);
+
+        // For each expression, concatenate: result + expression + next_quasi
+        for (size_t i = 0; i < node.expressions.size(); ++i) {
+            // Evaluate the expression
+            node.expressions[i]->accept(*this);
+            HIRValue* exprValue = lastValue_;
+
+            // Convert non-string values to strings using runtime function
+            if (exprValue && exprValue->type) {
+                if(NOVA_DEBUG) {
+                    std::cerr << "  Template expr type: " << static_cast<int>(exprValue->type->kind) << std::endl;
+                    std::cerr << "  I64 enum value: " << static_cast<int>(HIRType::Kind::I64) << std::endl;
+                    std::cerr << "  Match? " << (exprValue->type->kind == HIRType::Kind::I64 ? "YES" : "NO") << std::endl;
+                }
+                if (exprValue->type->kind == HIRType::Kind::I64 ||
+                    exprValue->type->kind == HIRType::Kind::I32) {
+                    if(NOVA_DEBUG) std::cerr << "  Converting number to string" << std::endl;
+                    // Convert number to string using nova_i64_to_string
+                    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    std::vector<HIRTypePtr> paramTypes = {i64Type};
+
+                    HIRFunction* toStringFunc = nullptr;
+                    auto existingFunc = module_->getFunction("nova_i64_to_string");
+                    if (existingFunc) {
+                        toStringFunc = existingFunc.get();
+                    } else {
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, stringType);
+                        HIRFunctionPtr funcPtr = module_->createFunction("nova_i64_to_string", funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        toStringFunc = funcPtr.get();
+                    }
+
+                    std::vector<HIRValue*> args = {exprValue};
+                    auto* callInst = builder_->createCall(toStringFunc, args, "num_to_str");
+                    callInst->type = stringType;
+                    // Update lastValue_ so MIR/LLVM can resolve the result
+                    lastValue_ = callInst;
+                    exprValue = lastValue_;
+
+                    std::cerr << "  *** TEMPLATE DEBUG: Created nova_i64_to_string call, inst ptr=" << callInst << std::endl;
+                    std::cerr << "  *** TEMPLATE DEBUG: exprValue now points to: " << exprValue << std::endl;
+                }
+            }
+
+            // Concatenate result with the expression using nova_string_concat
+            auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+            std::vector<HIRTypePtr> concatParamTypes = {stringType, stringType};
+
+            HIRFunction* concatFunc = nullptr;
+            auto existingConcatFunc = module_->getFunction("nova_string_concat");
+            if (existingConcatFunc) {
+                concatFunc = existingConcatFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(concatParamTypes, stringType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_string_concat", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                concatFunc = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> concatArgs = {result, exprValue};
+            result = builder_->createCall(concatFunc, concatArgs, "str_concat");
+            result->type = stringType;
+
+            // Concatenate with the next quasi (string after this ${})
+            if (i + 1 < node.quasis.size() && !node.quasis[i + 1].empty()) {
+                HIRValue* nextQuasi = builder_->createStringConstant(node.quasis[i + 1]);
+                std::vector<HIRValue*> concatArgs2 = {result, nextQuasi};
+                result = builder_->createCall(concatFunc, concatArgs2, "str_concat");
+                result->type = stringType;
+            }
+        }
+
+        lastValue_ = result;
+    }
+    
+void HIRGenerator::visit(AwaitExpr& node) {
+        // await expression
+        node.argument->accept(*this);
+    }
+    
+void HIRGenerator::visit(YieldExpr& node) {
+        // Check if this is yield* (delegation)
+        if (node.isDelegate) {
+            generateYieldDelegate(node);
+            return;
+        }
+
+        // Regular yield expression - set state, call nova_generator_yield(genPtr, value), then RETURN to suspend
+        HIRValue* yieldValue = nullptr;
+        if (node.argument) {
+            node.argument->accept(*this);
+            yieldValue = lastValue_;
+        } else {
+            yieldValue = builder_->createIntConstant(0);
+        }
+
+        // Get the current generator pointer
+        if (currentGeneratorPtr_) {
+            // Load genPtr from the stored location
+            auto* genPtr = builder_->createLoad(currentGeneratorPtr_);
+
+            // Get or create nova_generator_yield function
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+            std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+
+            std::string runtimeFuncName = "nova_generator_yield";
+            auto existingFunc = module_->getFunction(runtimeFuncName);
+            HIRFunction* yieldFunc = nullptr;
+            if (existingFunc) {
+                yieldFunc = existingFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, voidType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                yieldFunc = funcPtr.get();
+            }
+
+            // Increment yield state counter - this yield will be state N+1
+            yieldStateCounter_++;
+            int thisYieldState = yieldStateCounter_;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Yield #" << thisYieldState << " in generator" << std::endl;
+
+            // Set state BEFORE yielding so next() knows where to resume
+            if (currentSetStateFunc_) {
+                auto* stateConst = builder_->createIntConstant(thisYieldState);
+                std::vector<HIRValue*> setStateArgs = {genPtr, stateConst};
+                builder_->createCall(currentSetStateFunc_, setStateArgs);
+            }
+
+            // Call yield function to store the yielded value
+            std::vector<HIRValue*> args = {genPtr, yieldValue};
+            builder_->createCall(yieldFunc, args);
+
+            // RETURN to suspend execution!
+            builder_->createReturn(nullptr);
+
+            // Create resume block for code after this yield
+            auto* resumeBlock = currentFunction_->createBasicBlock(
+                "resume_" + std::to_string(thisYieldState)).get();
+
+            // Add to resume blocks vector (indexed by state-1)
+            yieldResumeBlocks_.push_back(resumeBlock);
+
+            // Continue code generation in the resume block
+            builder_->setInsertPoint(resumeBlock);
+
+            // For yield expressions that return a value (like let x = yield 5),
+            // the value comes from gen.next(value) - load from generator input
+            // For now, just use 0
+            lastValue_ = builder_->createIntConstant(0);
+        } else {
+            // Fallback: yield without generator context
+            lastValue_ = yieldValue;
+        }
+    }
+    
+
+void HIRGenerator::generateYieldDelegate(YieldExpr& node) {
+        // yield* delegation - iterate inner generator and yield each value
+        // Uses generator local storage to persist inner iterator across suspensions
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing yield* delegation" << std::endl;
+
+        if (!currentGeneratorPtr_) {
+            if (node.argument) {
+                node.argument->accept(*this);
+            }
+            lastValue_ = builder_->createIntConstant(0);
+            return;
+        }
+
+        // Evaluate the inner iterable (generator)
+        node.argument->accept(*this);
+        HIRValue* innerIterator = lastValue_;
+
+        // Get outer generator pointer
+        auto* outerGenPtr = builder_->createLoad(currentGeneratorPtr_);
+
+        // Create types
+        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+        auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+        // Get or create nova_generator_store_local function
+        std::vector<HIRTypePtr> storeLocalParamTypes = {ptrType, intType, intType};
+        HIRFunction* storeLocalFunc = nullptr;
+        auto existingStoreLocal = module_->getFunction("nova_generator_store_local");
+        if (existingStoreLocal) {
+            storeLocalFunc = existingStoreLocal.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(storeLocalParamTypes, voidType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_store_local", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            storeLocalFunc = funcPtr.get();
+        }
+
+        // Get or create nova_generator_load_local function
+        std::vector<HIRTypePtr> loadLocalParamTypes = {ptrType, intType};
+        HIRFunction* loadLocalFunc = nullptr;
+        auto existingLoadLocal = module_->getFunction("nova_generator_load_local");
+        if (existingLoadLocal) {
+            loadLocalFunc = existingLoadLocal.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(loadLocalParamTypes, intType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_load_local", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            loadLocalFunc = funcPtr.get();
+        }
+
+        // Store inner iterator in generator local storage slot 0
+        auto* zero = builder_->createIntConstant(0);
+        std::vector<HIRValue*> storeArgs = {outerGenPtr, zero, innerIterator};
+        builder_->createCall(storeLocalFunc, storeArgs);
+
+        // Create blocks for delegation loop
+        auto* loopHeaderBlock = currentFunction_->createBasicBlock("yield_delegate_header").get();
+        auto* loopBodyBlock = currentFunction_->createBasicBlock("yield_delegate_body").get();
+        auto* loopExitBlock = currentFunction_->createBasicBlock("yield_delegate_exit").get();
+
+        // Jump to loop header
+        builder_->createBr(loopHeaderBlock);
+        builder_->setInsertPoint(loopHeaderBlock);
+
+        // Load inner iterator from generator local storage
+        auto* outerGenPtrInLoop = builder_->createLoad(currentGeneratorPtr_);
+        std::vector<HIRValue*> loadArgs = {outerGenPtrInLoop, zero};
+        auto* innerIter = builder_->createCall(loadLocalFunc, loadArgs);
+
+        // Get or create nova_generator_next function
+        std::vector<HIRTypePtr> nextParamTypes = {ptrType, intType};
+        HIRFunction* nextFunc = nullptr;
+        auto existingNextFunc = module_->getFunction("nova_generator_next");
+        if (existingNextFunc) {
+            nextFunc = existingNextFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(nextParamTypes, ptrType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_next", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            nextFunc = funcPtr.get();
+        }
+
+        // Get or create nova_iterator_result_done function
+        std::vector<HIRTypePtr> doneParamTypes = {ptrType};
+        HIRFunction* doneFunc = nullptr;
+        auto existingDoneFunc = module_->getFunction("nova_iterator_result_done");
+        if (existingDoneFunc) {
+            doneFunc = existingDoneFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(doneParamTypes, intType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_iterator_result_done", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            doneFunc = funcPtr.get();
+        }
+
+        // Get or create nova_iterator_result_value function
+        HIRFunction* valueFunc = nullptr;
+        auto existingValueFunc = module_->getFunction("nova_iterator_result_value");
+        if (existingValueFunc) {
+            valueFunc = existingValueFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(doneParamTypes, intType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_iterator_result_value", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            valueFunc = funcPtr.get();
+        }
+
+        // Call inner.next(0)
+        std::vector<HIRValue*> nextArgs = {innerIter, zero};
+        auto* result = builder_->createCall(nextFunc, nextArgs);
+
+        // Check if done
+        std::vector<HIRValue*> doneArgs = {result};
+        auto* doneVal = builder_->createCall(doneFunc, doneArgs);
+        auto* doneCondition = builder_->createNe(doneVal, zero);
+
+        // Store result in generator local storage slot 1 for body access
+        auto* one = builder_->createIntConstant(1);
+        std::vector<HIRValue*> storeResultArgs = {outerGenPtrInLoop, one, result};
+        builder_->createCall(storeLocalFunc, storeResultArgs);
+
+        // If done, exit loop; otherwise, process value
+        builder_->createCondBr(doneCondition, loopExitBlock, loopBodyBlock);
+
+        // Loop body: get value and yield it
+        builder_->setInsertPoint(loopBodyBlock);
+
+        // Load result from generator local storage slot 1
+        auto* outerGenPtrInBody = builder_->createLoad(currentGeneratorPtr_);
+        std::vector<HIRValue*> loadResultArgs = {outerGenPtrInBody, one};
+        auto* storedResult = builder_->createCall(loadLocalFunc, loadResultArgs);
+
+        std::vector<HIRValue*> valueArgs = {storedResult};
+        auto* yieldValue = builder_->createCall(valueFunc, valueArgs);
+
+        // Get or create nova_generator_yield function
+        std::vector<HIRTypePtr> yieldParamTypes = {ptrType, intType};
+        HIRFunction* yieldFunc = nullptr;
+        auto existingYieldFunc = module_->getFunction("nova_generator_yield");
+        if (existingYieldFunc) {
+            yieldFunc = existingYieldFunc.get();
+        } else {
+            HIRFunctionType* funcType = new HIRFunctionType(yieldParamTypes, voidType);
+            HIRFunctionPtr funcPtr = module_->createFunction("nova_generator_yield", funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            yieldFunc = funcPtr.get();
+        }
+
+        // Increment yield state counter - this yield* will be a single state
+        yieldStateCounter_++;
+        int thisYieldState = yieldStateCounter_;
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Yield* delegation state #" << thisYieldState << std::endl;
+
+        // Set state BEFORE yielding
+        if (currentSetStateFunc_) {
+            auto* stateConst = builder_->createIntConstant(thisYieldState);
+            std::vector<HIRValue*> setStateArgs = {outerGenPtrInBody, stateConst};
+            builder_->createCall(currentSetStateFunc_, setStateArgs);
+        }
+
+        // Call yield function to store the yielded value
+        std::vector<HIRValue*> yieldArgs = {outerGenPtrInBody, yieldValue};
+        builder_->createCall(yieldFunc, yieldArgs);
+
+        // RETURN to suspend execution
+        builder_->createReturn(nullptr);
+
+        // Create resume block that branches BACK to loop header
+        auto* resumeBlock = currentFunction_->createBasicBlock(
+            "yield_delegate_resume_" + std::to_string(thisYieldState)).get();
+        yieldResumeBlocks_.push_back(resumeBlock);
+
+        // Resume block branches back to loop header to continue iteration
+        builder_->setInsertPoint(resumeBlock);
+        builder_->createBr(loopHeaderBlock);
+
+        // Continue code generation after yield* in the exit block
+        builder_->setInsertPoint(loopExitBlock);
+
+        // The result of yield* is the final return value of the inner generator
+        lastValue_ = builder_->createIntConstant(0);
+    }
+void HIRGenerator::visit(AsExpr& node) {
+        // Type assertion - just evaluate expression
+        node.expression->accept(*this);
+    }
+    
+void HIRGenerator::visit(SatisfiesExpr& node) {
+        // Satisfies operator - just evaluate expression
+        node.expression->accept(*this);
+    }
+    
+void HIRGenerator::visit(NonNullExpr& node) {
+        // Non-null assertion - just evaluate expression
+        node.expression->accept(*this);
+    }
+    
+void HIRGenerator::visit(TaggedTemplateExpr& node) {
+        (void)node;
+        // Tagged template
+    }
+    
+void HIRGenerator::visit(SequenceExpr& node) {
+        // Comma operator - evaluate all, return last
+        for (auto& expr : node.expressions) {
+            expr->accept(*this);
+        }
+    }
+    
+void HIRGenerator::visit(ParenthesizedExpr& node) {
+        node.expression->accept(*this);
+    }
+    
+void HIRGenerator::visit(MetaProperty& node) {
+        (void)node;
+        // new.target or import.meta
+    }
+    
+void HIRGenerator::visit(ImportExpr& node) {
+        (void)node;
+        // import() expression
+    }
+    
+void HIRGenerator::visit(Decorator& node) {
+        (void)node;
+        // Decorator - metadata only
+    }
+    
+    // JSX/TSX Expressions
+void HIRGenerator::visit(JSXElement& node) {
+        (void)node;
+        // JSX element - translate to runtime createElement call
+        // For now, treat as opaque object creation
+        // TODO: Implement JSX transformation to React.createElement or similar
+        lastValue_ = builder_->createNullConstant(
+            std::make_shared<HIRType>(HIRType::Kind::Any).get()
+        );
+    }
+    
+void HIRGenerator::visit(JSXFragment& node) {
+        (void)node;
+        // JSX fragment - translate to Fragment component
+        lastValue_ = builder_->createNullConstant(
+            std::make_shared<HIRType>(HIRType::Kind::Any).get()
+        );
+    }
+    
+void HIRGenerator::visit(JSXText& node) {
+        // JSX text node - convert to string constant
+        lastValue_ = builder_->createStringConstant(node.value);
+    }
+    
+void HIRGenerator::visit(JSXExpressionContainer& node) {
+        // JSX expression container - just evaluate inner expression
+        node.expression->accept(*this);
+    }
+    
+void HIRGenerator::visit(JSXAttribute& node) {
+        // JSX attribute - not yet implemented
+        (void)node;
+    }
+    
+void HIRGenerator::visit(JSXSpreadAttribute& node) {
+        // JSX spread attribute - not yet implemented
+        (void)node;
+    }
+    
+    // Patterns (for destructuring)
+void HIRGenerator::visit(ObjectPattern& node) {
+        (void)node;
+        // Object destructuring pattern
+        // This is used in variable declarations and function parameters
+        // TODO: Implement proper destructuring logic
+    }
+    
+void HIRGenerator::visit(ArrayPattern& node) {
+        (void)node;
+        // Array destructuring pattern
+        // TODO: Implement proper destructuring logic
+    }
+    
+void HIRGenerator::visit(AssignmentPattern& node) {
+        (void)node;
+        // Pattern with default value
+        // TODO: Implement default value assignment
+    }
+    
+void HIRGenerator::visit(RestElement& node) {
+        (void)node;
+        // Rest element in destructuring (...rest)
+        // TODO: Implement rest element collection
+    }
+    
+void HIRGenerator::visit(IdentifierPattern& node) {
+        // Simple identifier pattern - look up in symbol table
+        auto it = symbolTable_.find(node.name);
+        if (it != symbolTable_.end()) {
+            lastValue_ = it->second;
+        }
+    }
+
+void HIRGenerator::visit(InterfaceDecl& node) {
+        (void)node;
+        // Interface - type information only
+    }
+    
+void HIRGenerator::visit(TypeAliasDecl& node) {
+        (void)node;
+        // Type alias - type information only
+    }
+    
+void HIRGenerator::visit(EnumDecl& node) {
+        // Enum declaration - store enum values in enumTable_
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing enum declaration: " << node.name << " with " << node.members.size() << " members" << std::endl;
+
+        std::unordered_map<std::string, int64_t> members;
+        int64_t nextValue = 0;
+
+        for (const auto& member : node.members) {
+            int64_t value = nextValue;
+
+            // If member has explicit initializer, evaluate it
+            if (member.initializer) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Member " << member.name << " has initializer" << std::endl;
+                // For now, only support numeric literals as initializers
+                if (auto* numLit = dynamic_cast<NumberLiteral*>(member.initializer.get())) {
+                    value = static_cast<int64_t>(numLit->value);
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: NumberLiteral value = " << value << std::endl;
+                } else {
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Initializer is NOT a NumberLiteral" << std::endl;
+                }
+            }
+
+            members[member.name] = value;
+            nextValue = value + 1;  // Next auto-value continues from here
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Enum member " << node.name << "." << member.name << " = " << value << std::endl;
+        }
+
+        enumTable_[node.name] = members;
+    }
+    
+void HIRGenerator::visit(ImportDecl& node) {
+        // Import declaration - module system
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing import from '" << node.source << "'" << std::endl;
+
+        // Check for nova: built-in modules
+        if (node.source.substr(0, 5) == "nova:") {
+            std::string moduleName = node.source.substr(5); // e.g., "fs", "test", "path", "os"
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Built-in module import: nova:" << moduleName << std::endl;
+
+            // Register namespace import
+            if (!node.namespaceImport.empty()) {
+                builtinModuleImports_[node.namespaceImport] = "nova:" + moduleName;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered namespace '" << node.namespaceImport << "' -> nova:" << moduleName << std::endl;
+            }
+
+            // Register named imports to their runtime functions
+            for (const auto& spec : node.specifiers) {
+                std::string runtimeFunc = getBuiltinFunctionName(moduleName, spec.imported);
+                builtinFunctionImports_[spec.local] = runtimeFunc;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered '" << spec.local << "' -> " << runtimeFunc << std::endl;
+            }
+
+            return; // Don't process further for built-in modules
+        }
+
+        // Regular module imports (for future implementation)
+        if (!node.defaultImport.empty()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import default as '" << node.defaultImport << "'" << std::endl;
+        }
+        if (!node.namespaceImport.empty()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import namespace as '" << node.namespaceImport << "'" << std::endl;
+        }
+        for (const auto& spec : node.specifiers) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import '" << spec.imported << "' as '" << spec.local << "'" << std::endl;
+        }
+    }
+
+// Helper to get runtime function name for built-in module functions
+std::string HIRGenerator::getBuiltinFunctionName(const std::string& module, const std::string& funcName) {
+        // Map module:function to nova_module_function
+        // nova:fs -> nova_fs_*
+        // nova:test -> nova_test_*
+        // nova:path -> nova_path_*
+        // nova:os -> nova_os_*
+        return "nova_" + module + "_" + funcName;
+    }
+
+// Check if a function call is to a built-in module function
+bool HIRGenerator::isBuiltinFunctionCall(const std::string& name) {
+        return builtinFunctionImports_.find(name) != builtinFunctionImports_.end();
+    }
+
+// Get the runtime function name for a built-in import
+std::string HIRGenerator::getBuiltinRuntimeFunction(const std::string& name) {
+        auto it = builtinFunctionImports_.find(name);
+        if (it != builtinFunctionImports_.end()) {
+            return it->second;
+        }
+        return "";
+    }
+
+void HIRGenerator::visit(ExportDecl& node) {
+        // Export declaration - process any exported declaration
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing export declaration" << std::endl;
+
+        if (node.isDefault) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Export default" << std::endl;
+        }
+
+        // If there's an exported declaration (e.g., export function foo() {}), process it
+        if (node.exportedDecl) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing exported declaration" << std::endl;
+            node.exportedDecl->accept(*this);
+        }
+
+        // If there's a declaration expression (e.g., export default someExpr), evaluate it
+        if (node.declaration) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing export declaration expression" << std::endl;
+            node.declaration->accept(*this);
+        }
+
+        // Log re-exports
+        if (!node.source.empty()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Re-export from '" << node.source << "'" << std::endl;
+        }
+
+        for (const auto& spec : node.specifiers) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Export '" << spec.local << "' as '" << spec.exported << "'" << std::endl;
+        }
+    }
+    
+void HIRGenerator::visit(Program& node) {
+        // Collect function/class declarations first (hoisting)
+        std::vector<size_t> functionDeclIndices;
+        std::vector<size_t> topLevelIndices;
+
+        for (size_t i = 0; i < node.body.size(); ++i) {
+            auto& stmt = node.body[i];
+            if (!stmt) continue;
+
+            // Check if this is a DeclStmt containing a function or class declaration
+            bool isDeclaration = false;
+            if (auto* declStmt = dynamic_cast<DeclStmt*>(stmt.get())) {
+                if (declStmt->declaration) {
+                    if (dynamic_cast<FunctionDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<ClassDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<InterfaceDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<TypeAliasDecl*>(declStmt->declaration.get()) ||
+                        dynamic_cast<EnumDecl*>(declStmt->declaration.get())) {
+                        isDeclaration = true;
+                    }
+                }
+            }
+
+            if (isDeclaration) {
+                functionDeclIndices.push_back(i);
+            } else {
+                topLevelIndices.push_back(i);
+            }
+        }
+
+        // Process function/class declarations first (they can be used anywhere)
+        for (size_t idx : functionDeclIndices) {
+            node.body[idx]->accept(*this);
+        }
+
+        // If there are top-level statements (not just declarations), create an implicit main function
+        if (!topLevelIndices.empty()) {
+            // Create main function signature: int __nova_main()
+            std::vector<HIRTypePtr> paramTypes;
+            auto returnType = std::make_shared<HIRType>(HIRType::Kind::I32);
+
+            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+            HIRFunctionPtr mainFunc = module_->createFunction("__nova_main", funcType);
+            mainFunc->linkage = HIRFunction::Linkage::Public;
+
+            // Create entry block
+            auto entryBlock = mainFunc->createBasicBlock("entry");
+
+            // Set up the builder for main function
+            auto savedFunction = currentFunction_;
+            currentFunction_ = mainFunc.get();
+            builder_ = std::make_unique<HIRBuilder>(module_, mainFunc.get());
+            builder_->setInsertPoint(entryBlock.get());
+
+            // Process top-level statements inside main
+            for (size_t idx : topLevelIndices) {
+                node.body[idx]->accept(*this);
+            }
+
+            // Add return 0 at the end of main
+            auto* zeroValue = builder_->createIntConstant(0);
+            builder_->createReturn(zeroValue);
+
+            // Restore state
+            currentFunction_ = savedFunction;
+            builder_.reset();
+        }
+    }
+
+} // namespace nova::hir

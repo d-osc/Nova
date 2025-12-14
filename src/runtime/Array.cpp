@@ -196,20 +196,22 @@ ValueArray* convert_to_value_array(void* metadata_ptr) {
 // Helper: Create metadata struct from ValueArray
 void* create_metadata_from_value_array(ValueArray* array) {
     if (!array) return nullptr;
-    
-    // Allocate metadata struct: { [24 x i8], i64 length, i64 capacity, ptr elements }
-    size_t metadata_size = 24 + 8 + 8 + 8;  // header + length + capacity + elements ptr
-    void* metadata = malloc(metadata_size);
+
+    // Allocate metadata struct matching ValueArray layout
+    ValueArray* metadata = static_cast<ValueArray*>(malloc(sizeof(ValueArray)));
     if (!metadata) return nullptr;
-    
-    // Zero out header
-    std::memset(metadata, 0, 24);
-    
-    // Write length, capacity, and elements pointer
-    *reinterpret_cast<int64*>(static_cast<char*>(metadata) + 24) = array->length;
-    *reinterpret_cast<int64*>(static_cast<char*>(metadata) + 32) = array->capacity;
-    *reinterpret_cast<int64**>(static_cast<char*>(metadata) + 40) = array->elements;
-    
+
+    // Initialize ObjectHeader
+    metadata->header.size = 0;
+    metadata->header.type_id = static_cast<uint32_t>(TypeId::ARRAY);  // Set type_id = 1
+    metadata->header.is_marked = false;
+    metadata->header.next = nullptr;
+
+    // Copy array data
+    metadata->length = array->length;
+    metadata->capacity = array->capacity;
+    metadata->elements = array->elements;
+
     return metadata;
 }
 
@@ -252,9 +254,9 @@ int64 value_array_get(ValueArray* array, int64 index) {
 }
 
 void value_array_set(ValueArray* array, int64 index, int64 value) {
-    if (!array || index < 0 || index >= array->length) {
-        return;
-    }
+    if (!array) return;
+    if (index < 0) return;
+    if (index >= array->length) return;
     array->elements[index] = value;
 }
 
@@ -679,10 +681,11 @@ static void write_back_to_metadata(void* metadata_ptr, nova::runtime::ValueArray
     *reinterpret_cast<int64_t**>(static_cast<char*>(metadata_ptr) + 40) = array->elements;
 }
 
-void nova_value_array_push(void* array_ptr, int64_t value) {
+int64_t nova_value_array_push(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     nova::runtime::value_array_push(array, value);
     write_back_to_metadata(array_ptr, array);
+    return array->length;  // Return new length (JavaScript behavior)
 }
 
 int64_t nova_value_array_pop(void* array_ptr) {
@@ -714,6 +717,30 @@ int64_t nova_value_array_length(void* array_ptr) {
     if (!array_ptr) return 0;
     // Read length directly from metadata struct at offset 24
     return *reinterpret_cast<int64_t*>(static_cast<char*>(array_ptr) + 24);
+}
+
+// Wrappers for complex spread operator support (called from LLVM codegen)
+// NOTE: Complex spread with multiple elements or mixed spread+literals currently has
+// a known limitation where the MIR→LLVM translation doesn't correctly handle
+// loop variables and allocas in complex control flow. Simple spread [...arr] works perfectly.
+int64_t value_array_length(void* array_ptr) {
+    return nova_value_array_length(array_ptr);
+}
+
+void* create_value_array(int64_t initial_capacity) {
+    nova::runtime::ValueArray* array = nova::runtime::create_value_array(initial_capacity);
+    return static_cast<void*>(array);
+}
+
+int64_t value_array_get(void* array_ptr, int64_t index) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    return nova::runtime::value_array_get(array, index);
+}
+
+void value_array_set(void* array_ptr, int64_t index, int64_t value) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    nova::runtime::value_array_set(array, index, value);
+    write_back_to_metadata(array_ptr, array);
 }
 
 // Array.with(index, value) - ES2023

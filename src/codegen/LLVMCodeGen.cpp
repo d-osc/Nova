@@ -1,6 +1,6 @@
 // LLVM Code Generator from MIR
-// Debug mode disabled
-#define NOVA_DEBUG 0
+// Debug mode enabled for investigation
+#define NOVA_DEBUG 1
 
 
 #ifdef _MSC_VER
@@ -274,6 +274,14 @@ bool LLVMCodeGen::emitLLVMIR(const std::string& filename) {
 bool LLVMCodeGen::emitExecutable(const std::string& filename) {
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: emitExecutable called for " << filename << std::endl;
 
+    // TEMP: Write IR to debug_output.ll for inspection
+    std::error_code debugEC;
+    llvm::raw_fd_ostream debugFile("debug_output.ll", debugEC, llvm::sys::fs::OF_None);
+    if (!debugEC) {
+        module->print(debugFile, nullptr);
+        debugFile.flush();
+    }
+
     // Step 1: Emit LLVM IR to a temporary file
     std::string irFile = filename + ".ll";
     if (!emitLLVMIR(irFile)) {
@@ -307,16 +315,25 @@ bool LLVMCodeGen::emitExecutable(const std::string& filename) {
     // Step 3: Compile IR to executable using clang++ with runtime library
     std::string compileCmd;
 #ifdef _WIN32
-    compileCmd = "clang++ -O2 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lmsvcrt -lkernel32 -lWs2_32 -lAdvapi32 -Wno-override-module 2>&1";
+    compileCmd = "clang++ -O0 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lmsvcrt -lkernel32 -lWs2_32 -lAdvapi32 -Wno-override-module 2>&1";
 #else
-    compileCmd = "clang++ -O2 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lc -lstdc++ 2>&1";
+    compileCmd = "clang++ -O0 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lc -lstdc++ 2>&1";
 #endif
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Compile command: " << compileCmd << std::endl;
 
     int result = system(compileCmd.c_str());
 
+    // TEMP: Copy IR to debug_output.ll before cleaning up
+    #ifdef _WIN32
+    std::string copyCmd = "copy \"" + irFile + "\" debug_output.ll >nul 2>&1";
+    #else
+    std::string copyCmd = "cp \"" + irFile + "\" debug_output.ll 2>/dev/null";
+    #endif
+    system(copyCmd.c_str());
+
     // Clean up IR file (best effort)
-    std::remove(irFile.c_str());
+    // TEMP: Comment out to keep IR file for debugging
+    // std::remove(irFile.c_str());
 
     if (result != 0) {
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Compilation failed with code " << result << std::endl;
@@ -363,9 +380,9 @@ void LLVMCodeGen::runOptimizationPasses(unsigned optLevel) {
         FPM->add(llvm::createCFGSimplificationPass());
 
         // ==================== LOOP OPTIMIZATIONS (Level 1) ====================
-        // OPTIMIZATION 1: Loop Rotation - Converts loops to do-while form for better optimization
-        FPM->add(llvm::createLoopRotatePass());
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added LoopRotatePass" << std::endl;
+        // OPTIMIZATION 1: Loop Rotation - DISABLED - Causes incorrect reordering with break/continue
+        // FPM->add(llvm::createLoopRotatePass());
+        // if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Added LoopRotatePass" << std::endl;
 
         // OPTIMIZATION 2: LICM - Move loop-invariant code out of loops
         FPM->add(llvm::createLICMPass());
@@ -762,12 +779,13 @@ switch (rvalue->kind) {
 
         case mir::MIRRValue::Kind::Ref: {
             // Ref kind is used for GetElement temporarily
-            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Ref rvalue (possibly GetElement)" << std::endl;
+            std::cerr << "=== Ref rvalue case ===" << std::endl;
             auto* getElemOp = dynamic_cast<mir::MIRGetElementRValue*>(rvalue);
             if (getElemOp) {
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Confirmed GetElement operation" << std::endl;
+                std::cerr << "=== Confirmed GetElement, calling generateGetElement ===" << std::endl;
                 return generateGetElement(getElemOp);
             }
+            std::cerr << "=== Not a GetElement ===" << std::endl;
             return nullptr;
         }
 
@@ -801,20 +819,28 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     size_t underscorePos = function->name.find('_');
     if (underscorePos != std::string::npos) {
         std::string className = function->name.substr(0, underscorePos);
-        std::string structName = "struct." + className;
+        // IMPORTANT: Use a single unified struct type for all classes to avoid LLVM aliasing issues
+        // When Animal_getName and Dog_getBreed both access the same instance, they must use the same struct type
+        std::string structName = "struct.NovaObject";
 
         // Check if struct type already exists
         llvm::StructType* existingType = llvm::StructType::getTypeByName(*context, structName);
         if (!existingType) {
-            // Create struct type for this class
-            // For now, create an opaque struct with 2 i64 fields (will be refined later)
-            // TODO: Get actual field types from HIR/MIR
-            std::vector<llvm::Type*> fieldTypes = {
-                llvm::Type::getInt64Ty(*context),  // Field 0
-                llvm::Type::getInt64Ty(*context)   // Field 1
-            };
+            // Create struct type with generous field count
+            // Most classes won't need more than 8 fields
+            // ObjectHeader + up to 8 fields
+            const int MAX_FIELDS = 8;
+
+            llvm::Type* i8Type = llvm::Type::getInt8Ty(*context);
+            llvm::Type* i64Type = llvm::Type::getInt64Ty(*context);
+            std::vector<llvm::Type*> fieldTypes;
+            fieldTypes.push_back(llvm::ArrayType::get(i8Type, 24));  // ObjectHeader
+            for (int i = 0; i < MAX_FIELDS; i++) {
+                fieldTypes.push_back(i64Type);  // Add each field
+            }
+
             llvm::StructType::create(*context, fieldTypes, structName);
-            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created struct type " << structName << " with " << fieldTypes.size() << " fields" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created struct type " << structName << " with ObjectHeader + " << MAX_FIELDS << " fields" << std::endl;
         } else {
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Struct type " << structName << " already exists" << std::endl;
         }
@@ -895,6 +921,17 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                         std::cerr << std::endl;
                     }
 
+                    // CRITICAL FIX: Check if this is a GetElement assignment (class field access)
+                    // GetElement returns i64 field values, but the MIR type might be *const
+                    // Override the type to i64 to prevent inttoptr conversions
+                    if (assign->rvalue && assign->rvalue->kind == mir::MIRRValue::Kind::Ref) {
+                        auto* getElemOp = dynamic_cast<mir::MIRGetElementRValue*>(assign->rvalue.get());
+                        if (getElemOp && getElemOp->isFieldAccess) {
+                            varType = llvm::Type::getInt64Ty(*context);
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Overriding type to i64 for GetField result" << std::endl;
+                        }
+                    }
+
                     // Skip void types - cannot create alloca for void
                     if (varType->isVoidTy()) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Skipping void type variable, using i64 placeholder" << std::endl;
@@ -922,6 +959,40 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                 }
             }
         }
+
+        // CRITICAL BUG FIX: Also scan terminators for Call instructions
+        // Call terminators have destinations that need allocas, but were being skipped!
+        // This caused template literal number conversions to fail because nova_i64_to_string
+        // results were never stored in valueMap
+        if (bb->terminator && bb->terminator->kind == mir::MIRTerminator::Kind::Call) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found Call terminator in block " << bbIdx << std::endl;
+            auto* callTerm = static_cast<mir::MIRCallTerminator*>(bb->terminator.get());
+
+            if (callTerm->destination) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Call has destination place=" << callTerm->destination.get() << std::endl;
+
+                // Check if already has an alloca
+                if (valueMap.find(callTerm->destination.get()) == valueMap.end()) {
+                    llvm::Type* destType = convertType(callTerm->destination->type.get());
+
+                    // Handle void types - use i64 as placeholder
+                    if (destType->isVoidTy()) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Call destination is void, using i64" << std::endl;
+                        destType = llvm::Type::getInt64Ty(*context);
+                    }
+
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating alloca for Call destination..." << std::endl;
+                    llvm::AllocaInst* callAlloca = builder->CreateAlloca(destType, nullptr, "call_dest");
+                    valueMap[callTerm->destination.get()] = callAlloca;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created alloca for Call destination " << callTerm->destination.get() << std::endl;
+                } else {
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Call destination already has alloca" << std::endl;
+                }
+            } else {
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Call terminator has no destination (void return)" << std::endl;
+            }
+        }
+
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Finished processing block " << bbIdx << std::endl;
     }
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Finished creating all allocas" << std::endl;
@@ -942,7 +1013,7 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
             if (methodUnderscorePos != std::string::npos && funcName.find("_constructor") == std::string::npos) {
                 // Extract class name
                 std::string className = funcName.substr(0, methodUnderscorePos);
-                std::string structName = "struct." + className;
+                std::string structName = "struct.NovaObject";  // Use unified struct type
                 llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
                 if (structType) {
                     arrayTypeMap[argAlloca] = structType;
@@ -1019,8 +1090,13 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
 }
 
 void LLVMCodeGen::generateBasicBlock(mir::MIRBasicBlock* bb, llvm::BasicBlock* llvmBB) {
-    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating basic block: " << bb->label << std::endl;
-    
+    if(NOVA_DEBUG) {
+        std::cerr << "DEBUG LLVM: ========== Generating basic block: " << bb->label << " ==========" << std::endl;
+        std::cerr << "DEBUG LLVM: LLVM BB: ";
+        llvmBB->printAsOperand(llvm::errs(), false);
+        std::cerr << std::endl;
+    }
+
     // Clear the insertion point to avoid any conflicts
     builder->ClearInsertionPoint();
     builder->SetInsertPoint(llvmBB);
@@ -1070,8 +1146,25 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
         case mir::MIRStatement::Kind::Assign: {
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Generating assign statement" << std::endl;
             auto* assign = static_cast<mir::MIRAssignStatement*>(stmt);
+
+            // Check if we're assigning to a closure environment variable
+            bool isClosureEnvAssign = false;
+            if (assign->place && !assign->place->name.empty()) {
+                isClosureEnvAssign = (assign->place->name.find("__closure_env") != std::string::npos);
+                if (isClosureEnvAssign) {
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected closure environment allocation for variable: "
+                                              << assign->place->name << std::endl;
+                    isAllocatingClosureEnv = true;
+                }
+            }
+
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting rvalue" << std::endl;
             llvm::Value* value = convertRValue(assign->rvalue.get());
+
+            // Reset flag after conversion
+            if (isClosureEnvAssign) {
+                isAllocatingClosureEnv = false;
+            }
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: RValue converted, value=" << value << std::endl;
             
             // Store the value in the alloca for this variable
@@ -1081,19 +1174,52 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                 if (it != valueMap.end()) {
                     if (llvm::isa<llvm::AllocaInst>(it->second)) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Storing value in alloca" << std::endl;
-                        builder->CreateStore(value, it->second);
+
+                        // CRITICAL FIX: Check for type mismatch and recreate alloca if needed
+                        // This fixes class field access where GetField returns i64 but alloca is ptr
+                        llvm::AllocaInst* alloca = llvm::cast<llvm::AllocaInst>(it->second);
+                        llvm::Type* allocaType = alloca->getAllocatedType();
+                        llvm::Type* valueType = value->getType();
+
+                        if (allocaType != valueType && !allocaType->isVoidTy()) {
+                            if(NOVA_DEBUG) {
+                                std::cerr << "DEBUG LLVM: Type mismatch detected!" << std::endl;
+                                std::cerr << "DEBUG LLVM:   Alloca type: ";
+                                allocaType->print(llvm::errs());
+                                std::cerr << std::endl;
+                                std::cerr << "DEBUG LLVM:   Value type: ";
+                                valueType->print(llvm::errs());
+                                std::cerr << std::endl;
+                            }
+
+                            // Create a new alloca with the correct type at the function entry
+                            llvm::Function* currentFunc = builder->GetInsertBlock()->getParent();
+                            llvm::IRBuilder<> tempBuilder(&currentFunc->getEntryBlock(),
+                                                           currentFunc->getEntryBlock().begin());
+                            llvm::AllocaInst* newAlloca = tempBuilder.CreateAlloca(valueType, nullptr, "var_fixed");
+
+                            // Update the valueMap
+                            valueMap[assign->place.get()] = newAlloca;
+
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created new alloca with correct type" << std::endl;
+
+                            // Store value in new alloca
+                            builder->CreateStore(value, newAlloca);
+                        } else {
+                            builder->CreateStore(value, it->second);
+                        }
 
                         // If the value is an array pointer, propagate the array type to the variable's alloca
                         auto arrayTypeIt = arrayTypeMap.find(value);
                         if (arrayTypeIt != arrayTypeMap.end()) {
-                            arrayTypeMap[it->second] = arrayTypeIt->second;
+                            arrayTypeMap[valueMap[assign->place.get()]] = arrayTypeIt->second;
                             if(NOVA_DEBUG) {
                                 std::cerr << "DEBUG LLVM: Propagated array type to variable alloca from value" << std::endl;
                                 std::cerr << "DEBUG LLVM:   Source value = ";
                                 value->print(llvm::errs());
                                 std::cerr << std::endl;
                                 std::cerr << "DEBUG LLVM:   Dest alloca = ";
-                                it->second->print(llvm::errs());
+                                valueMap[assign->place.get()]->print(llvm::errs());
                                 std::cerr << std::endl;
                                 std::cerr << "DEBUG LLVM:   Type = ";
                                 arrayTypeIt->second->print(llvm::errs());
@@ -1107,7 +1233,7 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
                                     auto nestedKey = std::make_pair(value, fieldIdx);
                                     auto nestedIt = nestedStructTypeMap.find(nestedKey);
                                     if (nestedIt != nestedStructTypeMap.end()) {
-                                        nestedStructTypeMap[std::make_pair(it->second, fieldIdx)] = nestedIt->second;
+                                        nestedStructTypeMap[std::make_pair(valueMap[assign->place.get()], fieldIdx)] = nestedIt->second;
                                         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Propagated nested struct type for field " << fieldIdx << std::endl;
                                     }
                                 }
@@ -1361,6 +1487,8 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         // Try to find it in the LLVM module
                         callee = module->getFunction(funcName);
                         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Tried module->getFunction, result: " << callee << std::endl;
+                        std::cerr << "[FORCE DEBUG] After module->getFunction, before if chain" << std::endl;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: About to check if chain for external declarations, callee=" << callee << ", funcName=" << funcName << std::endl;
 
                         if (!callee && funcName == "malloc") {
                             // Create malloc declaration: ptr @malloc(i64)
@@ -3311,6 +3439,38 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "nova_console_log_any") {
+                            // void @nova_console_log_any(i64) - outputs value with runtime type detection
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_log_any declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),        // Returns void
+                                {llvm::Type::getInt64Ty(*context)},     // Any value (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_console_log_any",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_i64_to_string") {
+                            // ptr @nova_i64_to_string(i64) - converts i64 to string
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_i64_to_string declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),  // Returns ptr (string)
+                                {llvm::Type::getInt64Ty(*context)},      // Number (i64)
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_i64_to_string",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_console_log_double") {
                             // void @nova_console_log_double(double) - outputs double to stdout
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_console_log_double declaration" << std::endl;
@@ -3371,6 +3531,106 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 funcType,
                                 llvm::Function::ExternalLinkage,
                                 "nova_console_print_newline",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_array_copy") {
+                            // ptr @nova_array_copy(ptr) - copies an array (for spread operator)
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_array_copy declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context), // Returns pointer (copied array)
+                                {llvm::PointerType::getUnqual(*context)}, // Source array pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_array_copy",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "value_array_length") {
+                            // i64 @value_array_length(ptr) - returns the length of an array
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external value_array_length declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),                    // Returns i64 (length)
+                                {llvm::PointerType::getUnqual(*context)},             // Array pointer
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "value_array_length",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "create_value_array") {
+                            // ptr @create_value_array(i64) - creates a new array with given capacity
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external create_value_array declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),               // Returns pointer (new array)
+                                {llvm::Type::getInt64Ty(*context)},                   // Capacity
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "create_value_array",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "value_array_get") {
+                            // i64 @value_array_get(ptr, i64) - gets an element from an array
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external value_array_get declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),                    // Returns i64 (element value)
+                                {llvm::PointerType::getUnqual(*context),              // Array pointer
+                                 llvm::Type::getInt64Ty(*context)},                   // Index
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "value_array_get",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "value_array_set") {
+                            // void @value_array_set(ptr, i64, i64) - sets an element in an array
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external value_array_set declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),                     // Returns void
+                                {llvm::PointerType::getUnqual(*context),              // Array pointer
+                                 llvm::Type::getInt64Ty(*context),                    // Index
+                                 llvm::Type::getInt64Ty(*context)},                   // Value
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "value_array_set",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_array_set_length") {
+                            // void @nova_array_set_length(ptr, i64) - sets array length
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_array_set_length declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),                     // Returns void
+                                {llvm::PointerType::getUnqual(*context),              // Array pointer
+                                 llvm::Type::getInt64Ty(*context)},                   // New length
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_array_set_length",
                                 module.get()
                             );
                         }
@@ -4647,8 +4907,21 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: About to create call with " << args.size() << " arguments" << std::endl;
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: callee = " << callee << std::endl;
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: callee name = " << callee->getName().str() << std::endl;
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: [CRITICAL] Current insert block BEFORE CreateCall: ";
+                    builder->GetInsertBlock()->printAsOperand(llvm::errs(), false);
+                    std::cerr << std::endl;
+                }
                 llvm::Value* result = builder->CreateCall(callee, args);
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: CreateCall succeeded, result = " << result << std::endl;
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: [CRITICAL] CreateCall succeeded, result = " << result << std::endl;
+                    std::cerr << "DEBUG LLVM: [CRITICAL] LLVM IR of call instruction:" << std::endl;
+                    result->print(llvm::errs());
+                    std::cerr << std::endl;
+                    std::cerr << "DEBUG LLVM: [CRITICAL] Current insert block AFTER CreateCall: ";
+                    builder->GetInsertBlock()->printAsOperand(llvm::errs(), false);
+                    std::cerr << std::endl;
+                }
 
                 // Handle return value type conversion (e.g., double to I64 for Math functions)
                 // Use bitcast to preserve the bit representation of doubles (for JavaScript number semantics)
@@ -4690,12 +4963,26 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 std::string className = currentFuncName.substr(0, pos);
 
                                 // Find the struct type for this class
-                                std::string structName = "struct." + className;
+                                std::string structName = "struct.NovaObject";  // Use unified struct type
                                 llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
                                 if (structType) {
                                     // Store the struct type for this malloc'd pointer
                                     arrayTypeMap[result] = structType;
                                 }
+                            }
+                        }
+
+                        // Special handling for constructor function calls
+                        // When Dog_constructor calls Animal_constructor, we need to register the returned pointer
+                        if (funcName.find("_constructor") != std::string::npos) {
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected constructor call: " << funcName << std::endl;
+
+                            // Register the unified struct type for this constructor result
+                            std::string structName = "struct.NovaObject";
+                            llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
+                            if (structType) {
+                                arrayTypeMap[result] = structType;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Registered struct type for constructor call result" << std::endl;
                             }
                         }
 
@@ -4733,23 +5020,42 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Result type is void: " << isVoid << std::endl;
 
                 if (callTerm->destination && !isVoid) {
-                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Has destination and result is not void" << std::endl;
-                    // Check if destination already has an alloca
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Has destination place=" << callTerm->destination.get() << " and result is not void" << std::endl;
+
+                    // The alloca MUST exist - it was created in the initial scan
                     auto it = valueMap.find(callTerm->destination.get());
                     if (it != valueMap.end() && llvm::isa<llvm::AllocaInst>(it->second)) {
-                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Destination exists, storing in existing alloca" << std::endl;
+                        if(NOVA_DEBUG) {
+                            std::cerr << "DEBUG LLVM: [CALL RESULT STORE] Destination exists in valueMap, storing result" << std::endl;
+                            std::cerr << "DEBUG LLVM:   Result value: ";
+                            result->print(llvm::errs());
+                            std::cerr << std::endl;
+                            std::cerr << "DEBUG LLVM:   Alloca: ";
+                            it->second->print(llvm::errs());
+                            std::cerr << std::endl;
+                        }
                         // Store result in existing alloca
-                        builder->CreateStore(result, it->second);
-                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Store completed" << std::endl;
+                        llvm::StoreInst* storeInst = builder->CreateStore(result, it->second);
+                        if(NOVA_DEBUG) {
+                            std::cerr << "DEBUG LLVM: [CALL RESULT STORE] Store completed successfully" << std::endl;
+                            std::cerr << "DEBUG LLVM: [CRITICAL] LLVM IR of store instruction:" << std::endl;
+                            storeInst->print(llvm::errs());
+                            std::cerr << std::endl;
+                        }
 
                         // Propagate type information from result to alloca
                         auto typeIt = arrayTypeMap.find(result);
                         if (typeIt != arrayTypeMap.end()) {
                             arrayTypeMap[it->second] = typeIt->second;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Propagated array type info to destination alloca" << std::endl;
                         }
                     } else {
-                        // Create a new alloca for the call result
-                        llvm::AllocaInst* resultAlloca = builder->CreateAlloca(result->getType(), nullptr, "call_result");
+                        // This should never happen now! The alloca should have been created during initial scan.
+                        std::cerr << "ERROR LLVM: Call destination not found in valueMap! place=" << callTerm->destination.get() << std::endl;
+                        std::cerr << "ERROR LLVM: This indicates the initial alloca scan missed this Call terminator!" << std::endl;
+                        std::cerr << "ERROR LLVM: Creating emergency alloca (this is a BUG)" << std::endl;
+
+                        llvm::AllocaInst* resultAlloca = builder->CreateAlloca(result->getType(), nullptr, "call_result_emergency");
                         builder->CreateStore(result, resultAlloca);
                         valueMap[callTerm->destination.get()] = resultAlloca;
 
@@ -4759,18 +5065,33 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             arrayTypeMap[resultAlloca] = typeIt->second;
                         }
                     }
+                } else if (!callTerm->destination) {
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: No destination for result (void function)" << std::endl;
                 }
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Result storage completed" << std::endl;
             } else {
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: No destination for result" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: ERROR - No callee found for Call terminator!" << std::endl;
             }
 
             // Branch to target
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: About to create branch to target" << std::endl;
             if (callTerm->target) {
                 llvm::BasicBlock* targetBB = blockMap[callTerm->target];
-                builder->CreateBr(targetBB);
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Branch created successfully" << std::endl;
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: [CRITICAL] Target block: ";
+                    targetBB->printAsOperand(llvm::errs(), false);
+                    std::cerr << std::endl;
+                    std::cerr << "DEBUG LLVM: [CRITICAL] Current block before branch: ";
+                    builder->GetInsertBlock()->printAsOperand(llvm::errs(), false);
+                    std::cerr << std::endl;
+                }
+                llvm::BranchInst* brInst = builder->CreateBr(targetBB);
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: Branch created successfully" << std::endl;
+                    std::cerr << "DEBUG LLVM: [CRITICAL] LLVM IR of branch instruction:" << std::endl;
+                    brInst->print(llvm::errs());
+                    std::cerr << std::endl;
+                }
             }
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Call terminator processing complete" << std::endl;
             break;
@@ -5528,13 +5849,24 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
 
         // Check if this is actually a SetField operation (encoded as struct with 3 elements)
         // elements[0] = struct pointer, elements[1] = field index, elements[2] = value to store
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Struct aggregate with " << numFields << " fields - checking if SetField" << std::endl;
+
         if (numFields == 3) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Has 3 fields, attempting SetField conversion" << std::endl;
+
             // Try to get the struct pointer, index, and value
             llvm::Value* structPtr = convertOperand(aggOp->elements[0].get());
             llvm::Value* indexValue = convertOperand(aggOp->elements[1].get());
             llvm::Value* valueToStore = convertOperand(aggOp->elements[2].get());
 
+            if(NOVA_DEBUG) {
+                std::cerr << "DEBUG LLVM: structPtr = " << (structPtr ? "valid" : "NULL") << std::endl;
+                std::cerr << "DEBUG LLVM: indexValue = " << (indexValue ? "valid" : "NULL") << std::endl;
+                std::cerr << "DEBUG LLVM: valueToStore = " << (valueToStore ? "valid" : "NULL") << std::endl;
+            }
+
             if (structPtr && indexValue && valueToStore) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: All SetField operands valid, processing as SetField" << std::endl;
                 // This is a SetField operation - generate GEP + Store
                 // Get the struct type from arrayTypeMap
                 llvm::Value* basePtr = structPtr;
@@ -5550,10 +5882,11 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                     llvm::Type* structType = typeIt->second;
 
                     // Convert field index to i32 for struct GEP
+                    // Add 1 to skip ObjectHeader at index 0
                     llvm::Value* fieldIndex = indexValue;
                     if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
                         uint64_t indexVal = constIndex->getZExtValue();
-                        fieldIndex = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), indexVal);
+                        fieldIndex = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), indexVal + 1);
                     }
 
                     // If structPtr is an integer (i64), convert it to a pointer
@@ -5571,8 +5904,147 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                     };
                     llvm::Value* fieldPtr = builder->CreateGEP(structType, actualStructPtr, indices, "setfield_ptr");
 
+                    // Debug: Print what we're storing
+                    if (auto* constIdx = llvm::dyn_cast<llvm::ConstantInt>(fieldIndex)) {
+                        std::cerr << "*** SetField (arrayTypeMap): storing at LLVM index " << constIdx->getZExtValue();
+                        std::cerr << " to pointer ";
+                        actualStructPtr->printAsOperand(llvm::errs(), false);
+                        std::cerr << std::endl;
+                    }
+
                     // Store the value to the field
                     builder->CreateStore(valueToStore, fieldPtr);
+                } else {
+                    // Struct type not in map - try to infer from function name (like in generateGetElement)
+                    llvm::Type* inferredStructType = nullptr;
+
+                    if (builder->GetInsertBlock()) {
+                        llvm::Function* currentFunc = builder->GetInsertBlock()->getParent();
+                        if (currentFunc) {
+                            std::string funcName = currentFunc->getName().str();
+                            size_t underscorePos = funcName.find('_');
+                            if (underscorePos != std::string::npos) {
+                                // Extract class name (e.g., "Dog" from "Dog_constructor")
+                                std::string className = funcName.substr(0, underscorePos);
+                                std::string structName = "struct.NovaObject";  // Use unified struct type
+                                llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
+                                if (structType) {
+                                    inferredStructType = structType;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetField - Inferred struct type " << structName << " from function name" << std::endl;
+                                }
+                            }
+                        }
+                    }
+
+                    // If we inferred a struct type, use struct GEP instead of byte-offset
+                    if (inferredStructType) {
+                        llvm::StructType* structType = llvm::cast<llvm::StructType>(inferredStructType);
+
+                        // Convert field index to i32 for struct GEP
+                        // Add 1 to skip ObjectHeader at index 0
+                        llvm::Value* fieldIndex = indexValue;
+                        if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+                            uint64_t indexVal = constIndex->getZExtValue();
+                            fieldIndex = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), indexVal + 1);
+                        }
+
+                        // If structPtr is an integer (i64), convert it to a pointer
+                        llvm::Value* actualStructPtr = structPtr;
+                        if (structPtr->getType()->isIntegerTy()) {
+                            llvm::Type* ptrType = llvm::PointerType::getUnqual(structType);
+                            actualStructPtr = builder->CreateIntToPtr(structPtr, ptrType, "struct_ptr_cast");
+                        }
+
+                        // Create GEP to get field pointer
+                        std::vector<llvm::Value*> indices = {
+                            llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),
+                            fieldIndex
+                        };
+                        llvm::Value* fieldPtr = builder->CreateGEP(structType, actualStructPtr, indices, "setfield_ptr");
+
+                        // Debug: Print what we're storing
+                        if (auto* constIdx = llvm::dyn_cast<llvm::ConstantInt>(fieldIndex)) {
+                            std::cerr << "*** SetField (inferred): storing at LLVM index " << constIdx->getZExtValue() << std::endl;
+                        }
+
+                        // Store the value to the field
+                        builder->CreateStore(valueToStore, fieldPtr);
+
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetField - Used inferred struct GEP" << std::endl;
+                    } else {
+                        // No struct type available - fall back to byte-offset indexing
+                        // This is likely a closure environment or opaque pointer
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetField - struct type not found, using direct indexing for closure environment" << std::endl;
+
+                    // Get the value's type to determine element type
+                    llvm::Type* elementType = valueToStore->getType();
+
+                    if(NOVA_DEBUG) {
+                        std::cerr << "DEBUG LLVM: SetField - structPtr type: ";
+                        structPtr->getType()->print(llvm::errs());
+                        std::cerr << std::endl;
+                        std::cerr << "DEBUG LLVM: SetField - valueToStore type: ";
+                        elementType->print(llvm::errs());
+                        std::cerr << std::endl;
+                    }
+
+                    // For closure environments OR class instances, we need to compute the byte offset manually
+                    // since we don't have the struct type information
+                    // Assume environment is an array of i64 values after a 24-byte ObjectHeader
+
+                    // Convert index to int64
+                    llvm::Value* indexAsI64 = indexValue;
+                    if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+                        uint64_t indexVal = constIndex->getZExtValue();
+                        indexAsI64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), indexVal);
+                    }
+
+                    // Calculate byte offset: ObjectHeader (24 bytes) + index * sizeof(element)
+                    // For i64, this is 24 + (index * 8)
+                    llvm::Value* elementSize = nullptr;
+                    if (elementType->isIntegerTy(64)) {
+                        elementSize = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 8);
+                    } else if (elementType->isIntegerTy(32)) {
+                        elementSize = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 4);
+                    } else if (elementType->isPointerTy()) {
+                        elementSize = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 8);
+                    } else {
+                        // Default to 8 bytes
+                        elementSize = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 8);
+                    }
+
+                    llvm::Value* fieldOffset = builder->CreateMul(indexAsI64, elementSize, "field_offset");
+
+                    // Add ObjectHeader size (24 bytes)
+                    llvm::Value* headerSize = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 24);
+                    llvm::Value* byteOffset = builder->CreateAdd(headerSize, fieldOffset, "byte_offset");
+
+                    // Cast structPtr to i8* for byte-level addressing
+                    llvm::Type* i8PtrType = llvm::PointerType::get(llvm::Type::getInt8Ty(*context), 0);
+                    // First convert i64 to ptr if needed
+                    llvm::Value* structAsPtr = structPtr;
+                    if (structPtr->getType()->isIntegerTy()) {
+                        structAsPtr = builder->CreateIntToPtr(structPtr, llvm::PointerType::getUnqual(*context), "struct_as_ptr");
+                    }
+                    llvm::Value* baseI8Ptr = builder->CreateBitCast(structAsPtr, i8PtrType, "base_i8_ptr");
+
+                    // Add byte offset using GEP
+                    llvm::Value* fieldI8Ptr = builder->CreateGEP(
+                        llvm::Type::getInt8Ty(*context),
+                        baseI8Ptr,
+                        byteOffset,
+                        "field_i8_ptr"
+                    );
+
+                    // Cast back to pointer to element type
+                    llvm::Type* elemPtrType = llvm::PointerType::get(elementType, 0);
+                    llvm::Value* fieldPtr = builder->CreateBitCast(fieldI8Ptr, elemPtrType, "field_ptr");
+
+                        // Store the value
+                        builder->CreateStore(valueToStore, fieldPtr);
+
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetField - stored value using byte-offset indexing" << std::endl;
+                    }
                 }
 
                 // Return a dummy value (void represented as 0)
@@ -5632,39 +6104,79 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             }
         }
 
-        // Create struct type with the actual field types
+        // CRITICAL FIX: Add ObjectHeader (24 bytes) as first field to match runtime layout
+        // Object literals have the same memory layout as classes: ObjectHeader + fields
+        llvm::Type* i8Type = llvm::Type::getInt8Ty(*context);
+        llvm::Type* objectHeaderType = llvm::ArrayType::get(i8Type, 24);
+        fieldTypes.insert(fieldTypes.begin(), objectHeaderType);
+
+        // Create struct type with ObjectHeader + actual field types
         llvm::StructType* structType = llvm::StructType::create(*context, fieldTypes, "anon_struct");
 
-        // CRITICAL FIX: Allocate struct in entry block, not inside loops
-        // This prevents segfaults when creating object literals inside loop bodies
-        llvm::AllocaInst* structAlloca = nullptr;
-        if (currentFunction && !currentFunction->empty()) {
-            llvm::IRBuilderBase::InsertPoint savedIP3 = builder->saveIP();
-            llvm::BasicBlock& entryBlock3 = currentFunction->getEntryBlock();
-            builder->SetInsertPoint(&entryBlock3, entryBlock3.getFirstInsertionPt());
-            structAlloca = builder->CreateAlloca(structType, nullptr, "struct");
-            builder->restoreIP(savedIP3);
+        // CRITICAL FIX: For closure environments, heap-allocate with malloc
+        // For other structs, stack-allocate in entry block (prevents segfaults in loops)
+        llvm::Value* structPtr = nullptr;
+
+        if (isAllocatingClosureEnv) {
+            // Heap allocation for closure environment
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Using heap allocation (malloc) for closure environment" << std::endl;
+
+            // Declare malloc if not already declared
+            llvm::Function* mallocFunc = module->getFunction("nova_alloc_closure_env");
+            if (!mallocFunc) {
+                llvm::FunctionType* mallocType = llvm::FunctionType::get(
+                    llvm::PointerType::get(*context, 0),
+                    {llvm::Type::getInt64Ty(*context)},
+                    false
+                );
+                mallocFunc = llvm::Function::Create(
+                    mallocType,
+                    llvm::Function::ExternalLinkage,
+                    "nova_alloc_closure_env",
+                    module.get()
+                );
+            }
+
+            // Calculate struct size
+            const llvm::DataLayout& DL = module->getDataLayout();
+            uint64_t structSize = DL.getTypeAllocSize(structType);
+            llvm::Value* sizeArg = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), structSize);
+
+            // Call malloc
+            structPtr = builder->CreateCall(mallocFunc, {sizeArg}, "closure_env");
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Allocated " << structSize << " bytes on heap for closure environment" << std::endl;
         } else {
-            structAlloca = builder->CreateAlloca(structType, nullptr, "struct");
+            // Stack allocation for normal structs
+            llvm::AllocaInst* structAlloca = nullptr;
+            if (currentFunction && !currentFunction->empty()) {
+                llvm::IRBuilderBase::InsertPoint savedIP3 = builder->saveIP();
+                llvm::BasicBlock& entryBlock3 = currentFunction->getEntryBlock();
+                builder->SetInsertPoint(&entryBlock3, entryBlock3.getFirstInsertionPt());
+                structAlloca = builder->CreateAlloca(structType, nullptr, "struct");
+                builder->restoreIP(savedIP3);
+            } else {
+                structAlloca = builder->CreateAlloca(structType, nullptr, "struct");
+            }
+            structPtr = structAlloca;
         }
 
-        // Initialize each field
+        // Initialize each field (skip index 0 which is ObjectHeader)
         for (size_t i = 0; i < numFields; ++i) {
-            // Get pointer to field using GEP
+            // Get pointer to field using GEP (index i+1 because index 0 is ObjectHeader)
             std::vector<llvm::Value*> indices = {
-                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0), // struct index
-                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), i)  // field index
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),     // struct index
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), i + 1)  // field index (skip ObjectHeader)
             };
-            llvm::Value* fieldPtr = builder->CreateGEP(structType, structAlloca, indices, "field_ptr");
+            llvm::Value* fieldPtr = builder->CreateGEP(structType, structPtr, indices, "field_ptr");
 
             // Store field value
             builder->CreateStore(fieldValues[i], fieldPtr);
 
             // If this field is a pointer to a struct/array, track it in nestedStructTypeMap
             if (nestedStructTypes[i]) {
-                // Store the nested struct type using (parent alloca, field index) as key
+                // Store the nested struct type using (parent struct, field index) as key
                 // This allows nested field access to work
-                nestedStructTypeMap[std::make_pair(structAlloca, i)] = nestedStructTypes[i];
+                nestedStructTypeMap[std::make_pair(structPtr, i)] = nestedStructTypes[i];
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored nested struct type for field " << i << " in nestedStructTypeMap: ";
                 nestedStructTypes[i]->print(llvm::errs());
                 std::cerr << std::endl;
@@ -5674,11 +6186,11 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Struct allocated and initialized, returning pointer" << std::endl;
 
         // Store the struct type for later GEP operations
-        arrayTypeMap[structAlloca] = structType;
+        arrayTypeMap[structPtr] = structType;
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored struct type in arrayTypeMap" << std::endl;
 
         // Return pointer to the struct
-        return structAlloca;
+        return structPtr;
     }
 
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Unsupported aggregate kind" << std::endl;
@@ -5688,7 +6200,8 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
 llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp) {
     if (!getElemOp) return nullptr;
 
-    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: generateGetElement called" << std::endl;
+    std::cerr << "\n=== generateGetElement CALLED ===" << std::endl;
+    std::cerr << "isFieldAccess: " << getElemOp->isFieldAccess << std::endl;
 
     // Get the array pointer (should be from a Copy operand)
     llvm::Value* arrayPtr = convertOperand(getElemOp->array.get());
@@ -5742,34 +6255,63 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             std::cerr << std::endl;
         }
 
-        // Fallback: Infer type from loadedArrayPtr
-        // If loadedArrayPtr is a pointer to a struct, and that struct looks like array metadata,
-        // use that as the type
-        llvm::Type* loadedType = loadedArrayPtr->getType();
-        if (loadedType->isPointerTy()) {
-            // loadedArrayPtr is a pointer - the pointee type might be the metadata struct
-            // This happens when the alloca was optimized away but we still have the loaded pointer
-            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loaded value is a pointer, treating it as array metadata pointer" << std::endl;
-
-            // Build the expected array metadata struct type
-            llvm::Type* i8Type = llvm::Type::getInt8Ty(*context);
-            llvm::Type* i64Type = llvm::Type::getInt64Ty(*context);
-            llvm::Type* ptrType = llvm::PointerType::get(*context, 0);
-            std::vector<llvm::Type*> metadataFields;
-            metadataFields.push_back(llvm::ArrayType::get(i8Type, 24));  // header
-            metadataFields.push_back(i64Type);  // length
-            metadataFields.push_back(i64Type);  // capacity
-            metadataFields.push_back(ptrType);  // elements
-            arrayType = llvm::StructType::get(*context, metadataFields);
-
-            if(NOVA_DEBUG) {
-                std::cerr << "DEBUG LLVM: Inferred array metadata type = ";
-                arrayType->print(llvm::errs());
-                std::cerr << std::endl;
+        // Check if this is a class method parameter by examining the alloca name
+        // For class methods, the first parameter (arg_0) should be the 'this' pointer
+        llvm::StringRef allocaName = allocaInst->getName();
+        if (allocaName.starts_with("arg_0") || allocaName.equals("arg_0")) {
+            // Try to infer struct type from current function name
+            if (builder->GetInsertBlock()) {
+                llvm::Function* currentFunc = builder->GetInsertBlock()->getParent();
+                if (currentFunc) {
+                    std::string funcName = currentFunc->getName().str();
+                    size_t underscorePos = funcName.find('_');
+                    if (underscorePos != std::string::npos && funcName.find("_constructor") == std::string::npos) {
+                        // This is a class method
+                        std::string className = funcName.substr(0, underscorePos);
+                        std::string structName = "struct.NovaObject";  // Use unified struct type
+                        llvm::StructType* structType = llvm::StructType::getTypeByName(*context, structName);
+                        if (structType) {
+                            arrayType = structType;
+                            // Cache it for future lookups
+                            arrayTypeMap[allocaInst] = structType;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Inferred struct type " << structName << " from method name" << std::endl;
+                        }
+                    }
+                }
             }
-        } else {
-            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: ERROR - Cannot infer array type, loadedArrayPtr is not a pointer" << std::endl;
-            return nullptr;
+        }
+
+        // If still no type, fall back to array metadata inference
+        if (!arrayType) {
+            // Fallback: Infer type from loadedArrayPtr
+            // If loadedArrayPtr is a pointer to a struct, and that struct looks like array metadata,
+            // use that as the type
+            llvm::Type* loadedType = loadedArrayPtr->getType();
+            if (loadedType->isPointerTy()) {
+                // loadedArrayPtr is a pointer - the pointee type might be the metadata struct
+                // This happens when the alloca was optimized away but we still have the loaded pointer
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loaded value is a pointer, treating it as array metadata pointer" << std::endl;
+
+                // Build the expected array metadata struct type
+                llvm::Type* i8Type = llvm::Type::getInt8Ty(*context);
+                llvm::Type* i64Type = llvm::Type::getInt64Ty(*context);
+                llvm::Type* ptrType = llvm::PointerType::get(*context, 0);
+                std::vector<llvm::Type*> metadataFields;
+                metadataFields.push_back(llvm::ArrayType::get(i8Type, 24));  // header
+                metadataFields.push_back(i64Type);  // length
+                metadataFields.push_back(i64Type);  // capacity
+                metadataFields.push_back(ptrType);  // elements
+                arrayType = llvm::StructType::get(*context, metadataFields);
+
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: Inferred array metadata type = ";
+                    arrayType->print(llvm::errs());
+                    std::cerr << std::endl;
+                }
+            } else {
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: ERROR - Cannot infer array type, loadedArrayPtr is not a pointer" << std::endl;
+                return nullptr;
+            }
         }
     } else {
         arrayType = arrayTypeIt->second;
@@ -5825,18 +6367,24 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
     bool isMetadataFieldAccess = false;
     bool isArrayMetadataStruct = false;
 
-    // Check if arrayType is an array metadata struct (first field is [24 x i8])
-    if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
-        if (structType->getNumElements() >= 4) {
-            llvm::Type* firstField = structType->getElementType(0);
-            if (auto* arrayTypeField = llvm::dyn_cast<llvm::ArrayType>(firstField)) {
-                if (arrayTypeField->getNumElements() == 24 &&
-                    arrayTypeField->getElementType()->isIntegerTy(8)) {
-                    isArrayMetadataStruct = true;
-                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array metadata struct pattern" << std::endl;
+    // IMPORTANT: Only check for array metadata if this is NOT a struct field access
+    // Class structs also have [24 x i8] as first field (ObjectHeader), but isFieldAccess distinguishes them
+    if (!getElemOp->isFieldAccess) {
+        // Check if arrayType is an array metadata struct (first field is [24 x i8])
+        if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
+            if (structType->getNumElements() >= 4) {
+                llvm::Type* firstField = structType->getElementType(0);
+                if (auto* arrayTypeField = llvm::dyn_cast<llvm::ArrayType>(firstField)) {
+                    if (arrayTypeField->getNumElements() == 24 &&
+                        arrayTypeField->getElementType()->isIntegerTy(8)) {
+                        isArrayMetadataStruct = true;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array metadata struct pattern" << std::endl;
+                    }
                 }
             }
         }
+    } else {
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Skipping array metadata check because isFieldAccess=true" << std::endl;
     }
 
     if (allocaInst && isArrayMetadataStruct) {
@@ -6001,23 +6549,35 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         }
     }
 
+    std::cerr << "\n=== BEFORE STRUCT FIELD ACCESS CHECK ===" << std::endl;
+    std::cerr << "isFieldAccess=" << getElemOp->isFieldAccess << std::endl;
+    std::cerr << "isMetadataFieldAccess=" << isMetadataFieldAccess << std::endl;
+    std::cerr << "arrayType is StructType: " << (llvm::isa<llvm::StructType>(arrayType) ? "YES" : "NO") << std::endl;
+    std::cerr << "indexValue is ConstantInt: " << (llvm::isa<llvm::ConstantInt>(indexValue) ? "YES" : "NO") << std::endl;
+
     // For regular struct field access (not array metadata), use the actual struct type
     if (getElemOp->isFieldAccess && !isMetadataFieldAccess) {
+        std::cerr << "=== STRUCT FIELD ACCESS PATH TAKEN ===" << std::endl;
         if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
             if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
                 unsigned fieldIndex = constIndex->getZExtValue();
 
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Accessing regular struct field " << fieldIndex << std::endl;
+                // Add 1 to skip ObjectHeader at index 0
+                unsigned actualFieldIndex = fieldIndex + 1;
+
+                std::cerr << "DEBUG LLVM: Accessing regular struct field " << fieldIndex << " (actual index " << actualFieldIndex << " accounting for ObjectHeader)" << std::endl;
 
                 // Access the struct field directly
                 llvm::Value* fieldPtr = builder->CreateStructGEP(
                     structType,
                     loadedArrayPtr,
-                    fieldIndex,
+                    actualFieldIndex,
                     "struct_field_ptr");
 
-                // Get the field type
-                llvm::Type* fieldType = structType->getElementType(fieldIndex);
+                // Get the field type (use actualFieldIndex to account for ObjectHeader)
+                llvm::Type* fieldType = structType->getElementType(actualFieldIndex);
+
+                std::cerr << "*** GetElement: loading from LLVM index " << actualFieldIndex << std::endl;
 
                 // Load the field value
                 llvm::Value* fieldValue = builder->CreateLoad(fieldType, fieldPtr, "field_value");
@@ -6089,7 +6649,7 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
     llvm::Type* elementType = nullptr;
     if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
         // For struct types, get the type of the specific field
-        if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
+        if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(secondIndex)) {
             unsigned fieldIndex = constIndex->getZExtValue();
             if (fieldIndex < structType->getNumElements()) {
                 elementType = structType->getElementType(fieldIndex);

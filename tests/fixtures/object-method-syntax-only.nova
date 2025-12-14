@@ -1,0 +1,25 @@
+// Test that method shorthand syntax parses correctly
+// This doesn't test runtime behavior, just parsing
+
+const obj = {
+    // Method shorthand
+    getValue() {
+        return 42;
+    },
+
+    // Method with parameters
+    add(a, b) {
+        return a + b;
+    },
+
+    // Regular property for comparison
+    x: 10,
+
+    // Multiple methods
+    multiply(x, y) {
+        return x * y;
+    }
+};
+
+// If this compiles without errors, method shorthand syntax works!
+console.log("Method shorthand syntax parsing: SUCCESS");
