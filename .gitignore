@@ -139,3 +139,4 @@ perf.data.old
 *.memcheck
 *.callgrind
 *.cachegrind
+nul

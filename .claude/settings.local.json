@@ -66,7 +66,13 @@
       "Bash(.nova-cache/bin/1d63db4f468e88ee.exe)",
       "Bash(.nova-cache/bin/2b73f4c2cfd1d47e.exe)",
       "Bash(echo:*)",
-      "Bash(.nova-cache/bin/47c893c34b59894.exe)"
+      "Bash(.nova-cache/bin/47c893c34b59894.exe)",
+      "Bash(build/Release/nova.exe:*)",
+      "Bash(cmake:*)",
+      "Bash(\"C:\\Users\\ondev\\Projects\\Nova\\build\\Release\\novac.exe\" test_string_arg.js)",
+      "Bash(./build/Release/nova.exe:*)",
+      "Bash(timeout 5 ./build/Release/nova.exe:*)",
+      "Bash(timeout 10:*)"
     ],
     "deny": [],
     "ask": []
