@@ -1,0 +1,7 @@
+const obj = {
+    x: 42,
+    getX() {
+        return this.x;
+    }
+};
+console.log(obj.getX());

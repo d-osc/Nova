@@ -1,0 +1,19 @@
+const obj = {
+    x: 42,
+    y: 100,
+    getX() {
+        return this.x;
+    },
+    getY() {
+        return this.y;
+    },
+    getSum() {
+        return this.x + this.y;
+    }
+};
+
+console.log(obj.getX());     // Should print: 42
+console.log(obj.getY());     // Should print: 100
+console.log(obj.getSum());   // Should print: 142
+console.log(obj.x);          // Should print: 42
+console.log(obj.y);          // Should print: 100

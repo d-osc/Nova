@@ -465,7 +465,7 @@ HIRInstruction* HIRBuilder::createStore(HIRValue* value, HIRValue* ptr) {
         HIRInstruction::Opcode::Store, voidType, "");
     inst->addOperand(std::shared_ptr<HIRValue>(value, [](HIRValue*){}));
     inst->addOperand(std::shared_ptr<HIRValue>(ptr, [](HIRValue*){}));
-    
+
     if (currentBlock_) {
         currentBlock_->addInstruction(inst);
     }
@@ -572,14 +572,54 @@ HIRInstruction* HIRBuilder::createGetField(HIRValue* struct_, uint32_t fieldInde
     HIRTypePtr resultType = std::make_shared<HIRType>(HIRType::Kind::Any);
 
     if (struct_ && struct_->type) {
+        // Check if it's a direct struct type
+        if (auto structType = dynamic_cast<HIRStructType*>(struct_->type.get())) {
+            if (fieldIndex < structType->fields.size()) {
+                resultType = structType->fields[fieldIndex].type;
+                std::cerr << "  DEBUG GetField: Found field type from direct struct, type=" << static_cast<int>(resultType->kind) << std::endl;
+            }
+        }
         // Check if it's a pointer to struct
-        if (auto ptrType = dynamic_cast<HIRPointerType*>(struct_->type.get())) {
-            if (auto structType = dynamic_cast<HIRStructType*>(ptrType->pointeeType.get())) {
-                if (fieldIndex < structType->fields.size()) {
-                    resultType = structType->fields[fieldIndex].type;
+        else if (auto ptrType = dynamic_cast<HIRPointerType*>(struct_->type.get())) {
+            if (auto ptrStructType = dynamic_cast<HIRStructType*>(ptrType->pointeeType.get())) {
+                if (fieldIndex < ptrStructType->fields.size()) {
+                    resultType = ptrStructType->fields[fieldIndex].type;
+                    std::cerr << "  DEBUG GetField: Found field type from pointer-to-struct, type=" << static_cast<int>(resultType->kind) << std::endl;
+                }
+            }
+            // Check if it's a pointer to array - handle array metadata fields
+            else if (ptrType->pointeeType && ptrType->pointeeType->kind == HIRType::Kind::Array) {
+                std::cerr << "  DEBUG GetField: Accessing array metadata field, index=" << fieldIndex << std::endl;
+                // Array metadata struct: { [24 x i8], i64 length, i64 capacity, ptr elements }
+                // Field 0: type tag ([24 x i8])
+                // Field 1: length (i64)
+                // Field 2: capacity (i64)
+                // Field 3: elements (ptr)
+                if (fieldIndex == 1 || fieldIndex == 2) {
+                    // length or capacity - both are I64
+                    resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    std::cerr << "  DEBUG GetField: Array field " << fieldIndex << " is I64 (length/capacity)" << std::endl;
+                } else if (fieldIndex == 3) {
+                    // elements pointer
+                    auto arrayType = dynamic_cast<HIRArrayType*>(ptrType->pointeeType.get());
+                    if (arrayType && arrayType->elementType) {
+                        resultType = std::make_shared<HIRPointerType>(arrayType->elementType, true);
+                        std::cerr << "  DEBUG GetField: Array field 3 is pointer to elements" << std::endl;
+                    } else {
+                        resultType = std::make_shared<HIRPointerType>(std::make_shared<HIRType>(HIRType::Kind::Any), true);
+                    }
+                } else if (fieldIndex == 0) {
+                    // type tag - treat as I64 array
+                    resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    std::cerr << "  DEBUG GetField: Array field 0 is type tag" << std::endl;
                 }
             }
         }
+        else {
+            std::cerr << "  DEBUG GetField: struct type is neither Struct nor Pointer, kind=" << static_cast<int>(struct_->type->kind) << std::endl;
+        }
+    } else {
+        std::cerr << "  DEBUG GetField: struct_ or struct_->type is null!" << std::endl;
     }
 
     auto inst = std::make_shared<HIRInstruction>(

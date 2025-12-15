@@ -290,7 +290,16 @@ public:
     std::vector<HIRFunctionPtr> functions;
     std::vector<HIRStructType*> types;
     std::unordered_map<std::string, HIRValuePtr> globals;
-    
+
+    // Closure support: maps function name -> environment struct type
+    std::unordered_map<std::string, HIRStructType*> closureEnvironments;
+    // Maps function name -> list of captured variable names (in order)
+    std::unordered_map<std::string, std::vector<std::string>> closureCapturedVars;
+    // Maps function name -> list of captured variable HIRValue pointers (in order, matches closureCapturedVars)
+    std::unordered_map<std::string, std::vector<HIRValue*>> closureCapturedVarValues;
+    // Maps outer function name -> inner closure function name (e.g., "makeCounter" -> "__func_0")
+    std::unordered_map<std::string, std::string> closureReturnedBy;
+
     explicit HIRModule(const std::string& n) : name(n) {}
     
     HIRFunctionPtr createFunction(const std::string& name, HIRFunctionType* type);

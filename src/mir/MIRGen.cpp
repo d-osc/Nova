@@ -1,8 +1,9 @@
 #include "nova/MIR/MIRGen.h"
-// Debug mode disabled
-#define NOVA_DEBUG 0
+// Debug mode enabled for investigation
+#define NOVA_DEBUG 1
 #include "nova/MIR/MIRBuilder.h"
 #include <algorithm>
+#include <fstream>
 #include <unordered_map>
 #include <iostream>
 #include <set>
@@ -54,14 +55,18 @@ private:
     // Map from label name to its loop context (for labeled break/continue)
     std::unordered_map<std::string, std::shared_ptr<LoopContext>> labelToLoopMap_;
 
-    // Current HIR block being processed
+    // Closure support: map MIR place to {function name, environment place}
+    std::unordered_map<MIRPlacePtr, std::pair<std::string, MIRPlacePtr>> closurePlaceMap_;
+
+    // Current HIR function and block being processed
+    hir::HIRFunction* currentHIRFunction_;
     hir::HIRBasicBlock* currentHIRBlock_;
     
 public:
     MIRGenerator(hir::HIRModule* hirModule, MIRModule* mirModule)
         : hirModule_(hirModule), mirModule_(mirModule), builder_(nullptr),
           currentFunction_(nullptr), localCounter_(0), blockCounter_(0), totalBlocks_(0),
-          currentHIRBlock_(nullptr) {}
+          currentHIRFunction_(nullptr), currentHIRBlock_(nullptr) {}
     
     ~MIRGenerator() {
         delete builder_;
@@ -136,6 +141,9 @@ private:
                 return std::make_shared<MIRType>(MIRType::Kind::Function);
 
             case hir::HIRType::Kind::Any:
+                // WORKAROUND: Use I64 instead of Pointer for better callback compatibility
+                // This allows untyped parameters to work with array callbacks
+                // Fixed: Changed from Pointer to I64 as comment intended
                 return std::make_shared<MIRType>(MIRType::Kind::I64);
             
             default:
@@ -570,6 +578,7 @@ private:
         auto mirFunc = mirModule_->createFunction(hirFunc->name);
         functionMap_[hirFunc] = mirFunc;
         currentFunction_ = mirFunc.get();
+        currentHIRFunction_ = hirFunc;
         localCounter_ = 0;
         blockCounter_ = 0;
         
@@ -627,6 +636,77 @@ private:
 
         // Analyze switch statements to set up switch break contexts
         analyzeSwitches(hirFunc);
+
+        // MIR-Level Copy-In: If this function has an __env parameter, create local variables
+        // for captured variables and load them from environment at function entry
+        if (!hirFunc->parameters.empty()) {
+            auto lastParam = hirFunc->parameters.back();
+            if (lastParam->name == "__env") {
+                std::string funcName = hirFunc->name;
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Function " << funcName << " has __env parameter, setting up captured variable locals" << std::endl;
+
+                // Get captured variable names and values for this function
+                auto capturedNamesIt = hirModule_->closureCapturedVars.find(funcName);
+                auto capturedValuesIt = hirModule_->closureCapturedVarValues.find(funcName);
+
+                if (capturedNamesIt != hirModule_->closureCapturedVars.end() &&
+                    capturedValuesIt != hirModule_->closureCapturedVarValues.end()) {
+
+                    const auto& capturedNames = capturedNamesIt->second;
+                    const auto& capturedValues = capturedValuesIt->second;
+
+                    if (!capturedNames.empty() && !hirFunc->basicBlocks.empty()) {
+                        // Get the entry block
+                        auto entryBlock = blockMap_[hirFunc->basicBlocks[0].get()];
+                        if (entryBlock) {
+                            builder_->setInsertPoint(entryBlock);
+
+                            // Get the __env parameter place
+                            MIRPlacePtr envPlace = valueMap_[lastParam];
+
+                            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Setting up " << capturedNames.size()
+                                                      << " captured variable locals with Copy-In" << std::endl;
+
+                            // For each captured variable:
+                            // 1. Create a local MIR place for it
+                            // 2. Map the HIR value to this place in valueMap_
+                            // 3. Generate Copy-In: local = __env.field[i]
+                            for (size_t i = 0; i < capturedNames.size() && i < capturedValues.size(); ++i) {
+                                const std::string& varName = capturedNames[i];
+                                hir::HIRValue* hirValue = capturedValues[i];
+
+                                // Get the type from the HIR value
+                                auto varType = translateType(hirValue->type.get());
+
+                                // Create a local place for this captured variable
+                                auto localPlace = currentFunction_->createLocal(varType, "__captured_" + varName);
+                                builder_->createStorageLive(localPlace);
+
+                                // Map the HIR value to this MIR place so references to it work
+                                valueMap_[hirValue] = localPlace;
+
+                                std::cout << "[COPY-IN] Creating local for '" << varName << "' field " << i << std::endl;
+
+                                // Generate Copy-In: load from __env.field[i] to local
+                                auto envOperand = builder_->createCopyOperand(envPlace);
+                                auto fieldIndexOperand = builder_->createIntConstant(
+                                    static_cast<int64_t>(i),
+                                    std::make_shared<MIRType>(MIRType::Kind::I64)
+                                );
+
+                                auto getElemRValue = std::make_shared<MIRGetElementRValue>(
+                                    envOperand, fieldIndexOperand, true);
+
+                                builder_->createAssign(localPlace, getElemRValue);
+
+                                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Created local for captured variable '"
+                                                          << varName << "' and copied from __env field " << i << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Second pass: translate instructions
         for (const auto& hirBlock : hirFunc->basicBlocks) {
@@ -841,6 +921,30 @@ private:
             }
         }
 
+        // Check if this is a Call instruction being used as an operand
+        // This happens when one function call's result is passed to another
+        hir::HIRInstruction* inst = nullptr;
+        try {
+            if (hirValue) {
+                inst = dynamic_cast<hir::HIRInstruction*>(hirValue);
+            }
+        } catch (...) {
+            inst = nullptr;
+        }
+
+        if (inst && inst->opcode == hir::HIRInstruction::Opcode::Call) {
+            std::cerr << "*** MIRGen translateOperand: Found Call instruction as operand (ptr=" << inst << ")" << std::endl;
+            // Check if this call has already been processed and has a result place
+            auto it = valueMap_.find(hirValue);
+            if (it != valueMap_.end()) {
+                std::cerr << "*** MIRGen: Call was already processed, using its result place" << std::endl;
+                return builder_->createCopyOperand(it->second);
+            } else {
+                std::cerr << "*** MIRGen: WARNING - Call instruction used as operand but not yet processed!" << std::endl;
+                std::cerr << "*** MIRGen: Creating placeholder place for it" << std::endl;
+            }
+        }
+
         // Otherwise, it's a place reference
         auto place = getOrCreatePlace(hirValue);
         return builder_->createCopyOperand(place);
@@ -978,10 +1082,10 @@ private:
     void generateStore(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
         if (hirInst->operands.size() < 2) return;
-        
+
         auto value = translateOperand(hirInst->operands[0].get());
         auto ptr = getOrCreatePlace(hirInst->operands[1].get());
-        
+
         // Store is an assignment in MIR
         auto rvalue = builder_->createUse(value);
         builder_->createAssign(ptr, rvalue);
@@ -995,12 +1099,23 @@ private:
         }
 
         if(NOVA_DEBUG) {
-            std::cerr << "DEBUG MIRGen: Processing HIR Call instruction with "
+            std::cerr << "DEBUG MIRGen: Processing HIR Call instruction (ptr=" << hirInst << ") with "
                       << hirInst->operands.size() << " operands" << std::endl;
-            for (size_t i = 0; i < hirInst->operands.size(); ++i) {
-                std::cerr << "  Operand " << i << ": ";
+            // First operand is function name
+            if (hirInst->operands[0]) {
+                auto* funcName = dynamic_cast<hir::HIRConstant*>(hirInst->operands[0].get());
+                if (funcName && funcName->kind == hir::HIRConstant::Kind::String) {
+                    std::cerr << "  Function: " << std::get<std::string>(funcName->value) << std::endl;
+                }
+            }
+            for (size_t i = 1; i < hirInst->operands.size(); ++i) {
+                std::cerr << "  Operand " << (i-1) << ": ";
                 if (hirInst->operands[i]) {
-                    std::cerr << "value present";
+                    std::cerr << "value present (ptr=" << hirInst->operands[i].get() << ")";
+                    auto* asCall = dynamic_cast<hir::HIRInstruction*>(hirInst->operands[i].get());
+                    if (asCall && asCall->opcode == hir::HIRInstruction::Opcode::Call) {
+                        std::cerr << " [THIS IS A CALL INSTRUCTION!]";
+                    }
                 } else {
                     std::cerr << "NULL";
                 }
@@ -1008,15 +1123,71 @@ private:
             }
         }
 
-        // First operand is the function name (string constant)
-        auto funcOperand = translateOperand(hirInst->operands[0].get());
+        // First operand is the function name (string constant) or closure
+        hir::HIRValue* hirFuncValue = hirInst->operands[0].get();
 
-        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translated function operand" << std::endl;
+        // Translate the function operand first (but we'll override it if it's a closure)
+        MIROperandPtr tempFuncOperand = translateOperand(hirFuncValue);
 
+        // Try to extract the place from the operand if it's a Copy operand
+        MIRPlacePtr funcPlace = nullptr;
+        if (auto* copyOp = dynamic_cast<mir::MIRCopyOperand*>(tempFuncOperand.get())) {
+            funcPlace = copyOp->place;
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Extracted MIR place from Copy operand (name: "
+                                      << (funcPlace->name.empty() ? "<anonymous>" : funcPlace->name) << ")" << std::endl;
+        } else {
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Function operand is not a Copy (probably a constant)" << std::endl;
+        }
+
+        // Look up the place in the closure map
+        decltype(closurePlaceMap_)::iterator closureIt;
+        bool isClosure = false;
+        if (funcPlace) {
+            closureIt = closurePlaceMap_.find(funcPlace);
+            isClosure = (closureIt != closurePlaceMap_.end());
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Closure map lookup: "
+                                      << (isClosure ? "FOUND" : "NOT FOUND") << std::endl;
+            if(NOVA_DEBUG && isClosure) std::cerr << "DEBUG MIRGen: Closure function name: "
+                                                   << closureIt->second.first << std::endl;
+        }
+
+        MIROperandPtr funcOperand;
         std::vector<MIROperandPtr> args;
-        for (size_t i = 1; i < hirInst->operands.size(); ++i) {
-            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translating argument " << (i-1) << std::endl;
-            args.push_back(translateOperand(hirInst->operands[i].get()));
+
+        if (isClosure) {
+            // This is a closure call!
+            const auto& [functionName, envPlace] = closureIt->second;
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Detected closure call to " << functionName << std::endl;
+
+            // Create function name operand
+            funcOperand = builder_->createStringConstant(
+                functionName,
+                std::make_shared<MIRType>(MIRType::Kind::Pointer)
+            );
+
+            // Prepend environment as first argument
+            auto envOperand = builder_->createCopyOperand(envPlace);
+            args.push_back(envOperand);
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Added environment as first argument" << std::endl;
+
+            // Add remaining arguments
+            for (size_t i = 1; i < hirInst->operands.size(); ++i) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translating argument " << i << std::endl;
+                args.push_back(translateOperand(hirInst->operands[i].get()));
+            }
+        } else {
+            // Normal function call (not a closure)
+            funcOperand = tempFuncOperand;  // Reuse the already-translated operand
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Normal function call (not a closure)" << std::endl;
+
+            // Collect arguments
+            for (size_t i = 1; i < hirInst->operands.size(); ++i) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Translating argument " << (i-1) << std::endl;
+                args.push_back(translateOperand(hirInst->operands[i].get()));
+            }
         }
 
         if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Collected " << args.size() << " arguments" << std::endl;
@@ -1035,17 +1206,331 @@ private:
 
         // Switch to the continuation block
         builder_->setInsertPoint(contBlock.get());
+
+        // If this was a call to a function that returns a closure, map the destination
+        // to the closure so subsequent calls can detect it
+        if (!isClosure) {
+            // Try to extract function name from the funcOperand
+            // For normal calls, funcOperand should be a string constant
+            try {
+                if (auto* constant = dynamic_cast<hir::HIRConstant*>(hirFuncValue)) {
+                    if (constant->kind == hir::HIRConstant::Kind::String) {
+                        std::string calledFuncName = std::get<std::string>(constant->value);
+
+                        // Check if this function returns a closure (using the new closureReturnedBy map)
+                        auto returnedClosureIt = hirModule_->closureReturnedBy.find(calledFuncName);
+                        if (returnedClosureIt != hirModule_->closureReturnedBy.end()) {
+                            // This function returns a closure!
+                            std::string returnedClosureName = returnedClosureIt->second;
+
+                            // The destination now contains the closure environment
+                            // Map it so future calls can detect it's a closure
+                            closurePlaceMap_[dest] = {returnedClosureName, dest};
+
+                            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Call to " << calledFuncName
+                                                      << " returns closure '" << returnedClosureName
+                                                      << "' - mapped destination (name: "
+                                                      << (dest->name.empty() ? "<anonymous>" : dest->name) << ")" << std::endl;
+                        }
+                    }
+                }
+            } catch (...) {
+                // Not a constant, ignore
+            }
+        }
     }
     
     void generateReturn(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
-        if (!hirInst->operands.empty()) {
-            auto returnValue = translateOperand(hirInst->operands[0].get());
-            auto returnPlace = valueMap_[nullptr];
-            auto rvalue = builder_->createUse(returnValue);
-            builder_->createAssign(returnPlace, rvalue);
+
+        // Copy-Out: Write modified captured variables back to environment before returning
+        if (currentHIRFunction_ && !currentHIRFunction_->parameters.empty()) {
+            auto lastParam = currentHIRFunction_->parameters.back();
+            if (lastParam->name == "__env") {
+                std::string funcName = currentHIRFunction_->name;
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Function " << funcName << " returning, performing Copy-Out" << std::endl;
+
+                // Get captured variable names and values for this function
+                auto capturedNamesIt = hirModule_->closureCapturedVars.find(funcName);
+                auto capturedValuesIt = hirModule_->closureCapturedVarValues.find(funcName);
+
+                if (capturedNamesIt != hirModule_->closureCapturedVars.end() &&
+                    capturedValuesIt != hirModule_->closureCapturedVarValues.end()) {
+
+                    const auto& capturedNames = capturedNamesIt->second;
+                    const auto& capturedValues = capturedValuesIt->second;
+
+                    if (!capturedNames.empty()) {
+                        // Get the __env parameter place
+                        MIRPlacePtr envPlace = valueMap_[lastParam];
+
+                        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Copy-Out for " << capturedNames.size()
+                                                  << " captured variables" << std::endl;
+
+                        // For each captured variable, write it back to the environment
+                        for (size_t i = 0; i < capturedNames.size() && i < capturedValues.size(); ++i) {
+                            const std::string& varName = capturedNames[i];
+                            hir::HIRValue* hirValue = capturedValues[i];
+
+                            // Look up the local place for this captured variable
+                            auto localPlaceIt = valueMap_.find(hirValue);
+                            if (localPlaceIt != valueMap_.end()) {
+                                auto localPlace = localPlaceIt->second;
+
+                                std::cout << "[COPY-OUT] Writing '" << varName << "' back to env field " << i << std::endl;
+
+                                // Generate Copy-Out: __env.field[i] = local
+                                // Using SetField pattern (3-element Aggregate)
+                                auto envOperand = builder_->createCopyOperand(envPlace);
+                                auto fieldIndexOperand = builder_->createIntConstant(
+                                    static_cast<int64_t>(i),
+                                    std::make_shared<MIRType>(MIRType::Kind::I64)
+                                );
+                                auto valueOperand = builder_->createCopyOperand(localPlace);
+
+                                std::vector<MIROperandPtr> setFieldElements;
+                                setFieldElements.push_back(envOperand);
+                                setFieldElements.push_back(fieldIndexOperand);
+                                setFieldElements.push_back(valueOperand);
+
+                                auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
+                                    MIRAggregateRValue::AggregateKind::Struct,
+                                    setFieldElements
+                                );
+
+                                // Create temp place for the SetField result
+                                auto tempPlace = currentFunction_->createLocal(
+                                    std::make_shared<MIRType>(MIRType::Kind::Void),
+                                    "__copyout_temp"
+                                );
+
+                                builder_->createAssign(tempPlace, setFieldRValue);
+
+                                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Copied '" << varName
+                                                          << "' to __env field " << i << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
         }
-        
+
+        if (!hirInst->operands.empty()) {
+            // Check if we're returning a function reference (closure)
+            hir::HIRValue* hirReturnValue = hirInst->operands[0].get();
+
+            // Debug output to file
+            std::ofstream debugFile("mir_debug.txt", std::ios::app);
+            debugFile << "=== Processing return statement in function '"
+                     << (currentHIRFunction_ ? currentHIRFunction_->name : "<unknown>") << "'" << std::endl;
+            debugFile.close();
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Processing return statement in function '"
+                                      << (currentHIRFunction_ ? currentHIRFunction_->name : "<unknown>") << "'" << std::endl;
+
+            // Track if we create an environment (will return it instead of function name)
+            MIRPlacePtr closureEnvPlace = nullptr;
+
+            // Try to get the function name if this is a string constant
+            hir::HIRConstant* constant = nullptr;
+            std::string functionName;
+            try {
+                constant = dynamic_cast<hir::HIRConstant*>(hirReturnValue);
+
+                // Debug to file
+                std::ofstream debugFile2("mir_debug.txt", std::ios::app);
+                debugFile2 << "  Cast to constant: " << (constant ? "SUCCESS" : "FAILED") << std::endl;
+                debugFile2.close();
+
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Return value cast to constant: "
+                                          << (constant ? "SUCCESS" : "FAILED") << std::endl;
+                if (constant && constant->kind == hir::HIRConstant::Kind::String) {
+                    functionName = std::get<std::string>(constant->value);
+
+                    // Debug to file
+                    std::ofstream debugFile3("mir_debug.txt", std::ios::app);
+                    debugFile3 << "  String constant: '" << functionName << "'" << std::endl;
+                    debugFile3.close();
+
+                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Return value is string constant: '"
+                                              << functionName << "'" << std::endl;
+
+                    // Check if this function has a closure environment
+                    auto envIt = hirModule_->closureEnvironments.find(functionName);
+
+                    // Debug to file
+                    std::ofstream debugFile4("mir_debug.txt", std::ios::app);
+                    debugFile4 << "  Closure environment check for '" << functionName << "': "
+                              << (envIt != hirModule_->closureEnvironments.end() ? "FOUND" : "NOT FOUND") << std::endl;
+                    debugFile4.close();
+
+                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Checking if '" << functionName
+                                              << "' has closure environment: "
+                                              << (envIt != hirModule_->closureEnvironments.end() ? "YES" : "NO") << std::endl;
+                    if (envIt != hirModule_->closureEnvironments.end()) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Returning closure '" << functionName
+                                                  << "' - allocating environment" << std::endl;
+
+                        // Record that this function returns a closure
+                        // This allows calls to this function to know they receive a closure
+                        if (currentHIRFunction_) {
+                            hirModule_->closureReturnedBy[currentHIRFunction_->name] = functionName;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Recorded that '" << currentHIRFunction_->name
+                                                      << "' returns closure '" << functionName << "'" << std::endl;
+                        }
+
+                        // Get the environment struct type
+                        hir::HIRStructType* hirEnvStruct = envIt->second;
+
+                        // Translate HIR struct type to MIR struct type
+                        std::vector<MIRTypePtr> fieldTypes;
+                        for (const auto& field : hirEnvStruct->fields) {
+                            fieldTypes.push_back(translateType(field.type.get()));
+                        }
+                        auto mirEnvType = std::make_shared<MIRType>(MIRType::Kind::Struct);
+                        // Note: MIR struct types don't store field info, just use as marker
+
+                        // Allocate environment struct
+                        auto envPlace = currentFunction_->createLocal(mirEnvType, "__closure_env");
+                        builder_->createStorageLive(envPlace);
+
+                        // Create initial struct with zero/default values
+                        // This ensures the struct exists before we try to set fields
+                        std::vector<MIROperandPtr> initElements;
+                        for (const auto& field : hirEnvStruct->fields) {
+                            // Create zero constant for each field based on its type
+                            auto fieldType = translateType(field.type.get());
+                            MIROperandPtr zeroOp;
+
+                            // Create appropriate zero value based on type kind
+                            switch (fieldType->kind) {
+                                case MIRType::Kind::I64:
+                                case MIRType::Kind::I32:
+                                case MIRType::Kind::I16:
+                                case MIRType::Kind::I8:
+                                case MIRType::Kind::I1:
+                                    zeroOp = builder_->createIntConstant(0, fieldType);
+                                    break;
+                                case MIRType::Kind::F64:
+                                case MIRType::Kind::F32:
+                                    zeroOp = builder_->createFloatConstant(0.0, fieldType);
+                                    break;
+                                case MIRType::Kind::Pointer:
+                                    zeroOp = builder_->createNullConstant(fieldType);
+                                    break;
+                                default:
+                                    // For other types, use zero initializer
+                                    zeroOp = builder_->createZeroInitConstant(fieldType);
+                                    break;
+                            }
+                            initElements.push_back(zeroOp);
+                        }
+                        auto initStruct = std::make_shared<MIRAggregateRValue>(
+                            MIRAggregateRValue::AggregateKind::Struct,
+                            initElements
+                        );
+                        builder_->createAssign(envPlace, initStruct);
+
+                        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Created initial struct for environment" << std::endl;
+
+                        // Save for returning
+                        closureEnvPlace = envPlace;
+
+                        // Store mapping: MIR place -> {function name, env place}
+                        // Note: We store this now, but it will be updated after we know the actual
+                        // return destination in the caller's context
+                        closurePlaceMap_[envPlace] = {functionName, envPlace};
+
+                        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Allocated environment struct for " << functionName << std::endl;
+
+                        // Get captured variable HIRValues
+                        auto varValuesIt = hirModule_->closureCapturedVarValues.find(functionName);
+                        if (varValuesIt != hirModule_->closureCapturedVarValues.end()) {
+                            const auto& capturedVarValues = varValuesIt->second;
+
+                            if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Initializing " << capturedVarValues.size()
+                                                      << " environment fields" << std::endl;
+
+                            // Initialize each field
+                            for (size_t i = 0; i < capturedVarValues.size(); ++i) {
+                                hir::HIRValue* hirVarValue = capturedVarValues[i];
+
+                                // Look up the MIR place for this HIR value
+                                auto mirPlaceIt = valueMap_.find(hirVarValue);
+                                if (mirPlaceIt != valueMap_.end()) {
+                                    auto varPlace = mirPlaceIt->second;
+
+                                    // Create operand from the variable place
+                                    auto varOperand = builder_->createCopyOperand(varPlace);
+
+                                    // Create field index operand
+                                    auto fieldIndexOperand = builder_->createIntConstant(i,
+                                        std::make_shared<MIRType>(MIRType::Kind::I64));
+
+                                    // Create environment place operand
+                                    auto envOperand = builder_->createCopyOperand(envPlace);
+
+                                    // Set field: env.fields[i] = varValue
+                                    // Using the same pattern as generateSetField
+                                    std::vector<MIROperandPtr> setFieldElements;
+                                    setFieldElements.push_back(envOperand);
+                                    setFieldElements.push_back(fieldIndexOperand);
+                                    setFieldElements.push_back(varOperand);
+
+                                    auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
+                                        MIRAggregateRValue::AggregateKind::Struct,
+                                        setFieldElements
+                                    );
+
+                                    // Create temp place for the SetField result
+                                    auto tempPlace = currentFunction_->createLocal(
+                                        std::make_shared<MIRType>(MIRType::Kind::Void),
+                                        "__setfield_temp"
+                                    );
+
+                                    builder_->createAssign(tempPlace, setFieldRValue);
+
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Set field " << i
+                                                              << " from variable (type: "
+                                                              << static_cast<int>(varPlace->type->kind) << ")" << std::endl;
+                                } else {
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: WARNING - Could not find MIR place for captured variable"
+                                                              << std::endl;
+                                }
+                            }
+                        }
+
+                        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Environment allocation complete" << std::endl;
+                    }
+                }
+            } catch (...) {
+                // Not a string constant, proceed normally
+            }
+
+            // If we created a closure environment, return it instead of the function name
+            if (closureEnvPlace) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Returning environment pointer as closure" << std::endl;
+                auto returnPlace = valueMap_[nullptr];
+                auto envOperand = builder_->createCopyOperand(closureEnvPlace);
+                auto rvalue = builder_->createUse(envOperand);
+                builder_->createAssign(returnPlace, rvalue);
+
+                // Also map the return place to the closure so the caller can find it
+                // This will be the place that receives the closure in the caller's context
+                auto envIt = closurePlaceMap_.find(closureEnvPlace);
+                if (envIt != closurePlaceMap_.end()) {
+                    closurePlaceMap_[returnPlace] = envIt->second;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Mapped return place to closure" << std::endl;
+                }
+            } else {
+                // Normal return (not a closure)
+                auto returnValue = translateOperand(hirInst->operands[0].get());
+                auto returnPlace = valueMap_[nullptr];
+                auto rvalue = builder_->createUse(returnValue);
+                builder_->createAssign(returnPlace, rvalue);
+            }
+        }
+
         builder_->createReturn();
     }
     
@@ -1277,6 +1762,10 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         auto fieldIndex = translateOperand(hirInst->operands[1].get());
         auto dest = getOrCreatePlace(hirInst);
 
+        // Use the actual field type from HIR, don't override
+        // This preserves whether it's a Pointer (for strings/mixed) or I64 (for numbers)
+        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: GetField dest type = " << static_cast<int>(dest->type->kind) << std::endl;
+
         // Create GetElement rvalue for field access with isFieldAccess=true
         auto getFieldRValue = std::make_shared<MIRGetElementRValue>(structPtr, fieldIndex, true);
 
@@ -1321,11 +1810,18 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
 
 MIRModule* generateMIR(hir::HIRModule* hirModule, const std::string& moduleName) {
     if (!hirModule) return nullptr;
-    
+
     auto mirModule = new MIRModule(moduleName);
     MIRGenerator generator(hirModule, mirModule);
     generator.generate();
-    
+
+    // Dump MIR for debugging
+    if(NOVA_DEBUG) {
+        std::cerr << "\n========== MIR DUMP ==========\n";
+        mirModule->dump();
+        std::cerr << "========== END MIR DUMP ==========\n\n";
+    }
+
     return mirModule;
 }
 

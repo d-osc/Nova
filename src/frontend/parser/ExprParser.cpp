@@ -1,4 +1,5 @@
 #include "nova/Frontend/Parser.h"
+#include <iostream>
 #include <stdexcept>
 
 namespace nova {
@@ -1067,16 +1068,56 @@ std::unique_ptr<Expr> Parser::parseObjectLiteral() {
             auto keyIdent = std::make_unique<Identifier>(key.value);
             keyIdent->location = key.location;
             property.key = std::move(keyIdent);
-            
-            // Shorthand: { x } instead of { x: x }
-            if (check(TokenType::Comma) || check(TokenType::RightBrace)) {
+
+            // Method shorthand: { method() { ... } }
+            if (check(TokenType::LeftParen)) {
+                // Parse as method: method(params) { body }
+                auto func = std::make_unique<FunctionExpr>();
+                func->location = key.location;
+
+                // Parse parameters
+                consume(TokenType::LeftParen, "Expected '(' after method name");
+
+                while (!check(TokenType::RightParen) && !isAtEnd()) {
+                    Token param = consume(TokenType::Identifier, "Expected parameter name");
+                    func->params.push_back(param.value);
+
+                    // Optional type annotation
+                    if (match(TokenType::Colon)) {
+                        parseTypeAnnotation(); // Parse and discard for now
+                    }
+
+                    if (!check(TokenType::RightParen)) {
+                        consume(TokenType::Comma, "Expected ',' between parameters");
+                    }
+                }
+
+                consume(TokenType::RightParen, "Expected ')' after parameters");
+
+                // Optional return type
+                if (match(TokenType::Colon)) {
+                    func->returnType = parseTypeAnnotation();
+                }
+
+                // Method body
+                func->body = parseBlockStatement();
+
+                property.value = std::move(func);
+                property.isShorthand = false;
+                property.isComputed = false;
+                property.kind = ObjectExpr::Property::Kind::Method;
+            }
+            // Shorthand property: { x } instead of { x: x }
+            else if (check(TokenType::Comma) || check(TokenType::RightBrace)) {
                 property.isShorthand = true;
                 auto valueIdent = std::make_unique<Identifier>(key.value);
                 valueIdent->location = key.location;
                 property.value = std::move(valueIdent);
                 property.isComputed = false;
                 property.kind = ObjectExpr::Property::Kind::Init;
-            } else {
+            }
+            // Regular property: { key: value }
+            else {
                 consume(TokenType::Colon, "Expected ':' after property key");
                 property.value = parseAssignmentExpression();
                 property.isShorthand = false;
@@ -1281,9 +1322,11 @@ std::unique_ptr<Expr> Parser::parseClassExpression() {
 }
 
 std::unique_ptr<Expr> Parser::parseTemplateLiteral() {
+    std::cerr << "*** PARSER: parseTemplateLiteral() called!" << std::endl;
     Token lit = advance();
     std::string templateStr = lit.value;
-    
+    std::cerr << "*** PARSER: Template string = '" << templateStr << "'" << std::endl;
+
     // Parse template literal with ${} expressions
     std::vector<std::string> quasis;
     std::vector<ExprPtr> expressions;

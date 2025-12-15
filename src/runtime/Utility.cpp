@@ -217,7 +217,7 @@ extern "C" {
 // console.log() - outputs string message to stdout
 void nova_console_log_string(const char* str) {
     if (str) {
-        printf("%s ", str);
+        printf("%s", str);
         fflush(stdout);
     }
 }
@@ -233,13 +233,13 @@ void nova_console_log_number(int64_t value) {
     // First, try interpreting as integer for small values
     if (value >= 0 && value < (1LL << 20)) {
         // Likely a small integer
-        printf("%lld ", (long long)value);
+        printf("%lld", (long long)value);
         fflush(stdout);
         return;
     }
     if (value < 0 && value > -(1LL << 20)) {
         // Likely a small negative integer
-        printf("%lld ", (long long)value);
+        printf("%lld", (long long)value);
         fflush(stdout);
         return;
     }
@@ -256,7 +256,7 @@ void nova_console_log_number(int64_t value) {
         if (frac_part != 0.0 || (double_value >= -1.0 && double_value <= 1.0)) {
             // Print as double if it has fractional part OR if it's in range [-1, 1]
             // (values in [-1, 1] from Math.random(), Math.sin(), etc. are likely bitcasted doubles)
-            printf("%g ", double_value);
+            printf("%g", double_value);
             fflush(stdout);
             return;
         }
@@ -264,14 +264,14 @@ void nova_console_log_number(int64_t value) {
         // Check if this could be the bitcast of a double
         // If the double value is small (< 2^20) but the int value is large, it's a bitcasted double
         if (double_value >= -1e15 && double_value <= 1e15 && std::abs(double_value) < (1LL << 20) && std::abs(value) >= (1LL << 20)) {
-            printf("%g ", double_value);
+            printf("%g", double_value);
             fflush(stdout);
             return;
         }
     }
 
     // Default: print as integer
-    printf("%lld ", (long long)value);
+    printf("%lld", (long long)value);
     fflush(stdout);
 }
 
@@ -624,13 +624,13 @@ void nova_console_print_newline() {
 
 // console.log for double/float
 void nova_console_log_double(double value) {
-    printf("%g ", value);
+    printf("%g", value);
     fflush(stdout);
 }
 
 // console.log for bool
 void nova_console_log_bool(int value) {
-    printf("%s ", value ? "true" : "false");
+    printf("%s", value ? "true" : "false");
     fflush(stdout);
 }
 
@@ -639,7 +639,7 @@ void nova_console_log_object(void* obj) {
     using namespace nova::runtime;
 
     if (!obj) {
-        printf("null ");
+        printf("null");
         fflush(stdout);
         return;
     }
@@ -652,19 +652,21 @@ void nova_console_log_object(void* obj) {
         case TypeId::STRING: {
             String* str = static_cast<String*>(obj);
             if (str->data) {
-                printf("%s ", str->data);
+                printf("%s", str->data);
             }
             fflush(stdout);
             break;
         }
         case TypeId::ARRAY: {
-            Array* arr = static_cast<Array*>(obj);
+            // Array metadata layout: { ObjectHeader (24 bytes), length, capacity, elements }
+            struct ArrayMeta { char pad[24]; int64_t length; int64_t capacity; int64_t* elements; };
+            ArrayMeta* arr = static_cast<ArrayMeta*>(obj);
             printf("[ ");
 
             // For primitive arrays (e.g., [1, 2, 3]), elements are stored as i64 values
             // For object arrays (e.g., ["a", "b"]), elements are stored as void* pointers
             // We'll treat elements as i64* for primitive arrays
-            int64_t* primitive_elements = static_cast<int64_t*>(arr->elements);
+            int64_t* primitive_elements = arr->elements;
 
             for (int64_t i = 0; i < arr->length; i++) {
                 // Read as i64 value
@@ -697,14 +699,71 @@ void nova_console_log_object(void* obj) {
                     printf(", ");
                 }
             }
-            printf(" ] ");
+            printf(" ]");
             fflush(stdout);
             break;
         }
         default:
-            printf("[object Object] ");
+            printf("[object Object]");
             fflush(stdout);
             break;
+    }
+}
+
+// console.log for Any type (runtime type detection)
+// Takes an i64 value and determines if it's a number or string pointer
+void nova_console_log_any(int64_t value) {
+    using namespace nova::runtime;
+
+    // Check if this looks like a pointer
+    // Simple heuristic: if it's > 0x100000 (1MB), treat as pointer
+    // This works for both Windows and Linux user-space addresses
+    // Note: We don't check alignment because string literals may not be 8-byte aligned
+    bool looks_like_pointer = (value > 0x100000LL);     // Above typical small values
+
+    if (looks_like_pointer) {
+        // Treat as pointer - could be an object or a raw C string
+        void* ptr = reinterpret_cast<void*>(value);
+
+        // First, try as a raw C string (string constants from code)
+        // Check if first few bytes look like printable ASCII
+        const char* str_ptr = static_cast<const char*>(ptr);
+        bool looks_like_cstring = true;
+        for (int i = 0; i < 4 && str_ptr[i] != '\0'; i++) {
+            if (str_ptr[i] < 32 || str_ptr[i] > 126) {  // Not printable ASCII
+                looks_like_cstring = false;
+                break;
+            }
+        }
+
+        if (looks_like_cstring) {
+            // Treat as raw C string
+            printf("%s", str_ptr);
+            fflush(stdout);
+            return;
+        }
+
+        // Try to access as ObjectHeader to check type
+        ObjectHeader* header = static_cast<ObjectHeader*>(ptr);
+        TypeId type_id = static_cast<TypeId>(header->type_id);
+
+        if (type_id == TypeId::STRING) {
+            // It's a Nova String object
+            String* str = static_cast<String*>(ptr);
+            if (str->data) {
+                printf("%s", str->data);
+            }
+            fflush(stdout);
+            return;
+        }
+
+        // Unknown object type
+        printf("[object Object]");
+        fflush(stdout);
+    } else {
+        // Treat as primitive number
+        printf("%lld", (long long)value);
+        fflush(stdout);
     }
 }
 
@@ -1010,6 +1069,62 @@ char* nova_json_stringify_array(void* arr) {
     }
 
     return buffer;
+}
+
+// JSON.stringify(object) - placeholder implementation
+// Returns "[object Object]" for any object (JavaScript behavior when JSON.stringify
+// encounters non-serializable values or would cause circular reference)
+// TODO: Implement proper object serialization with metadata system
+char* nova_json_stringify_object(void* obj) {
+    if (!obj) {
+        return (char*)JSON_NULL;
+    }
+
+    // Return standard JavaScript representation
+    // This prevents crashes and matches JS behavior for toString()
+    static const char* OBJECT_STR = "[object Object]";
+    size_t len = strlen(OBJECT_STR);
+    char* result = (char*)malloc(len + 1);
+    strcpy(result, OBJECT_STR);
+    return result;
+}
+
+// Object.keys() - placeholder implementation
+// Returns empty array (requires metadata system for proper implementation)
+// TODO: Implement with runtime type information
+extern "C" void* nova_object_keys(void* obj) {
+    if (!obj) {
+        return nova::runtime::create_value_array(0);
+    }
+
+    // Return empty array for now
+    // Proper implementation requires object metadata with property names
+    return nova::runtime::create_value_array(0);
+}
+
+// Object.values() - placeholder implementation
+// Returns empty array (requires metadata system for proper implementation)
+// TODO: Implement with runtime type information
+extern "C" void* nova_object_values(void* obj) {
+    if (!obj) {
+        return nova::runtime::create_value_array(0);
+    }
+
+    // Return empty array for now
+    return nova::runtime::create_value_array(0);
+}
+
+// Object.entries() - placeholder implementation
+// Returns empty array (requires metadata system for proper implementation)
+// TODO: Implement with runtime type information
+extern "C" void* nova_object_entries(void* obj) {
+    if (!obj) {
+        return nova::runtime::create_value_array(0);
+    }
+
+    // Return empty array for now
+    // Proper implementation would return array of [key, value] pairs
+    return nova::runtime::create_value_array(0);
 }
 
 // Simple JSON parser state
