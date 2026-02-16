@@ -179,8 +179,8 @@ void* nova_proxy_trap_get(void* proxy_ptr, const char* prop, [[maybe_unused]] vo
 
     // If handler has get trap, call it
     if (proxy->trap_get) {
-        // In full implementation, would call the trap function
-        // For now, fall through to target
+        TrapGet fn = reinterpret_cast<TrapGet>(proxy->trap_get);
+        return fn(proxy->target, prop, receiver ? receiver : proxy_ptr);
     }
 
     // Default behavior: get from target
@@ -199,8 +199,8 @@ int64_t nova_proxy_trap_set(void* proxy_ptr, const char* prop, void* value, [[ma
 
     // If handler has set trap, call it
     if (proxy->trap_set) {
-        // In full implementation, would call the trap function
-        // For now, fall through to target
+        TrapSet fn = reinterpret_cast<TrapSet>(proxy->trap_set);
+        return fn(proxy->target, prop, value, receiver ? receiver : proxy_ptr);
     }
 
     // Default behavior: set on target
@@ -220,7 +220,8 @@ int64_t nova_proxy_trap_has(void* proxy_ptr, const char* prop) {
 
     // If handler has 'has' trap, call it
     if (proxy->trap_has) {
-        // In full implementation, would call the trap function
+        TrapHas fn = reinterpret_cast<TrapHas>(proxy->trap_has);
+        return fn(proxy->target, prop);
     }
 
     // Default behavior: check target
@@ -239,7 +240,8 @@ int64_t nova_proxy_trap_deleteProperty(void* proxy_ptr, const char* prop) {
 
     // If handler has deleteProperty trap, call it
     if (proxy->trap_deleteProperty) {
-        // In full implementation, would call the trap function
+        TrapDeleteProperty fn = reinterpret_cast<TrapDeleteProperty>(proxy->trap_deleteProperty);
+        return fn(proxy->target, prop);
     }
 
     // Default behavior: delete from target
@@ -258,7 +260,8 @@ void* nova_proxy_trap_ownKeys(void* proxy_ptr) {
 
     // If handler has ownKeys trap, call it
     if (proxy->trap_ownKeys) {
-        // In full implementation, would call the trap function
+        TrapOwnKeys fn = reinterpret_cast<TrapOwnKeys>(proxy->trap_ownKeys);
+        return fn(proxy->target);
     }
 
     // Default behavior: get keys from target
@@ -277,7 +280,8 @@ void* nova_proxy_trap_getOwnPropertyDescriptor(void* proxy_ptr, const char* prop
 
     // If handler has trap, call it
     if (proxy->trap_getOwnPropertyDescriptor) {
-        // In full implementation, would call the trap function
+        TrapGetOwnPropertyDescriptor fn = reinterpret_cast<TrapGetOwnPropertyDescriptor>(proxy->trap_getOwnPropertyDescriptor);
+        return fn(proxy->target, prop);
     }
 
     // Default behavior: create basic descriptor if property exists
@@ -305,7 +309,8 @@ int64_t nova_proxy_trap_defineProperty(void* proxy_ptr, const char* prop, void* 
 
     // If handler has trap, call it
     if (proxy->trap_defineProperty) {
-        // In full implementation, would call the trap function
+        TrapDefineProperty fn = reinterpret_cast<TrapDefineProperty>(proxy->trap_defineProperty);
+        return fn(proxy->target, prop, descriptor);
     }
 
     // Default behavior: define on target
@@ -330,7 +335,8 @@ int64_t nova_proxy_trap_preventExtensions(void* proxy_ptr) {
 
     // If handler has trap, call it
     if (proxy->trap_preventExtensions) {
-        // In full implementation, would call the trap function
+        TrapPreventExtensions fn = reinterpret_cast<TrapPreventExtensions>(proxy->trap_preventExtensions);
+        return fn(proxy->target);
     }
 
     // Default behavior would prevent extensions on target
@@ -349,7 +355,8 @@ void* nova_proxy_trap_getPrototypeOf(void* proxy_ptr) {
 
     // If handler has trap, call it
     if (proxy->trap_getPrototypeOf) {
-        // In full implementation, would call the trap function
+        TrapGetPrototypeOf fn = reinterpret_cast<TrapGetPrototypeOf>(proxy->trap_getPrototypeOf);
+        return fn(proxy->target);
     }
 
     // Default: return null (Object.prototype would be the actual default)
@@ -368,7 +375,8 @@ int64_t nova_proxy_trap_setPrototypeOf(void* proxy_ptr, [[maybe_unused]] void* p
 
     // If handler has trap, call it
     if (proxy->trap_setPrototypeOf) {
-        // In full implementation, would call the trap function
+        TrapSetPrototypeOf fn = reinterpret_cast<TrapSetPrototypeOf>(proxy->trap_setPrototypeOf);
+        return fn(proxy->target, proto);
     }
 
     // Default behavior
@@ -387,7 +395,8 @@ int64_t nova_proxy_trap_isExtensible(void* proxy_ptr) {
 
     // If handler has trap, call it
     if (proxy->trap_isExtensible) {
-        // In full implementation, would call the trap function
+        TrapIsExtensible fn = reinterpret_cast<TrapIsExtensible>(proxy->trap_isExtensible);
+        return fn(proxy->target);
     }
 
     // Default: return true (objects are extensible by default)
@@ -406,7 +415,8 @@ void* nova_proxy_trap_apply(void* proxy_ptr, [[maybe_unused]] void* thisArg, [[m
 
     // If handler has apply trap, call it
     if (proxy->trap_apply) {
-        // In full implementation, would call the trap function
+        TrapApply fn = reinterpret_cast<TrapApply>(proxy->trap_apply);
+        return fn(proxy->target, thisArg, args);
     }
 
     // Default behavior would call the target function
@@ -426,7 +436,8 @@ void* nova_proxy_trap_construct(void* proxy_ptr, [[maybe_unused]] void* args, [[
 
     // If handler has construct trap, call it
     if (proxy->trap_construct) {
-        // In full implementation, would call the trap function
+        TrapConstruct fn = reinterpret_cast<TrapConstruct>(proxy->trap_construct);
+        return fn(proxy->target, args, newTarget ? newTarget : proxy_ptr);
     }
 
     // Default behavior would construct using target

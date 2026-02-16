@@ -1,6 +1,6 @@
 #include "nova/MIR/MIRGen.h"
 // Debug mode enabled for investigation
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 #include "nova/MIR/MIRBuilder.h"
 #include <algorithm>
 #include <fstream>
@@ -833,8 +833,7 @@ private:
                 break;
 
             default:
-                // For unsupported instructions, create a nop or placeholder
-                std::cerr << "Unsupported HIR instruction: " << hirInst->toString() << std::endl;
+                if(NOVA_DEBUG) std::cerr << "Unsupported HIR instruction: " << hirInst->toString() << std::endl;
                 break;
         }
     }
@@ -933,15 +932,11 @@ private:
         }
 
         if (inst && inst->opcode == hir::HIRInstruction::Opcode::Call) {
-            std::cerr << "*** MIRGen translateOperand: Found Call instruction as operand (ptr=" << inst << ")" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "MIRGen translateOperand: Found Call instruction as operand" << std::endl;
             // Check if this call has already been processed and has a result place
             auto it = valueMap_.find(hirValue);
             if (it != valueMap_.end()) {
-                std::cerr << "*** MIRGen: Call was already processed, using its result place" << std::endl;
                 return builder_->createCopyOperand(it->second);
-            } else {
-                std::cerr << "*** MIRGen: WARNING - Call instruction used as operand but not yet processed!" << std::endl;
-                std::cerr << "*** MIRGen: Creating placeholder place for it" << std::endl;
             }
         }
 
@@ -1082,6 +1077,48 @@ private:
     void generateStore(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
         if (hirInst->operands.size() < 2) return;
+
+        // Check if the store destination is a GetField instruction
+        // If so, we need to generate a SetField operation to write into the struct
+        auto* destInst = dynamic_cast<hir::HIRInstruction*>(hirInst->operands[1].get());
+        if (destInst && destInst->opcode == hir::HIRInstruction::Opcode::GetField) {
+            // Store to struct field: generate SetField
+            // GetField operands: [0] = struct pointer, [1] = field index constant
+            if (destInst->operands.size() >= 2) {
+                auto structOperand = translateOperand(destInst->operands[0].get());
+                auto fieldIndexOperand = translateOperand(destInst->operands[1].get());
+                auto valueOperand = translateOperand(hirInst->operands[0].get());
+
+                // Get the struct place from the operand
+                MIRPlacePtr structPlace = nullptr;
+                if (auto* copyOp = dynamic_cast<mir::MIRCopyOperand*>(structOperand.get())) {
+                    structPlace = copyOp->place;
+                }
+
+                if (structPlace) {
+                    // Create SetField aggregate: [struct, fieldIndex, value]
+                    auto envOp = builder_->createCopyOperand(structPlace);
+                    std::vector<MIROperandPtr> setFieldElements;
+                    setFieldElements.push_back(envOp);
+                    setFieldElements.push_back(fieldIndexOperand);
+                    setFieldElements.push_back(valueOperand);
+
+                    auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
+                        MIRAggregateRValue::AggregateKind::SetField,
+                        setFieldElements
+                    );
+
+                    auto tempPlace = currentFunction_->createLocal(
+                        std::make_shared<MIRType>(MIRType::Kind::Void),
+                        "__setfield_store"
+                    );
+                    builder_->createAssign(tempPlace, setFieldRValue);
+
+                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Generated SetField for Store-to-GetField" << std::endl;
+                    return;
+                }
+            }
+        }
 
         auto value = translateOperand(hirInst->operands[0].get());
         auto ptr = getOrCreatePlace(hirInst->operands[1].get());
@@ -1294,7 +1331,7 @@ private:
                                 setFieldElements.push_back(valueOperand);
 
                                 auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
-                                    MIRAggregateRValue::AggregateKind::Struct,
+                                    MIRAggregateRValue::AggregateKind::SetField,
                                     setFieldElements
                                 );
 
@@ -1478,7 +1515,7 @@ private:
                                     setFieldElements.push_back(varOperand);
 
                                     auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
-                                        MIRAggregateRValue::AggregateKind::Struct,
+                                        MIRAggregateRValue::AggregateKind::SetField,
                                         setFieldElements
                                     );
 
@@ -1790,10 +1827,10 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         elements.push_back(fieldIndex);
         elements.push_back(value);
 
-        // Use a special aggregate kind to signal this is a SetField
-        // The LLVM backend will recognize this pattern
+        // Use SetField aggregate kind to signal this is a SetField operation
+        // This distinguishes it from actual struct construction with 3 fields
         auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
-            MIRAggregateRValue::AggregateKind::Struct,  // Reuse struct kind with 3 elements as marker
+            MIRAggregateRValue::AggregateKind::SetField,
             elements
         );
 

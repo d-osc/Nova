@@ -1,6 +1,0 @@
-// Test array methods to ensure no regressions
-const arr = [1, 2, 3];
-console.log("Original array length: " + arr.length);
-
-const doubled = arr.map((x) => x * 2);
-console.log("Mapped array length: " + doubled.length);

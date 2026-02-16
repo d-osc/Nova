@@ -1,2 +1,0 @@
-[CALL-SITE] Function 'inner' needs environment with 1 captured variables
-[CALL-SITE] Function 'level3' needs environment with 2 captured variables

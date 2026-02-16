@@ -521,4 +521,20 @@ void* nova_object_valueOf(void* obj_ptr) {
     return obj_ptr;
 }
 
+// Create a keys array from compile-time known string constants
+// Used by for-in loops when iterating over struct-based object literals
+// count: number of keys
+// keys: array of C-string pointers (const char**)
+void* nova_create_keys_array(int64_t count, const char** keys) {
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(count);
+    resultArray->length = count;
+
+    for (int64_t i = 0; i < count; i++) {
+        // Store the key string pointer as i64
+        resultArray->elements[i] = reinterpret_cast<int64_t>(keys[i]);
+    }
+
+    return nova::runtime::create_metadata_from_value_array(resultArray);
+}
+
 } // extern "C"

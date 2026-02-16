@@ -9,6 +9,18 @@
 #include <iostream>
 #include <vector>
 
+// Forward declarations for array creation
+namespace nova { namespace runtime {
+    struct ValueArray {
+        struct { size_t size; uint32_t type_id; bool is_marked; void* next; } header;
+        int64_t length;
+        int64_t capacity;
+        int64_t* elements;
+    };
+    ValueArray* create_value_array(int64_t capacity);
+    void* create_metadata_from_value_array(ValueArray* array);
+}}
+
 extern "C" {
 
 // Regex object structure
@@ -254,9 +266,17 @@ void* nova_string_split_regex(const char* str, void* regexPtr) {
         }
     }
 
-    // Create value array (simplified - returns count for now)
-    // Full implementation would create proper array structure
-    return reinterpret_cast<void*>(parts.size());
+    // Create proper value array with string elements
+    int64_t count = static_cast<int64_t>(parts.size());
+    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(count);
+    resultArray->length = count;
+
+    for (int64_t i = 0; i < count; i++) {
+        char* copy = strdup(parts[i].c_str());
+        resultArray->elements[i] = reinterpret_cast<int64_t>(copy);
+    }
+
+    return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
 // Get regex pattern
@@ -367,9 +387,17 @@ void* nova_regex_matchAll(void* regexPtr, const char* str) {
             matches.push_back(iter->str());
         }
 
-        // Return count for now - full implementation would return proper iterator
-        // The caller should use nova_string_matchAll_next() to iterate
-        return reinterpret_cast<void*>(matches.size());
+        // Create proper value array with match strings
+        int64_t count = static_cast<int64_t>(matches.size());
+        nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(count);
+        resultArray->length = count;
+
+        for (int64_t i = 0; i < count; i++) {
+            char* copy = strdup(matches[i].c_str());
+            resultArray->elements[i] = reinterpret_cast<int64_t>(copy);
+        }
+
+        return nova::runtime::create_metadata_from_value_array(resultArray);
     } catch (...) {
         return nullptr;
     }

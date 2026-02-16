@@ -19,7 +19,7 @@ if(MSVC)
     add_compile_options(/W4 /WX /permissive-)
     add_compile_options(/utf-8)
     # Disable specific warnings from LLVM headers
-    add_compile_options(/wd4100 /wd4245 /wd4267 /wd4458 /wd4244 /wd4624 /wd4459 /wd4324 /wd4310 /wd4146)
+    add_compile_options(/wd4100 /wd4245 /wd4267 /wd4458 /wd4244 /wd4624 /wd4459 /wd4324 /wd4310 /wd4146 /wd4127)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Werror)
     # On macOS, allow #include_next extension and unused parameters in LLVM headers

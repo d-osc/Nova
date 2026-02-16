@@ -143,6 +143,7 @@ std::string MIRAggregateRValue::toString() const {
         case AggregateKind::Array: kindStr = "Array"; break;
         case AggregateKind::Tuple: kindStr = "Tuple"; break;
         case AggregateKind::Struct: kindStr = "Struct"; break;
+        case AggregateKind::SetField: kindStr = "SetField"; break;
     }
     std::string result = "Aggregate(" + kindStr + ", [";
     for (size_t i = 0; i < elements.size(); ++i) {

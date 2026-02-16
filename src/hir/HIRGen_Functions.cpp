@@ -2,7 +2,7 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
@@ -67,10 +67,25 @@ void HIRGenerator::visit(FunctionExpr& node) {
         auto savedFunctionName = lastFunctionName_;
         lastFunctionName_ = funcName;
 
+        // Add tentative __env parameter BEFORE body generation for closure support
+        // This allows the Identifier visitor to create GetField instructions during body generation
+        HIRParameter* tentativeEnvParam = nullptr;
+        if (!savedSymbolTable.empty()) {
+            // Only add __env if we're in a nested function (have parent scope)
+            // Create temporary empty struct type
+            auto tempEnvStruct = new HIRStructType("__temp_env_" + funcName, {});
+            std::shared_ptr<HIRType> tempEnvType(tempEnvStruct);
+            tentativeEnvParam = new HIRParameter(tempEnvType, "__env", func->parameters.size());
+            func->parameters.push_back(tentativeEnvParam);
+            func->functionType->paramTypes.push_back(tempEnvType);
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: FunctionExpr - Added tentative __env parameter to '"
+                                      << funcName << "' before body generation" << std::endl;
+        }
+
         // Clear symbol table for the new function scope
         symbolTable_.clear();
 
-        // Add parameters to symbol table
+        // Add parameters to symbol table (skip tentative __env)
         for (size_t i = 0; i < node.params.size(); ++i) {
             symbolTable_[node.params[i]] = func->parameters[i];
         }
@@ -92,30 +107,55 @@ void HIRGenerator::visit(FunctionExpr& node) {
             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WARNING - No body for function " << funcName << std::endl;
         }
 
-        // Create closure environment AFTER body generation (so captures are detected)
-        std::cout << "[ENV-CHECK] Checking if function '" << funcName << "' needs environment..." << std::endl;
-        hir::HIRStructType* envStruct = createClosureEnvironment(funcName);
-        if (envStruct) {
-            std::cout << "[ENV-CREATE] Creating environment for '" << funcName << "'" << std::endl;
-            closureEnvironments_[funcName] = envStruct;
-            module_->closureEnvironments[funcName] = envStruct;
-            if (environmentFieldNames_.count(funcName)) {
-                module_->closureCapturedVars[funcName] = environmentFieldNames_[funcName];
-            }
-            if (environmentFieldValues_.count(funcName)) {
-                module_->closureCapturedVarValues[funcName] = environmentFieldValues_[funcName];
-            }
+        // After body generation, update closure environment struct type if this function captures variables
+        if (tentativeEnvParam && capturedVariables_.count(funcName) && !capturedVariables_[funcName].empty()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: FunctionExpr - Updating __env struct type for '"
+                                      << funcName << "' (captured " << capturedVariables_[funcName].size()
+                                      << " variables)" << std::endl;
 
-            // Add environment parameter to the function
-            auto envPtrType = std::make_shared<HIRPointerType>(
-                std::shared_ptr<HIRType>(envStruct),
-                true  // mutable
-            );
-            auto envParam = new HIRParameter(envPtrType, "__env", func->parameters.size());
-            func->parameters.push_back(envParam);
-            func->functionType->paramTypes.push_back(envPtrType);
+            // Create closure environment struct with actual captured variables
+            auto* envStruct = createClosureEnvironment(funcName);
+            if (envStruct) {
+                // Update the tentative __env parameter's type with the real struct
+                auto envPtrType = std::make_shared<HIRPointerType>(
+                    std::shared_ptr<HIRType>(envStruct),
+                    true  // mutable
+                );
+                tentativeEnvParam->type = envPtrType;
 
-            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Added environment parameter to " << funcName << " after body generation" << std::endl;
+                // Update function type as well
+                func->functionType->paramTypes.back() = envPtrType;
+
+                closureEnvironments_[funcName] = envStruct;
+                module_->closureEnvironments[funcName] = envStruct;
+                if (environmentFieldNames_.count(funcName)) {
+                    module_->closureCapturedVars[funcName] = environmentFieldNames_[funcName];
+                }
+                if (environmentFieldValues_.count(funcName)) {
+                    module_->closureCapturedVarValues[funcName] = environmentFieldValues_[funcName];
+                }
+
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: FunctionExpr - Updated __env parameter type for '"
+                                          << funcName << "' with " << envStruct->fields.size() << " fields" << std::endl;
+
+                // IMPORTANT: Mark this function as returning a closure
+                // This tells MIRGen that calls to this function return closure pointers
+                // The parent function (caller) should be tracked
+                if (savedFunction) {
+                    module_->closureReturnedBy[savedFunction->name] = funcName;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Marked that '" << savedFunction->name
+                                             << "' returns closure '" << funcName << "'" << std::endl;
+                }
+            }
+        } else if (tentativeEnvParam && (!capturedVariables_.count(funcName) || capturedVariables_[funcName].empty())) {
+            // No variables captured, remove the tentative __env parameter
+            if (!func->parameters.empty() && func->parameters.back() == tentativeEnvParam) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: FunctionExpr - Removing unused __env parameter from '"
+                                          << funcName << "'" << std::endl;
+                func->parameters.pop_back();
+                func->functionType->paramTypes.pop_back();
+                delete tentativeEnvParam;
+            }
         }
 
         // Restore context
@@ -364,6 +404,14 @@ void HIRGenerator::visit(FunctionDecl& node) {
         functionParamCounts_[node.name] = static_cast<int64_t>(node.params.size());
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered function: " << node.name << " with " << node.params.size() << " params" << std::endl;
 
+        // Track rest parameters
+        if (!node.restParam.empty()) {
+            module_->functionRestParams[node.name] = {node.restParam, node.params.size()};
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered rest parameter '" << node.restParam
+                                      << "' for function '" << node.name << "' after " << node.params.size() << " params" << std::endl;
+        }
+
+        auto savedCurrentFunction = currentFunction_;
         currentFunction_ = func.get();
 
         // Store default parameter values for this function
@@ -423,11 +471,15 @@ void HIRGenerator::visit(FunctionDecl& node) {
         // Handle rest parameter (...args)
         if (!node.restParam.empty()) {
             // Create an array to hold rest arguments
-            // For now, create an empty array - full implementation would collect varargs
+            // For now, create an empty array - runtime will populate via varargs
             auto* arrayType = new hir::HIRType(hir::HIRType::Kind::Array);
             auto* restArray = builder_->createAlloca(arrayType, node.restParam);
             symbolTable_[node.restParam] = restArray;
-            std::cerr << "NOTE: Rest parameter '" << node.restParam << "' created (varargs collection not fully implemented)" << std::endl;
+
+            // TODO: Full implementation requires varargs collection
+            // This needs LLVM va_list support or a custom calling convention
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Rest parameter '" << node.restParam
+                                      << "' created for function '" << node.name << "' (varargs collection stub)" << std::endl;
         }
 
         // For generator functions, set up state machine
@@ -675,9 +727,26 @@ void HIRGenerator::visit(FunctionDecl& node) {
             // Create closure environment struct with actual captured variables
             auto* envStruct = createClosureEnvironment(node.name);
             if (envStruct) {
-                // Update the tentative __env parameter's type with the real struct
-                std::shared_ptr<HIRType> envType(envStruct);
-                tentativeEnvParam->type = envType;
+                // Update the tentative __env parameter's type with the real struct (as pointer-to-struct)
+                auto envPtrType = std::make_shared<HIRPointerType>(
+                    std::shared_ptr<HIRType>(envStruct),
+                    true  // mutable
+                );
+                tentativeEnvParam->type = envPtrType;
+
+                // Update function type as well
+                if (func->functionType && !func->functionType->paramTypes.empty()) {
+                    func->functionType->paramTypes.back() = envPtrType;
+                }
+
+                closureEnvironments_[node.name] = envStruct;
+                module_->closureEnvironments[node.name] = envStruct;
+                if (environmentFieldNames_.count(node.name)) {
+                    module_->closureCapturedVars[node.name] = environmentFieldNames_[node.name];
+                }
+                if (environmentFieldValues_.count(node.name)) {
+                    module_->closureCapturedVarValues[node.name] = environmentFieldValues_[node.name];
+                }
 
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: FunctionDecl - Updated __env parameter type for function '"
                                           << node.name << "' with " << envStruct->fields.size() << " fields" << std::endl;
@@ -694,11 +763,13 @@ void HIRGenerator::visit(FunctionDecl& node) {
 
         // Restore context
         if (!savedSymbolTable.empty()) {
-            scopeStack_.pop_back();  // Pop closure scope
+            if (!scopeStack_.empty()) {
+                scopeStack_.pop_back();  // Pop closure scope
+            }
         }
         symbolTable_ = savedSymbolTable;
         builder_ = std::move(savedBuilder);
-        currentFunction_ = nullptr;
+        currentFunction_ = savedCurrentFunction;
         lastFunctionName_ = savedFunctionName;  // Restore function name context
     }
     

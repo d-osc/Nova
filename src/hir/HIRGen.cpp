@@ -12,7 +12,7 @@
 //   - HIRGen_Calls.cpp
 //   - HIRGen_Advanced.cpp
 
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 #include "nova/HIR/HIRGen_Internal.h"
 #include <fstream>
@@ -296,9 +296,10 @@ void HIRGenerator::visit(Identifier& node) {
 }
 
 // Public API to generate HIR from AST
-HIRModule* generateHIR(Program& program, const std::string& moduleName) {
+HIRModule* generateHIR(Program& program, const std::string& moduleName, const std::string& filePath) {
     auto* module = new HIRModule(moduleName);
     HIRGenerator generator(module);
+    generator.setFilePath(filePath);
     program.accept(generator);
     return module;
 }

@@ -1,4 +1,0 @@
-// Test .capacity property if it exists
-const arr = [1, 2, 3];
-console.log("Array capacity test");
-// Note: capacity might not be exposed in the public API

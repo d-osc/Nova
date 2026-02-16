@@ -1,6 +1,6 @@
 // LLVM Code Generator from MIR
 // Debug mode enabled for investigation
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 
 #ifdef _MSC_VER
@@ -21,8 +21,6 @@
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
-// ==================== LOOP OPTIMIZATION INCLUDES ====================
-// Note: Using legacy pass headers compatible with LLVM 16
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Scalar/Reassociate.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
@@ -37,7 +35,6 @@
 #include <llvm/ExecutionEngine/GenericValue.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
-#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/MemoryBuffer.h>
@@ -166,10 +163,7 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
         std::string errMsg;
         llvm::raw_string_ostream errStream(errMsg);
         if (llvm::verifyModule(*module, &errStream)) {
-            std::cerr << "LLVM IR verification failed:\n" << errMsg << std::endl;
-            // TEMPORARY: Continue anyway to see the IR
-            std::cerr << "TEMPORARY: Continuing despite verification error to dump IR" << std::endl;
-            // return false;
+            if(NOVA_DEBUG) std::cerr << "LLVM IR verification failed:\n" << errMsg << std::endl;
         }
         
         // Optimization passes are now enabled for basic optimizations
@@ -331,10 +325,6 @@ bool LLVMCodeGen::emitExecutable(const std::string& filename) {
     #endif
     system(copyCmd.c_str());
 
-    // Clean up IR file (best effort)
-    // TEMP: Comment out to keep IR file for debugging
-    // std::remove(irFile.c_str());
-
     if (result != 0) {
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Compilation failed with code " << result << std::endl;
         return false;
@@ -458,10 +448,7 @@ int LLVMCodeGen::executeMain() {
     
     // Verify the module
     if (llvm::verifyModule(*module, &llvm::errs())) {
-        std::cerr << "❌ Error: Module verification failed" << std::endl;
-        // TEMPORARY: Continue anyway to see the IR
-        std::cerr << "TEMPORARY: Continuing despite verification error" << std::endl;
-        // return 1;
+        if(NOVA_DEBUG) std::cerr << "Module verification failed" << std::endl;
     }
     
     // Save the LLVM IR to a temporary file
@@ -528,7 +515,7 @@ int LLVMCodeGen::executeMain() {
     int execResult = system((".\\\"" + exeFile + "\"").c_str());
     
     // Clean up temporary files
-    // remove(tempFile.c_str());  // Keep temp_jit.ll for debugging
+    remove(tempFile.c_str());
     remove(objFile.c_str());
     remove(exeFile.c_str());
     
@@ -643,11 +630,19 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
             // This ensures we get the current value from memory
             if (llvm::isa<llvm::AllocaInst>(it->second)) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loading from alloca" << std::endl;
-                llvm::Type* loadType = convertType(copyOp->place->type.get());
 
                 // Get the actual alloca type
                 llvm::AllocaInst* alloca = llvm::cast<llvm::AllocaInst>(it->second);
                 llvm::Type* allocaType = alloca->getAllocatedType();
+
+                // For struct allocas (closure environments), return the alloca pointer itself
+                // because the struct data IS at the alloca address (no indirection needed)
+                if (allocaType->isStructTy() && arrayTypeMap.find(alloca) != arrayTypeMap.end()) {
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Returning env struct alloca pointer directly" << std::endl;
+                    return alloca;
+                }
+
+                llvm::Type* loadType = convertType(copyOp->place->type.get());
 
                 // If the MIR type is void but alloca is not, use alloca type
                 // This handles the case where void-typed intermediate values were given i64 allocas
@@ -908,6 +903,67 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
             const auto& stmt = bb->statements[stmtIdx];
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Checking statement " << stmtIdx << " kind=" << static_cast<int>(stmt->kind) << std::endl;
 
+            // Also handle StorageLive - create allocas for places that are only
+            // referenced via StorageLive (e.g., closure environment structs created at HIR level)
+            if (stmt->kind == mir::MIRStatement::Kind::StorageLive) {
+                auto* storageLive = static_cast<mir::MIRStorageLiveStatement*>(stmt.get());
+                if (storageLive->place && valueMap.find(storageLive->place.get()) == valueMap.end()) {
+                    // Check if this is a closure environment struct by name
+                    bool isEnvStruct = storageLive->place->name.find("__env_struct") != std::string::npos;
+
+                    if (isEnvStruct) {
+                        // Closure environment struct: needs proper NovaObject layout
+                        // Count SetField operations targeting this place to determine field count
+                        int maxFieldIndex = 0;
+                        for (const auto& scanBB : function->basicBlocks) {
+                            for (const auto& scanStmt : scanBB->statements) {
+                                if (scanStmt->kind == mir::MIRStatement::Kind::Assign) {
+                                    auto* scanAssign = static_cast<mir::MIRAssignStatement*>(scanStmt.get());
+                                    if (scanAssign->rvalue && scanAssign->rvalue->kind == mir::MIRRValue::Kind::Aggregate) {
+                                        auto* aggOp = static_cast<mir::MIRAggregateRValue*>(scanAssign->rvalue.get());
+                                        if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::SetField && aggOp->elements.size() == 3) {
+                                            // Check if the struct operand references this place
+                                            if (auto* copyOp = dynamic_cast<mir::MIRCopyOperand*>(aggOp->elements[0].get())) {
+                                                if (copyOp->place.get() == storageLive->place.get()) {
+                                                    if (auto* constOp = dynamic_cast<mir::MIRConstOperand*>(aggOp->elements[1].get())) {
+                                                        int idx = static_cast<int>(std::get<int64_t>(constOp->value));
+                                                        if (idx >= maxFieldIndex) maxFieldIndex = idx + 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (maxFieldIndex == 0) maxFieldIndex = 1; // At least 1 field
+
+                        // Create NovaObject struct: [24 x i8] header + N x i64 fields
+                        std::vector<llvm::Type*> structFields;
+                        structFields.push_back(llvm::ArrayType::get(llvm::Type::getInt8Ty(*context), 24)); // ObjectHeader
+                        for (int i = 0; i < maxFieldIndex; ++i) {
+                            structFields.push_back(llvm::Type::getInt64Ty(*context));
+                        }
+                        llvm::StructType* envStructType = llvm::StructType::get(*context, structFields);
+
+                        llvm::AllocaInst* alloca = builder->CreateAlloca(envStructType, nullptr, "env_struct");
+                        valueMap[storageLive->place.get()] = alloca;
+                        // Register the struct type in arrayTypeMap so SetField can use proper GEP
+                        arrayTypeMap[alloca] = envStructType;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created env struct alloca with " << maxFieldIndex
+                                                  << " fields for place " << storageLive->place.get() << std::endl;
+                    } else {
+                        llvm::Type* varType = convertType(storageLive->place->type.get());
+                        if (varType->isVoidTy()) {
+                            varType = llvm::Type::getInt64Ty(*context);
+                        }
+                        llvm::AllocaInst* alloca = builder->CreateAlloca(varType, nullptr, "storage_var");
+                        valueMap[storageLive->place.get()] = alloca;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created alloca for StorageLive place " << storageLive->place.get() << std::endl;
+                    }
+                }
+            }
+
             if (stmt->kind == mir::MIRStatement::Kind::Assign) {
                 auto* assign = static_cast<mir::MIRAssignStatement*>(stmt.get());
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found assign statement, place=" << assign->place.get() << std::endl;
@@ -1058,9 +1114,9 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
     }
     
     // Create a branch from entry to the first basic block
-    // Find the first basic block (skip if empty)
+    // Find the first basic block (even if it only has a terminator)
     for (const auto& bb : function->basicBlocks) {
-        if (bb && !bb->statements.empty()) {
+        if (bb) {
             llvm::BasicBlock* firstBB = blockMap[bb.get()];
             if (firstBB) {
                 // Get the entry block
@@ -1069,11 +1125,15 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                     // If no entry block exists, create one
                     targetEntryBB = llvm::BasicBlock::Create(*context, "entry", llvmFunc);
                 }
-                
-                // Set insertion point to entry block and create branch
-                builder->SetInsertPoint(targetEntryBB);
-                builder->CreateBr(firstBB);
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created branch from entry to " << firstBB->getName().str() << std::endl;
+
+                // Only create branch if entry block and first BB are different
+                // (if they're the same, the terminator will be added when processing the block)
+                if (targetEntryBB != firstBB) {
+                    // Set insertion point to entry block and create branch
+                    builder->SetInsertPoint(targetEntryBB);
+                    builder->CreateBr(firstBB);
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Created branch from entry to " << firstBB->getName().str() << std::endl;
+                }
                 break;
             }
         }
@@ -4328,6 +4388,119 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        // TypedArray callback methods - need ptr args for array and callback function pointer
+                        if (!callee && funcName == "nova_typedarray_map") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_map", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_filter") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_filter", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_forEach") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getVoidTy(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_forEach", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_some") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_some", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_every") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_every", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_find") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_find", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_findIndex") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_findIndex", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_findLast") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_findLast", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_findLastIndex") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_findLastIndex", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_reduce") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_reduce", module.get());
+                        }
+
+                        if (!callee && funcName == "nova_typedarray_reduceRight") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "nova_typedarray_reduceRight", module.get());
+                        }
+
                         // Math functions
                         if (!callee && funcName == "log") {
                             // double @log(double) - C library natural logarithm function
@@ -4739,6 +4912,57 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 }
             }
             
+            // Generic fallback for nova_* runtime functions not explicitly listed above
+            // Auto-declare with signature based on argument types from MIR
+            if (!callee) {
+                std::string fallbackFuncName;
+                if (auto* constOp = dynamic_cast<mir::MIRConstOperand*>(callTerm->func.get())) {
+                    if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
+                        fallbackFuncName = std::get<std::string>(constOp->value);
+                    }
+                }
+                if (!fallbackFuncName.empty() && fallbackFuncName.substr(0, 5) == "nova_") {
+                    std::vector<llvm::Type*> paramTypes;
+                    for (size_t i = 0; i < callTerm->args.size(); ++i) {
+                        // Check MIR type of each argument to determine if it should be ptr or i64
+                        bool isPtr = false;
+                        auto& arg = callTerm->args[i];
+                        if (auto* copyOp = dynamic_cast<mir::MIRCopyOperand*>(arg.get())) {
+                            if (copyOp->place && copyOp->place->type) {
+                                isPtr = (copyOp->place->type->kind == mir::MIRType::Kind::Pointer);
+                            }
+                        } else if (auto* moveOp = dynamic_cast<mir::MIRMoveOperand*>(arg.get())) {
+                            if (moveOp->place && moveOp->place->type) {
+                                isPtr = (moveOp->place->type->kind == mir::MIRType::Kind::Pointer);
+                            }
+                        } else if (auto* constArgOp = dynamic_cast<mir::MIRConstOperand*>(arg.get())) {
+                            if (constArgOp->type) {
+                                isPtr = (constArgOp->type->kind == mir::MIRType::Kind::Pointer);
+                            }
+                        }
+                        if (isPtr) {
+                            paramTypes.push_back(llvm::PointerType::getUnqual(*context));
+                        } else {
+                            paramTypes.push_back(llvm::Type::getInt64Ty(*context));
+                        }
+                    }
+                    // Determine return type from destination
+                    llvm::Type* retType = llvm::Type::getInt64Ty(*context);
+                    if (callTerm->destination && callTerm->destination->type) {
+                        auto mirType = callTerm->destination->type.get();
+                        if (mirType->kind == mir::MIRType::Kind::Void) {
+                            retType = llvm::Type::getVoidTy(*context);
+                        } else if (mirType->kind == mir::MIRType::Kind::Pointer) {
+                            retType = llvm::PointerType::getUnqual(*context);
+                        }
+                    }
+                    llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+                    callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fallbackFuncName, module.get());
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Auto-declared nova runtime function: " << fallbackFuncName
+                                              << " with " << paramTypes.size() << " params" << std::endl;
+                }
+            }
+
             // If not found, try to convert operand as usual
             if (!callee) {
                 llvm::Value* funcValue = convertOperand(callTerm->func.get());
@@ -4761,53 +4985,22 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     llvm::Value* argValue = convertOperand(arg.get());
                     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Argument converted, argValue = " << argValue << std::endl;
 
-                    // Special handling for callback arguments: convert string constant to function pointer
-                    if ((calleeName == "nova_value_array_find" || calleeName == "nova_value_array_findIndex" || calleeName == "nova_value_array_filter" || calleeName == "nova_value_array_map" || calleeName == "nova_value_array_some" || calleeName == "nova_value_array_every" || calleeName == "nova_value_array_forEach" || calleeName == "nova_value_array_reduce" || calleeName == "nova_value_array_reduceRight" || calleeName == "nova_array_from_map") && argIdx == 1) {
-                        // Second argument should be a function pointer, but comes as string constant
+                    // Generic callback conversion: if callee expects ptr for this arg position
+                    // and we have a global string constant, try to resolve it as a function pointer.
+                    // This handles array callbacks, typedarray callbacks, generator create,
+                    // promise then/catch/finally, disposablestack adopt/defer/use, etc.
+                    if (paramIt != callee->arg_end() && paramIt->getType()->isPointerTy()) {
                         if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
-                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected string constant for callback argument" << std::endl;
-
-                            // Try to extract the function name from the string constant
                             if (globalStr->hasInitializer()) {
                                 if (auto* constData = llvm::dyn_cast<llvm::ConstantDataArray>(globalStr->getInitializer())) {
                                     if (constData->isCString()) {
                                         std::string funcName = constData->getAsCString().str();
-                                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Extracted function name from string: " << funcName << std::endl;
-
-                                        // Look up the actual function
                                         llvm::Function* callbackFunc = module->getFunction(funcName);
                                         if (callbackFunc) {
-                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found callback function, using function pointer" << std::endl;
-                                            argValue = callbackFunc;  // Use function pointer instead of string
+                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Resolved callback string '" << funcName << "' to function pointer" << std::endl;
+                                            argValue = callbackFunc;
                                         } else {
-                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Function not found: " << funcName << std::endl;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Special handling for generator/async generator create: convert string to function pointer
-                    if ((calleeName == "nova_generator_create" || calleeName == "nova_async_generator_create") && argIdx == 0) {
-                        // First argument should be a function pointer, but comes as string constant
-                        if (auto* globalStr = llvm::dyn_cast<llvm::GlobalVariable>(argValue)) {
-                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected string constant for generator function" << std::endl;
-
-                            // Try to extract the function name from the string constant
-                            if (globalStr->hasInitializer()) {
-                                if (auto* constData = llvm::dyn_cast<llvm::ConstantDataArray>(globalStr->getInitializer())) {
-                                    if (constData->isCString()) {
-                                        std::string funcName = constData->getAsCString().str();
-                                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Extracted generator function name: " << funcName << std::endl;
-
-                                        // Look up the actual function
-                                        llvm::Function* genFunc = module->getFunction(funcName);
-                                        if (genFunc) {
-                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found generator function, using function pointer" << std::endl;
-                                            argValue = genFunc;  // Use function pointer instead of string
-                                        } else {
-                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: WARNING - Generator function not found: " << funcName << std::endl;
+                                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String '" << funcName << "' is not a function, keeping as string" << std::endl;
                                         }
                                     }
                                 }
@@ -4924,10 +5117,10 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 }
 
                 // Handle return value type conversion (e.g., double to I64 for Math functions)
-                // Use bitcast to preserve the bit representation of doubles (for JavaScript number semantics)
+                // Use fptosi to properly convert floating point values to integers (truncation)
                 if (result && result->getType()->isFloatingPointTy()) {
-                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting floating point return value to i64 via bitcast" << std::endl;
-                    result = builder->CreateBitCast(result, llvm::Type::getInt64Ty(*context), "fp_result_bitcast");
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting floating point return value to i64 via fptosi" << std::endl;
+                    result = builder->CreateFPToSI(result, llvm::Type::getInt64Ty(*context), "fp_to_int");
                 }
 
                 // Special handling for array functions that return new arrays
@@ -5399,11 +5592,14 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             return builder->CreateLShr(lhs, rhs, "ushr");
         case mir::MIRBinaryOpRValue::BinOp::Eq:
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP EQ instruction" << std::endl;
-            // Check if operands are pointers (strings)
+            // Check if operands are pointers (strings) - use content comparison
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
-                // For now, just compare pointer addresses
-                // TODO: Implement proper string content comparison
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String content comparison (==)" << std::endl;
+                llvm::Function* strEqFunc = module->getFunction("nova_string_equals");
+                if (strEqFunc) {
+                    llvm::Value* result = builder->CreateCall(strEqFunc, {lhs, rhs}, "str_eq_result");
+                    return builder->CreateICmpNE(result, llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0), "str_eq");
+                }
                 return builder->CreateICmpEQ(lhs, rhs, "str_eq");
             }
             
@@ -5441,11 +5637,14 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             return builder->CreateICmpEQ(lhs, rhs, "eq");
         case mir::MIRBinaryOpRValue::BinOp::Ne:
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP NE instruction" << std::endl;
-            // Check if operands are pointers (strings)
+            // Check if operands are pointers (strings) - use content comparison
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String comparison detected" << std::endl;
-                // For now, just compare pointer addresses
-                // TODO: Implement proper string content comparison
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String content comparison (!=)" << std::endl;
+                llvm::Function* strEqFunc = module->getFunction("nova_string_equals");
+                if (strEqFunc) {
+                    llvm::Value* result = builder->CreateCall(strEqFunc, {lhs, rhs}, "str_ne_result");
+                    return builder->CreateICmpEQ(result, llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0), "str_ne");
+                }
                 return builder->CreateICmpNE(lhs, rhs, "str_ne");
             }
             
@@ -5844,15 +6043,13 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
     }
 
     // For structs: allocate struct on stack and initialize fields
-    if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Struct) {
+    // Handle SetField operations (now use explicit SetField aggregate kind)
+    if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::SetField) {
         size_t numFields = aggOp->elements.size();
-
-        // Check if this is actually a SetField operation (encoded as struct with 3 elements)
-        // elements[0] = struct pointer, elements[1] = field index, elements[2] = value to store
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Struct aggregate with " << numFields << " fields - checking if SetField" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetField aggregate with " << numFields << " elements" << std::endl;
 
         if (numFields == 3) {
-            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Has 3 fields, attempting SetField conversion" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing SetField operation" << std::endl;
 
             // Try to get the struct pointer, index, and value
             llvm::Value* structPtr = convertOperand(aggOp->elements[0].get());
@@ -6051,6 +6248,12 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                 return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
             }
         }
+        // SetField with wrong number of elements - return dummy
+        return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+    }
+
+    if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Struct) {
+        size_t numFields = aggOp->elements.size();
 
         // First pass: convert all field values to determine their types
         std::vector<llvm::Value*> fieldValues;
@@ -6565,12 +6768,20 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 // Add 1 to skip ObjectHeader at index 0
                 unsigned actualFieldIndex = fieldIndex + 1;
 
-                std::cerr << "DEBUG LLVM: Accessing regular struct field " << fieldIndex << " (actual index " << actualFieldIndex << " accounting for ObjectHeader)" << std::endl;
+                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Accessing regular struct field " << fieldIndex << " (actual index " << actualFieldIndex << " accounting for ObjectHeader)" << std::endl;
+
+                // CRITICAL FIX: Use actualPtr (which has been converted from i64 to pointer if needed)
+                // instead of loadedArrayPtr (which may be an i64 integer value)
+                llvm::Value* structAccessPtr = actualPtr;
+                if (structAccessPtr->getType()->isIntegerTy()) {
+                    llvm::Type* ptrType = llvm::PointerType::getUnqual(structType);
+                    structAccessPtr = builder->CreateIntToPtr(structAccessPtr, ptrType, "struct_field_ptr_cast");
+                }
 
                 // Access the struct field directly
                 llvm::Value* fieldPtr = builder->CreateStructGEP(
                     structType,
-                    loadedArrayPtr,
+                    structAccessPtr,
                     actualFieldIndex,
                     "struct_field_ptr");
 
@@ -6737,8 +6948,23 @@ void LLVMCodeGen::declareRuntimeFunctions() {
         true  // varargs
     );
     module->getOrInsertFunction("printf", printfType);
-    
-    // TODO: Declare other runtime functions (GC, string ops, etc.)
+
+    // Declare string comparison functions
+    llvm::Type* i64Type = llvm::Type::getInt64Ty(*context);
+    llvm::Type* ptrType = llvm::PointerType::getUnqual(*context);
+
+    // nova_string_equals(const char*, const char*) -> i64
+    llvm::FunctionType* strEqType = llvm::FunctionType::get(i64Type, {ptrType, ptrType}, false);
+    module->getOrInsertFunction("nova_string_equals", strEqType);
+
+    // nova_string_compare(const char*, const char*) -> i64
+    module->getOrInsertFunction("nova_string_compare", strEqType);
+
+    // nova_string_lt/le/gt/ge
+    module->getOrInsertFunction("nova_string_lt", strEqType);
+    module->getOrInsertFunction("nova_string_le", strEqType);
+    module->getOrInsertFunction("nova_string_gt", strEqType);
+    module->getOrInsertFunction("nova_string_ge", strEqType);
 }
 
 llvm::Function* LLVMCodeGen::getRuntimeFunction(const std::string& name) {

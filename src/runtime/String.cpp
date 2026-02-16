@@ -1102,4 +1102,45 @@ const char* nova_bool_to_string(int64_t value) {
     }
 }
 
+// ==================== String Comparison Functions ====================
+
+// Compare two strings for equality (content comparison, not pointer)
+int64_t nova_string_equals(const char* a, const char* b) {
+    if (a == b) return 1;  // Same pointer = equal
+    if (!a || !b) return 0;
+    return std::strcmp(a, b) == 0 ? 1 : 0;
+}
+
+// Compare two strings (like strcmp: <0, 0, >0)
+int64_t nova_string_compare(const char* a, const char* b) {
+    if (a == b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    return static_cast<int64_t>(std::strcmp(a, b));
+}
+
+// String less than
+int64_t nova_string_lt(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    return std::strcmp(a, b) < 0 ? 1 : 0;
+}
+
+// String less than or equal
+int64_t nova_string_le(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    return std::strcmp(a, b) <= 0 ? 1 : 0;
+}
+
+// String greater than
+int64_t nova_string_gt(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    return std::strcmp(a, b) > 0 ? 1 : 0;
+}
+
+// String greater than or equal
+int64_t nova_string_ge(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    return std::strcmp(a, b) >= 0 ? 1 : 0;
+}
+
 }

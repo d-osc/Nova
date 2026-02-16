@@ -4,10 +4,9 @@
 build/
 build-*/
 cmake-build-*/
-out/
 dist/
 
-# CMake
+# CMake generated
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
@@ -45,14 +44,10 @@ _deps
 *.out
 *.app
 
-# LLVM IR outputs
+# LLVM IR / MIR / HIR outputs
 *.ll
 *.bc
-
-# MIR outputs
 *.mir
-
-# HIR outputs
 *.hir
 
 # Assembly outputs
@@ -66,12 +61,6 @@ _deps
 !.vscode/launch.json
 !.vscode/extensions.json
 .idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Visual Studio
 .vs/
 *.vcxproj
 *.vcxproj.filters
@@ -100,31 +89,29 @@ docs/_build/
 docs/html/
 docs/latex/
 
-# Temporary files
+# Temporary / debug files
 *.tmp
 *.temp
 *.bak
+*.backup
 *.swp
+*.swo
 *.log
+*.patch
+*.txt
+!CMakeLists.txt
+nul
 
 # OS specific
 Thumbs.db
 .DS_Store
 .AppleDouble
 .LSOverride
-
-# Windows
-[Dd]esktop.ini
-$RECYCLE.BIN/
-
-# Linux
-*~
-
-# macOS
-.AppleDouble
-.LSOverride
 .Spotlight-V100
 .Trashes
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*~
 
 # Clang
 .clang-format
@@ -134,9 +121,9 @@ $RECYCLE.BIN/
 *.prof
 perf.data
 perf.data.old
-
-# Valgrind
 *.memcheck
 *.callgrind
 *.cachegrind
-nul
+
+# Claude
+.claude/worktrees

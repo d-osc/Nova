@@ -221,7 +221,7 @@ public:
 class MIRAggregateRValue : public MIRRValue {
 public:
     enum class AggregateKind {
-        Array, Tuple, Struct
+        Array, Tuple, Struct, SetField
     };
 
     AggregateKind aggregateKind;

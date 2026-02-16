@@ -385,18 +385,23 @@ void* nova_promise_finally(void* promisePtr, void* onFinally) {
 // Promise Static Methods
 // ============================================================================
 
+// Helper struct to extract Nova array metadata
+struct PromiseArrayMeta { char pad[24]; int64_t length; int64_t capacity; int64_t* elements; };
+
 // Promise.all(promises) - Wait for all promises
-void* nova_promise_all(void** promises, int64_t count) {
+// Accepts a NovaArray pointer (single argument from compiler)
+void* nova_promise_all(void* arrayPtr) {
+    if (!arrayPtr) return nova_promise_resolve(0);
+    PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
+    int64_t count = meta->length;
     if (count == 0) {
         return nova_promise_resolve(0);
     }
 
     NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
 
-    // For simplicity, we'll process synchronously
-    // A full implementation would track each promise's state
     for (int64_t i = 0; i < count; i++) {
-        NovaPromise* p = static_cast<NovaPromise*>(promises[i]);
+        NovaPromise* p = reinterpret_cast<NovaPromise*>(meta->elements[i]);
         if (p && p->state == PromiseState::REJECTED) {
             nova_promise_reject_internal(result, p->error);
             return result;
@@ -409,7 +414,10 @@ void* nova_promise_all(void** promises, int64_t count) {
 }
 
 // Promise.race(promises) - First promise to settle wins
-void* nova_promise_race(void** promises, int64_t count) {
+void* nova_promise_race(void* arrayPtr) {
+    if (!arrayPtr) return nova_promise_create();
+    PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
+    int64_t count = meta->length;
     if (count == 0) {
         return nova_promise_create(); // Never settles
     }
@@ -417,7 +425,7 @@ void* nova_promise_race(void** promises, int64_t count) {
     NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
 
     for (int64_t i = 0; i < count; i++) {
-        NovaPromise* p = static_cast<NovaPromise*>(promises[i]);
+        NovaPromise* p = reinterpret_cast<NovaPromise*>(meta->elements[i]);
         if (p) {
             if (p->state == PromiseState::FULFILLED) {
                 nova_promise_fulfill(result, p->value);
@@ -433,13 +441,18 @@ void* nova_promise_race(void** promises, int64_t count) {
 }
 
 // Promise.allSettled(promises) - Wait for all to settle (ES2020)
-void* nova_promise_allSettled([[maybe_unused]] void** promises, int64_t count) {
-    // For simplicity, just wait for all and return count
+void* nova_promise_allSettled(void* arrayPtr) {
+    if (!arrayPtr) return nova_promise_resolve(0);
+    PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
+    int64_t count = meta->length;
     return nova_promise_resolve(count);
 }
 
 // Promise.any(promises) - First fulfilled promise wins (ES2021)
-void* nova_promise_any(void** promises, int64_t count) {
+void* nova_promise_any(void* arrayPtr) {
+    if (!arrayPtr) return nova_promise_reject(-1);
+    PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
+    int64_t count = meta->length;
     if (count == 0) {
         return nova_promise_reject(-1); // AggregateError
     }
@@ -447,7 +460,7 @@ void* nova_promise_any(void** promises, int64_t count) {
     NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
 
     for (int64_t i = 0; i < count; i++) {
-        NovaPromise* p = static_cast<NovaPromise*>(promises[i]);
+        NovaPromise* p = reinterpret_cast<NovaPromise*>(meta->elements[i]);
         if (p && p->state == PromiseState::FULFILLED) {
             nova_promise_fulfill(result, p->value);
             return result;

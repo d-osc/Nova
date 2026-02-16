@@ -2,55 +2,67 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
 void HIRGenerator::visit(BinaryExpr& node) {
         using Op = BinaryExpr::Op;
 
-        // Handle logical operators
-        // TODO: Implement proper short-circuit evaluation
-        // For now, evaluate both operands (non-short-circuit)
+        // Handle logical operators with proper short-circuit evaluation
+        // JavaScript semantics:
+        //   && returns left if falsy, otherwise right
+        //   || returns left if truthy, otherwise right
         if (node.op == Op::LogicalAnd || node.op == Op::LogicalOr) {
-            // Evaluate both operands
+            // Evaluate left operand
             node.left->accept(*this);
             auto lhs = lastValue_;
 
+            // Create basic blocks for short-circuit
+            auto* evalRightBlock = currentFunction_->createBasicBlock("sc.right").get();
+            auto* mergeBlock = currentFunction_->createBasicBlock("sc.merge").get();
+
+            // Check if left operand is truthy/falsy
+            auto zero = builder_->createIntConstant(0);
+            auto lhsBool = builder_->createNe(lhs, zero);
+
+            if (node.op == Op::LogicalAnd) {
+                // AND: if left is falsy, short-circuit (return left/false)
+                // if left is truthy, evaluate right
+                builder_->createCondBr(lhsBool, evalRightBlock, mergeBlock);
+            } else {
+                // OR: if left is truthy, short-circuit (return left/true)
+                // if left is falsy, evaluate right
+                builder_->createCondBr(lhsBool, mergeBlock, evalRightBlock);
+            }
+
+            // Evaluate right operand (only reached if not short-circuited)
+            builder_->setInsertPoint(evalRightBlock);
             node.right->accept(*this);
             auto rhs = lastValue_;
 
-            // For AND: result is true if both are true
-            // For OR: result is true if either is true
-            // We can implement this using comparison and arithmetic
-            auto zero = builder_->createIntConstant(0);
-            auto lhsBool = builder_->createNe(lhs, zero);
+            // Create a boolean from rhs for the merge
             auto rhsBool = builder_->createNe(rhs, zero);
+            builder_->createBr(mergeBlock);
 
+            // Merge block: result is lhsBool if short-circuited, rhsBool if not
+            builder_->setInsertPoint(mergeBlock);
+
+            // Since HIR doesn't have PHI nodes, use a simpler approach:
+            // For &&: result = lhsBool AND rhsBool (lhsBool * rhsBool works since if we reach merge
+            //         from left, lhsBool is 0, so result is 0; from right, it's rhsBool)
+            // For ||: result = lhsBool OR rhsBool
             if (node.op == Op::LogicalAnd) {
-                // AND: both must be true
-                // Multiply the booleans: true(1) * true(1) = true(1), otherwise false(0)
-                // This will generate `and i1` in LLVM which is correct
                 lastValue_ = builder_->createMul(lhsBool, rhsBool);
-                // Ensure result has correct boolean type
-                if (lastValue_) {
-                    lastValue_->type = std::make_shared<HIRType>(HIRType::Kind::Bool);
-                }
             } else {
-                // OR: at least one must be true
-                // Use the formula: a OR b = a + b - (a AND b)
-                // This works for boolean values:
-                //   0 OR 0 = 0 + 0 - 0 = 0
-                //   0 OR 1 = 0 + 1 - 0 = 1
-                //   1 OR 0 = 1 + 0 - 0 = 1
-                //   1 OR 1 = 1 + 1 - 1 = 1
-                auto product = builder_->createMul(lhsBool, rhsBool);  // a AND b
-                auto sum = builder_->createAdd(lhsBool, rhsBool);       // a + b
-                lastValue_ = builder_->createSub(sum, product);          // a + b - (a AND b)
-                // Ensure result has correct boolean type
-                if (lastValue_) {
-                    lastValue_->type = std::make_shared<HIRType>(HIRType::Kind::Bool);
-                }
+                // OR: a + b - a*b
+                auto product = builder_->createMul(lhsBool, rhsBool);
+                auto sum = builder_->createAdd(lhsBool, rhsBool);
+                lastValue_ = builder_->createSub(sum, product);
+            }
+
+            if (lastValue_) {
+                lastValue_->type = std::make_shared<HIRType>(HIRType::Kind::Bool);
             }
 
             return;

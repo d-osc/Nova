@@ -146,6 +146,10 @@ void HIRGenerator::visit(VarDeclStmt& node) {
             }
 
             // Check if this is a function reference assignment
+            if(NOVA_DEBUG) {
+                std::cerr << "DEBUG HIRGen: Checking function reference for '" << decl.name
+                          << "', lastFunctionName_ = '" << lastFunctionName_ << "'" << std::endl;
+            }
             if (!lastFunctionName_.empty()) {
                 // Register this variable as holding a function reference
                 functionReferences_[decl.name] = lastFunctionName_;
@@ -173,6 +177,10 @@ void HIRGenerator::visit(VarDeclStmt& node) {
 
                     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Associated object methods with variable '"
                                               << decl.name << "'" << std::endl;
+                }
+                // Transfer field names for for-in loop support
+                if (objectFieldNames_.find(currentObjectName_) != objectFieldNames_.end()) {
+                    objectFieldNames_[decl.name] = objectFieldNames_[currentObjectName_];
                 }
                 currentObjectName_.clear();  // Clear for next declaration
             }

@@ -1,4 +1,0 @@
-const msg3 = true + " is a boolean";
-const msg4 = false + " is also a boolean";
-console.log(msg3);
-console.log(msg4);

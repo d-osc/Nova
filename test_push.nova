@@ -1,9 +1,0 @@
-const arr = [];
-console.log("Initial length: " + arr.length);
-
-arr.push(100);
-console.log("After 1 push: " + arr.length);
-
-arr.push(200);
-arr.push(300);
-console.log("After 3 pushes: " + arr.length);

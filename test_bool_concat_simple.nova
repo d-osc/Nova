@@ -1,6 +1,0 @@
-// Simple test for boolean on left side
-const msg1 = true + " is a boolean";
-const msg2 = false + " is also a boolean";
-
-console.log("msg1:", msg1);
-console.log("msg2:", msg2);

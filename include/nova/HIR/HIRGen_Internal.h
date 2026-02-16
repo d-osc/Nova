@@ -154,6 +154,9 @@ public:
     void generateSetterFunction(const std::string& className, const ClassDecl::Method& method, hir::HIRStructType* structType, std::function<HIRType::Kind(Type::Kind)> convertTypeKind);
     std::string resolveMethodToClass(const std::string& className, const std::string& methodName);
 
+    // Set the file path for the current compilation unit (for module resolution)
+    void setFilePath(const std::string& path) { currentFilePath_ = path; }
+
 private:
     // Core module and builder
     HIRModule* module_;
@@ -398,6 +401,14 @@ private:
     // Built-in module imports
     std::unordered_map<std::string, std::string> builtinModuleImports_;
     std::unordered_map<std::string, std::string> builtinFunctionImports_;
+
+    // Object literal field tracking (for for-in loops and property access)
+    // Maps object variable name -> ordered list of field names
+    std::unordered_map<std::string, std::vector<std::string>> objectFieldNames_;
+
+    // Multi-file module system
+    std::string currentFilePath_;    // Current file being compiled
+    std::unordered_set<std::string> importedModules_;  // Already imported module paths (prevent circular imports)
 };
 
 } // namespace nova::hir

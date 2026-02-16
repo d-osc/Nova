@@ -247,157 +247,151 @@ void HIRGenerator::visit(ForStmt& node) {
 void HIRGenerator::visit(ForInStmt& node) {
         if(NOVA_DEBUG) std::cerr << "DEBUG: Generating for-in loop" << std::endl;
 
-        // For-in loop: for (let key in obj) { body }
-        // Desugar to:
-        //   let __keys = nova_object_keys(obj);  // Get array of property keys
-        //   let __iter_idx = 0;
-        //   while (__iter_idx < __keys.length) {
-        //       let key = __keys[__iter_idx];  // Extract key string from array
-        //       body;
-        //       __iter_idx = __iter_idx + 1;
-        //   }
+        // Check if the iterable is a variable with compile-time known field names
+        std::string iterableName;
+        if (auto* identNode = dynamic_cast<Identifier*>(node.right.get())) {
+            iterableName = identNode->name;
+        }
+
+        bool hasCompileTimeKeys = !iterableName.empty() && objectFieldNames_.count(iterableName) > 0;
 
         // Create basic blocks (with label suffix if inside labeled statement)
         std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
-        // Clear label after using it - label only applies to this loop, not nested loops
         currentLabel_.clear();
 
-        auto* initBlock = currentFunction_->createBasicBlock("forin.init" + labelSuffix).get();
-        auto* condBlock = currentFunction_->createBasicBlock("forin.cond" + labelSuffix).get();
-        auto* bodyBlock = currentFunction_->createBasicBlock("forin.body" + labelSuffix).get();
-        auto* updateBlock = currentFunction_->createBasicBlock("forin.update" + labelSuffix).get();
         auto* endBlock = currentFunction_->createBasicBlock("forin.end" + labelSuffix).get();
 
-        // Branch to init block
-        builder_->createBr(initBlock);
+        if (hasCompileTimeKeys) {
+            // ===== UNROLLED FOR-IN (compile-time known keys) =====
+            // Object literals use struct representation incompatible with runtime Object*,
+            // so we unroll the loop body once per key using string constants.
+            auto& fieldNames = objectFieldNames_[iterableName];
+            if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - unrolling for '" << iterableName
+                                      << "' (" << fieldNames.size() << " keys)" << std::endl;
 
-        // Init block: evaluate the iterable expression and get its keys
-        builder_->setInsertPoint(initBlock);
-        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - evaluating iterable" << std::endl;
-        node.right->accept(*this);  // Evaluate object/array expression
-        auto* objectValue = lastValue_;
+            // Create loop variable alloca
+            auto* keyType = new hir::HIRType(hir::HIRType::Kind::I64);
+            auto* loopVar = builder_->createAlloca(keyType, node.left);
+            symbolTable_[node.left] = loopVar;
 
-        // Call nova_object_keys() to get array of property keys
-        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-        auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-        // Get or create nova_object_keys function
-        std::vector<HIRTypePtr> keysParamTypes = {ptrType};
-        HIRFunction* objectKeysFunc = nullptr;
-        auto existingKeysFunc = module_->getFunction("nova_object_keys");
-        if (existingKeysFunc) {
-            objectKeysFunc = existingKeysFunc.get();
-        } else {
-            HIRFunctionType* funcType = new HIRFunctionType(keysParamTypes, ptrType);
-            HIRFunctionPtr funcPtr = module_->createFunction("nova_object_keys", funcType);
-            funcPtr->linkage = HIRFunction::Linkage::External;
-            objectKeysFunc = funcPtr.get();
-        }
-
-        // Call nova_object_keys(objectValue) to get keys array
-        std::vector<HIRValue*> keysArgs = {objectValue};
-        auto* keysArray = builder_->createCall(objectKeysFunc, keysArgs, "__forin_keys");
-
-        // Create iterator index variable: let __iter_idx = 0
-        auto* indexType = new hir::HIRType(hir::HIRType::Kind::I64);
-        auto* indexVar = builder_->createAlloca(indexType, "__forin_idx");
-        auto* zeroConst = builder_->createIntConstant(0);
-        builder_->createStore(zeroConst, indexVar);
-
-        // Branch to condition
-        builder_->createBr(condBlock);
-
-        // Condition block: __iter_idx < keys.length
-        builder_->setInsertPoint(condBlock);
-        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - checking condition" << std::endl;
-
-        // Load current index
-        auto* currentIndex = builder_->createLoad(indexVar);
-
-        // Get keys array length (field 1 is length)
-        auto* keysLength = builder_->createGetField(keysArray, 1);
-
-        // Compare: __iter_idx < keys.length
-        auto* condition = builder_->createLt(currentIndex, keysLength);
-        builder_->createCondBr(condition, bodyBlock, endBlock);
-
-        // Body block: let key = keys[__iter_idx]; body;
-        builder_->setInsertPoint(bodyBlock);
-        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - executing body" << std::endl;
-
-        // Load current index
-        auto* indexForKey = builder_->createLoad(indexVar);
-
-        // Get or create value_array_get function to extract key from array
-        std::vector<HIRTypePtr> getParamTypes = {ptrType, i64Type};
-        HIRFunction* getFunc = nullptr;
-        auto existingGetFunc = module_->getFunction("value_array_get");
-        if (existingGetFunc) {
-            getFunc = existingGetFunc.get();
-        } else {
-            HIRFunctionType* funcType = new HIRFunctionType(getParamTypes, i64Type);
-            HIRFunctionPtr funcPtr = module_->createFunction("value_array_get", funcType);
-            funcPtr->linkage = HIRFunction::Linkage::External;
-            getFunc = funcPtr.get();
-        }
-
-        // Extract the key string from keys array: keys[index]
-        std::vector<HIRValue*> getArgs = {keysArray, indexForKey};
-        auto* keyString = builder_->createCall(getFunc, getArgs, "__forin_key_str");
-
-        // Declare loop variable and assign the key string
-        // node.left is the variable name (e.g., "key" in "for (let key in obj)")
-        auto* keyType = new hir::HIRType(hir::HIRType::Kind::I64);  // String represented as i64
-        auto* loopVar = builder_->createAlloca(keyType, node.left);
-
-        // Store the key string in the loop variable (key = keyString, not index!)
-        builder_->createStore(keyString, loopVar);
-
-        // Track the variable
-        symbolTable_[node.left] = loopVar;
-
-        // Push break and continue targets onto stacks for nested break/continue support
-        breakTargetStack_.push_back(endBlock);
-        continueTargetStack_.push_back(updateBlock);
-
-        // Execute loop body
-        node.body->accept(*this);
-
-        // Pop break and continue targets from stacks
-        breakTargetStack_.pop_back();
-        continueTargetStack_.pop_back();
-
-        // Check if body ends with terminator
-        bool needsBranch = true;
-        if (!bodyBlock->instructions.empty()) {
-            auto lastOpcode = bodyBlock->instructions.back()->opcode;
-            if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
-                lastOpcode == hir::HIRInstruction::Opcode::Continue ||
-                lastOpcode == hir::HIRInstruction::Opcode::Return) {
-                needsBranch = false;
+            // Emit body for each key
+            for (size_t i = 0; i < fieldNames.size(); i++) {
+                auto* keyStr = builder_->createStringConstant(fieldNames[i]);
+                builder_->createStore(keyStr, loopVar);
+                node.body->accept(*this);
             }
+
+            // Branch to end
+            builder_->createBr(endBlock);
+            builder_->setInsertPoint(endBlock);
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn unrolled loop completed" << std::endl;
+        } else {
+            // ===== DYNAMIC FOR-IN (runtime object keys) =====
+            auto* initBlock = currentFunction_->createBasicBlock("forin.init" + labelSuffix).get();
+            auto* condBlock = currentFunction_->createBasicBlock("forin.cond" + labelSuffix).get();
+            auto* bodyBlock = currentFunction_->createBasicBlock("forin.body" + labelSuffix).get();
+            auto* updateBlock = currentFunction_->createBasicBlock("forin.update" + labelSuffix).get();
+
+            builder_->createBr(initBlock);
+            builder_->setInsertPoint(initBlock);
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - evaluating iterable" << std::endl;
+            node.right->accept(*this);
+            auto* objectValue = lastValue_;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            // Get or create nova_object_keys function
+            std::vector<HIRTypePtr> keysParamTypes = {ptrType};
+            HIRFunction* objectKeysFunc = nullptr;
+            auto existingKeysFunc = module_->getFunction("nova_object_keys");
+            if (existingKeysFunc) {
+                objectKeysFunc = existingKeysFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(keysParamTypes, ptrType);
+                HIRFunctionPtr funcPtr = module_->createFunction("nova_object_keys", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                objectKeysFunc = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> keysArgs = {objectValue};
+            auto* keysArray = builder_->createCall(objectKeysFunc, keysArgs, "__forin_keys");
+
+            auto* indexType = new hir::HIRType(hir::HIRType::Kind::I64);
+            auto* indexVar = builder_->createAlloca(indexType, "__forin_idx");
+            auto* zeroConst = builder_->createIntConstant(0);
+            builder_->createStore(zeroConst, indexVar);
+
+            builder_->createBr(condBlock);
+
+            // Condition block
+            builder_->setInsertPoint(condBlock);
+            auto* currentIndex = builder_->createLoad(indexVar);
+            auto* keysLength = builder_->createGetField(keysArray, 1);
+            auto* condition = builder_->createLt(currentIndex, keysLength);
+            builder_->createCondBr(condition, bodyBlock, endBlock);
+
+            // Body block
+            builder_->setInsertPoint(bodyBlock);
+            auto* indexForKey = builder_->createLoad(indexVar);
+
+            std::vector<HIRTypePtr> getParamTypes = {ptrType, i64Type};
+            HIRFunction* getFunc = nullptr;
+            auto existingGetFunc = module_->getFunction("value_array_get");
+            if (existingGetFunc) {
+                getFunc = existingGetFunc.get();
+            } else {
+                HIRFunctionType* funcType = new HIRFunctionType(getParamTypes, i64Type);
+                HIRFunctionPtr funcPtr = module_->createFunction("value_array_get", funcType);
+                funcPtr->linkage = HIRFunction::Linkage::External;
+                getFunc = funcPtr.get();
+            }
+
+            std::vector<HIRValue*> getArgs = {keysArray, indexForKey};
+            auto* keyString = builder_->createCall(getFunc, getArgs, "__forin_key_str");
+
+            auto* keyType = new hir::HIRType(hir::HIRType::Kind::I64);
+            auto* loopVar = builder_->createAlloca(keyType, node.left);
+            builder_->createStore(keyString, loopVar);
+            symbolTable_[node.left] = loopVar;
+
+            breakTargetStack_.push_back(endBlock);
+            continueTargetStack_.push_back(updateBlock);
+
+            node.body->accept(*this);
+
+            breakTargetStack_.pop_back();
+            continueTargetStack_.pop_back();
+
+            bool needsBranch = true;
+            if (!bodyBlock->instructions.empty()) {
+                auto lastOpcode = bodyBlock->instructions.back()->opcode;
+                if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
+                    lastOpcode == hir::HIRInstruction::Opcode::Continue ||
+                    lastOpcode == hir::HIRInstruction::Opcode::Return) {
+                    needsBranch = false;
+                }
+            }
+
+            if (needsBranch) {
+                builder_->createBr(updateBlock);
+            }
+
+            // Update block
+            builder_->setInsertPoint(updateBlock);
+            auto* currentIndexForIncr = builder_->createLoad(indexVar);
+            auto* oneConst = builder_->createIntConstant(1);
+            auto* nextIndex = builder_->createAdd(currentIndexForIncr, oneConst);
+            builder_->createStore(nextIndex, indexVar);
+            builder_->createBr(condBlock);
+
+            // End block
+            builder_->setInsertPoint(endBlock);
+
+            if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn loop generation completed" << std::endl;
         }
-
-        if (needsBranch) {
-            builder_->createBr(updateBlock);
-        }
-
-        // Update block: __iter_idx = __iter_idx + 1
-        builder_->setInsertPoint(updateBlock);
-        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - incrementing index" << std::endl;
-
-        auto* currentIndexForIncr = builder_->createLoad(indexVar);
-        auto* oneConst = builder_->createIntConstant(1);
-        auto* nextIndex = builder_->createAdd(currentIndexForIncr, oneConst);
-        builder_->createStore(nextIndex, indexVar);
-
-        // Branch back to condition
-        builder_->createBr(condBlock);
-
-        // End block
-        builder_->setInsertPoint(endBlock);
-
-        if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn loop generation completed" << std::endl;
     }
     
 void HIRGenerator::visit(ForOfStmt& node) {
@@ -793,6 +787,11 @@ void HIRGenerator::visit(ReturnStmt& node) {
 
             // Return from function
             builder_->createReturn(nullptr);
+
+            // Mark current block as having a terminator (return is a terminator)
+            if (builder_->getInsertBlock()) {
+                builder_->getInsertBlock()->hasBreakOrContinue = true;
+            }
         } else {
             // Normal return
             if (node.argument) {
@@ -800,6 +799,11 @@ void HIRGenerator::visit(ReturnStmt& node) {
                 builder_->createReturn(lastValue_);
             } else {
                 builder_->createReturn(nullptr);
+            }
+
+            // Mark current block as having a terminator (return is a terminator)
+            if (builder_->getInsertBlock()) {
+                builder_->getInsertBlock()->hasBreakOrContinue = true;
             }
         }
     }

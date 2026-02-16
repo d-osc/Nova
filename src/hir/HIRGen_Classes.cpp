@@ -2,7 +2,7 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
@@ -1692,7 +1692,12 @@ void HIRGenerator::visit(ThisExpr& node) {
 
 void HIRGenerator::visit(SuperExpr& node) {
         (void)node;
-        // super reference
+        // super reference - returns current 'this' since super methods use the same instance
+        if (currentThis_) {
+            lastValue_ = currentThis_;
+        } else {
+            lastValue_ = builder_->createIntConstant(0);
+        }
     }
     
 

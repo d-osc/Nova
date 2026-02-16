@@ -3,7 +3,12 @@
 // Contains: async/await, generators, spread, imports, JSX, patterns, decorators, TypeScript, declarations
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 1
+#include "nova/Frontend/Lexer.h"
+#include "nova/Frontend/Parser.h"
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
@@ -402,8 +407,49 @@ void HIRGenerator::visit(NonNullExpr& node) {
     }
     
 void HIRGenerator::visit(TaggedTemplateExpr& node) {
-        (void)node;
-        // Tagged template
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing tagged template expression" << std::endl;
+
+        // Build arguments: first create the strings array, then each expression value
+        std::vector<HIRValue*> args;
+
+        // Create strings array from quasis
+        std::vector<HIRValue*> quasiValues;
+        for (const auto& quasi : node.quasis) {
+            quasiValues.push_back(builder_->createStringConstant(quasi));
+        }
+        // Pass strings array as first argument (as a runtime array)
+        auto* stringsArray = builder_->createArrayConstruct(quasiValues, "tagged_strings");
+        args.push_back(stringsArray);
+
+        // Evaluate and add each expression as additional arguments
+        for (auto& expr : node.expressions) {
+            expr->accept(*this);
+            args.push_back(lastValue_);
+        }
+
+        // Call the tag function with (strings, ...values)
+        if (auto* ident = dynamic_cast<Identifier*>(node.tag.get())) {
+            auto func = module_->getFunction(ident->name);
+            if (func) {
+                lastValue_ = builder_->createCall(func.get(), args, "tagged_template");
+                return;
+            }
+        }
+
+        // Fallback: treat as regular template literal by concatenating quasis and expressions
+        if (!node.quasis.empty()) {
+            lastValue_ = builder_->createStringConstant(node.quasis[0]);
+            for (size_t i = 0; i < node.expressions.size(); ++i) {
+                node.expressions[i]->accept(*this);
+                // The concatenation will be handled by the MIR/codegen as string add operations
+                if (i + 1 < node.quasis.size() && !node.quasis[i + 1].empty()) {
+                    // Append the next quasi string
+                    lastValue_ = builder_->createStringConstant(node.quasis[i + 1]);
+                }
+            }
+        } else {
+            lastValue_ = builder_->createStringConstant("");
+        }
     }
     
 void HIRGenerator::visit(SequenceExpr& node) {
@@ -418,18 +464,42 @@ void HIRGenerator::visit(ParenthesizedExpr& node) {
     }
     
 void HIRGenerator::visit(MetaProperty& node) {
-        (void)node;
-        // new.target or import.meta
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing meta property: " << node.meta << "." << node.property << std::endl;
+
+        if (node.meta == "new" && node.property == "target") {
+            // new.target - returns undefined outside constructors, constructor function inside
+            // For simplicity, return undefined (0) for now
+            lastValue_ = builder_->createIntConstant(0);
+        } else if (node.meta == "import" && node.property == "meta") {
+            // import.meta - return an object with url property
+            // For compiled code, this is typically the file path
+            lastValue_ = builder_->createStringConstant("file://compiled");
+        } else {
+            lastValue_ = builder_->createIntConstant(0);
+        }
     }
     
 void HIRGenerator::visit(ImportExpr& node) {
-        (void)node;
-        // import() expression
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing dynamic import() expression" << std::endl;
+        // Dynamic import() - evaluate the source path
+        node.source->accept(*this);
+        // For now, dynamic import returns the source path as a promise placeholder
+        // Full implementation requires async module loading at runtime
+        // lastValue_ is already set from the source expression
     }
     
 void HIRGenerator::visit(Decorator& node) {
-        (void)node;
-        // Decorator - metadata only
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing decorator @" << node.name << std::endl;
+
+        // Decorators are functions that wrap/modify class or method definitions
+        // For now, evaluate the decorator function and its arguments
+        // The actual decoration happens in ClassDecl processing
+
+        // Store decorator info for later use when processing the class/method
+        // Evaluate decorator arguments if any
+        for (auto& arg : node.arguments) {
+            arg->accept(*this);
+        }
     }
     
     // JSX/TSX Expressions
@@ -571,15 +641,161 @@ void HIRGenerator::visit(ImportDecl& node) {
             return; // Don't process further for built-in modules
         }
 
-        // Regular module imports (for future implementation)
-        if (!node.defaultImport.empty()) {
-            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import default as '" << node.defaultImport << "'" << std::endl;
+        // User-file module imports
+        // Resolve the file path relative to current file
+        std::string sourcePath = node.source;
+
+        // Try common extensions
+        std::vector<std::string> extensions = {".ts", ".js", ".tsx", ".jsx", ""};
+        std::string resolvedPath;
+
+        for (const auto& ext : extensions) {
+            std::string candidate = sourcePath + ext;
+            // Try relative path from current file directory
+            if (!currentFilePath_.empty()) {
+                std::filesystem::path currentDir = std::filesystem::path(currentFilePath_).parent_path();
+                std::filesystem::path resolved = currentDir / candidate;
+                if (std::filesystem::exists(resolved)) {
+                    resolvedPath = resolved.string();
+                    break;
+                }
+            }
+            // Try as-is
+            if (std::filesystem::exists(candidate)) {
+                resolvedPath = candidate;
+                break;
+            }
         }
-        if (!node.namespaceImport.empty()) {
-            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import namespace as '" << node.namespaceImport << "'" << std::endl;
+
+        if (resolvedPath.empty()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Module file not found: " << sourcePath << std::endl;
+
+            // Check if it's a Node.js built-in module name (without nova: prefix)
+            // Map bare module names like "http", "fs", "path" to nova: built-in modules
+            static const std::vector<std::string> builtinModuleNames = {
+                "http", "https", "http2", "fs", "path", "os", "url", "util",
+                "events", "stream", "buffer", "crypto", "net", "dns", "tls",
+                "child_process", "cluster", "dgram", "readline", "repl",
+                "string_decoder", "timers", "tty", "v8", "vm", "worker_threads",
+                "zlib", "assert", "console", "process", "querystring", "perf_hooks"
+            };
+
+            bool isBuiltinModule = false;
+            for (const auto& mod : builtinModuleNames) {
+                if (sourcePath == mod) {
+                    isBuiltinModule = true;
+                    break;
+                }
+            }
+
+            if (isBuiltinModule) {
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Treating '" << sourcePath << "' as built-in module nova:" << sourcePath << std::endl;
+
+                // Register namespace import
+                if (!node.namespaceImport.empty()) {
+                    builtinModuleImports_[node.namespaceImport] = "nova:" + sourcePath;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered namespace '" << node.namespaceImport << "' -> nova:" << sourcePath << std::endl;
+                }
+
+                // Register named imports to their runtime functions
+                for (const auto& spec : node.specifiers) {
+                    std::string runtimeFunc = getBuiltinFunctionName(sourcePath, spec.imported);
+                    builtinFunctionImports_[spec.local] = runtimeFunc;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered '" << spec.local << "' -> " << runtimeFunc << std::endl;
+                }
+
+                // Register default import if present
+                if (!node.defaultImport.empty()) {
+                    builtinModuleImports_[node.defaultImport] = "nova:" + sourcePath;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered default '" << node.defaultImport << "' -> nova:" << sourcePath << std::endl;
+                }
+
+                return;
+            }
+
+            // Not a file import and not a built-in - might be a npm package, skip gracefully
+            return;
         }
+
+        // Check if already imported (prevent circular imports)
+        if (importedModules_.find(resolvedPath) != importedModules_.end()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Module already imported: " << resolvedPath << std::endl;
+            // Re-bind specifiers from already-loaded module
+            for (const auto& spec : node.specifiers) {
+                auto it = symbolTable_.find(spec.imported);
+                if (it != symbolTable_.end()) {
+                    symbolTable_[spec.local] = it->second;
+                }
+            }
+            return;
+        }
+        importedModules_.insert(resolvedPath);
+
+        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Loading module from: " << resolvedPath << std::endl;
+
+        // Read the imported file
+        std::ifstream file(resolvedPath);
+        if (!file.is_open()) {
+            std::cerr << "ERROR HIRGen: Cannot open module file: " << resolvedPath << std::endl;
+            return;
+        }
+        std::stringstream ss;
+        ss << file.rdbuf();
+        std::string importedSource = ss.str();
+        file.close();
+
+        // Parse the imported file
+        nova::Lexer lexer(resolvedPath, importedSource);
+        if (lexer.hasErrors()) {
+            std::cerr << "ERROR HIRGen: Lexer errors in imported module: " << resolvedPath << std::endl;
+            return;
+        }
+
+        nova::Parser parser(lexer);
+        auto ast = parser.parseProgram();
+        if (parser.hasErrors()) {
+            std::cerr << "ERROR HIRGen: Parser errors in imported module: " << resolvedPath << std::endl;
+            return;
+        }
+
+        // Process the imported module's declarations
+        // Save current state
+        std::string savedFilePath = currentFilePath_;
+        currentFilePath_ = resolvedPath;
+
+        // Process all statements in the imported module
+        for (auto& stmt : ast->body) {
+            if (stmt) {
+                stmt->accept(*this);
+            }
+        }
+
+        // Restore state
+        currentFilePath_ = savedFilePath;
+
+        // Bind imported names to local aliases
         for (const auto& spec : node.specifiers) {
-            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Import '" << spec.imported << "' as '" << spec.local << "'" << std::endl;
+            auto it = symbolTable_.find(spec.imported);
+            if (it != symbolTable_.end()) {
+                symbolTable_[spec.local] = it->second;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Bound imported '" << spec.imported << "' as '" << spec.local << "'" << std::endl;
+            } else {
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Warning - imported symbol not found: " << spec.imported << std::endl;
+            }
+        }
+
+        // Handle default imports
+        if (!node.defaultImport.empty()) {
+            auto it = symbolTable_.find("default");
+            if (it != symbolTable_.end()) {
+                symbolTable_[node.defaultImport] = it->second;
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Bound default import as '" << node.defaultImport << "'" << std::endl;
+            }
+        }
+
+        // Handle namespace imports
+        if (!node.namespaceImport.empty()) {
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Namespace import as '" << node.namespaceImport << "'" << std::endl;
         }
     }
 

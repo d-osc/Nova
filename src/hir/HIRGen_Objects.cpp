@@ -1123,6 +1123,19 @@ void HIRGenerator::visit(ObjectExpr& node) {
                 std::cerr << "    TRACE: Method '" << fieldName << "' generation complete" << std::endl;
         }
 
+        // Store the field names for for-in loop support
+        {
+            std::vector<std::string> fieldNameList;
+            for (auto& field : fields) {
+                fieldNameList.push_back(field.name);
+            }
+            // Also add method names as they are enumerable properties
+            for (auto& [methodName, funcExpr] : methodsToGenerate) {
+                fieldNameList.push_back(methodName);
+            }
+            objectFieldNames_[objectId] = fieldNameList;
+        }
+
         // Create struct construction instruction
         lastValue_ = builder_->createStructConstruct(structType, fieldValues, objectId);
 

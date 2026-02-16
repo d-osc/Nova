@@ -408,11 +408,23 @@ void* nova_map_entries(void* mapPtr) {
 // Note: Callback support requires function pointer handling
 // For now, this is a placeholder that iterates internally
 // =========================================
-void nova_map_foreach(void* mapPtr, [[maybe_unused]] void* callback) {
-    if (!mapPtr) return;
-    // NovaMap* map = static_cast<NovaMap*>(mapPtr);
-    // Full callback implementation would require function pointer invocation
-    // This is handled at the HIR level with inline code generation
+void nova_map_foreach(void* mapPtr, void* callback) {
+    if (!mapPtr || !callback) return;
+    NovaMap* map = static_cast<NovaMap*>(mapPtr);
+    if (!map->entries) return;
+
+    // Cast callback to function pointer: callback(value, key, map)
+    typedef void (*ForEachCallback)(int64_t, int64_t, void*);
+    ForEachCallback fn = reinterpret_cast<ForEachCallback>(callback);
+
+    for (auto& entry : *map->entries) {
+        if (entry.deleted) continue;
+        int64_t key = (entry.keyType == NovaMapEntry::KeyType::String)
+            ? reinterpret_cast<int64_t>(entry.strKey) : entry.numKey;
+        int64_t value = (entry.valueType == NovaMapEntry::ValueType::String)
+            ? reinterpret_cast<int64_t>(entry.strValue) : entry.numValue;
+        fn(value, key, mapPtr);
+    }
 }
 
 // =========================================

@@ -300,6 +300,9 @@ public:
     // Maps outer function name -> inner closure function name (e.g., "makeCounter" -> "__func_0")
     std::unordered_map<std::string, std::string> closureReturnedBy;
 
+    // Rest parameter support: maps function name -> (restParamName, paramCount)
+    std::unordered_map<std::string, std::pair<std::string, size_t>> functionRestParams;
+
     explicit HIRModule(const std::string& n) : name(n) {}
     
     HIRFunctionPtr createFunction(const std::string& name, HIRFunctionType* type);

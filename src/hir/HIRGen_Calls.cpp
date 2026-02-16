@@ -4,15 +4,11 @@
 
 #include "nova/HIR/HIRGen_Internal.h"
 #include <fstream>
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
 void HIRGenerator::visit(CallExpr& node) {
-        std::ofstream log_entry("callexpr_log.txt", std::ios::app);
-        log_entry << "[CALLEXPR] Visiting CallExpr" << std::endl;
-        log_entry.close();
-
         if (!node.callee) {
             return;
         }
@@ -69,6 +65,64 @@ void HIRGenerator::visit(CallExpr& node) {
             // Fallback: just return 0
             lastValue_ = builder_->createIntConstant(0);
             return;
+        }
+
+        // Handle super.method() calls
+        if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            if (dynamic_cast<SuperExpr*>(memberExpr->object.get())) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    std::string methodName = propIdent->name;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected super." << methodName << "() call" << std::endl;
+
+                    // Find parent class
+                    std::string currentClass = "";
+                    std::string parentClass = "";
+                    for (const auto& pair : classStructTypes_) {
+                        if (pair.second == currentClassStructType_) {
+                            currentClass = pair.first;
+                            break;
+                        }
+                    }
+                    if (!currentClass.empty()) {
+                        auto inheritIt = classInheritance_.find(currentClass);
+                        if (inheritIt != classInheritance_.end()) {
+                            parentClass = inheritIt->second;
+                        }
+                    }
+
+                    if (!parentClass.empty()) {
+                        // Resolve method in parent class hierarchy
+                        std::string implementingClass = resolveMethodToClass(parentClass, methodName);
+                        if (implementingClass.empty()) {
+                            implementingClass = parentClass;  // Direct parent
+                        }
+
+                        std::string mangledName = implementingClass + "_" + methodName;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: super.method() resolved to: " << mangledName << std::endl;
+
+                        auto func = module_->getFunction(mangledName);
+                        if (func) {
+                            // Build arguments: 'this' + method arguments
+                            std::vector<HIRValue*> args;
+                            if (currentThis_) {
+                                args.push_back(currentThis_);
+                            } else {
+                                args.push_back(builder_->createIntConstant(0));
+                            }
+                            for (auto& arg : node.arguments) {
+                                arg->accept(*this);
+                                args.push_back(lastValue_);
+                            }
+                            lastValue_ = builder_->createCall(func.get(), args, "super_method_call");
+                            return;
+                        } else {
+                            std::cerr << "WARNING: super method " << mangledName << " not found!" << std::endl;
+                        }
+                    }
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+            }
         }
 
         // Check for built-in module function calls (nova:fs, nova:test, etc.)
@@ -1695,13 +1749,15 @@ void HIRGenerator::visit(CallExpr& node) {
                                 node.arguments[i]->accept(*this);
                                 auto* arg = lastValue_;
 
-                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: console.log arg " << i << ": ";
-                                if (arg && arg->type) {
-                                    std::cerr << "type=" << static_cast<int>(arg->type->kind);
-                                } else {
-                                    std::cerr << "NULL type!";
+                                if(NOVA_DEBUG) {
+                                    std::cerr << "DEBUG HIRGen: console.log arg " << i << ": ";
+                                    if (arg && arg->type) {
+                                        std::cerr << "type=" << static_cast<int>(arg->type->kind);
+                                    } else {
+                                        std::cerr << "NULL type!";
+                                    }
+                                    std::cerr << std::endl;
                                 }
-                                std::cerr << std::endl;
 
                                 // Determine which runtime function to call based on method and argument type
                                 std::string runtimeFuncName;
@@ -11740,10 +11796,20 @@ void HIRGenerator::visit(CallExpr& node) {
 
                     auto func = module_->getFunction(funcName);
                     if (func) {
-                        // Prepend the loaded environment (in lastValue_) as the first argument
+                        // CRITICAL: Load the closure pointer from the variable
+                        // lastValue_ currently points to the closure variable (from identifier visitor)
+                        // We need to load it to get the actual closure/environment pointer
+                        HIRValue* closurePtr = lastValue_;
+                        if (auto* varAlloca = symbolTable_[id->name]) {
+                            closurePtr = builder_->createLoad(varAlloca, id->name + "_ptr");
+                        }
+
+                        // IMPORTANT: Function signature is [user_params..., __env]
+                        // So arguments must be [user_args..., __env]
+                        // NOT [__env, user_args...] because __env is added AFTER body generation
                         std::vector<HIRValue*> closureArgs;
-                        closureArgs.push_back(lastValue_);  // Environment first
-                        closureArgs.insert(closureArgs.end(), args.begin(), args.end());  // Then other args
+                        closureArgs.insert(closureArgs.end(), args.begin(), args.end());  // User args first
+                        closureArgs.push_back(closurePtr);  // Environment last
 
                         lastValue_ = builder_->createCall(func.get(), closureArgs, "closure_call");
                         return;
@@ -11957,10 +12023,23 @@ void HIRGenerator::visit(CallExpr& node) {
                     }
                 }
 
-                lastValue_ = builder_->createCall(func.get(), args);
+                auto callResult = builder_->createCall(func.get(), args);
+                lastValue_ = callResult;
+
+                // CRITICAL: Check if this function returns a closure
+                // If so, set lastFunctionName_ so variable declarations can track it
+                auto closureIt = module_->closureReturnedBy.find(id->name);
+                if (closureIt != module_->closureReturnedBy.end()) {
+                    lastFunctionName_ = closureIt->second;
+                    if(NOVA_DEBUG) {
+                        std::cerr << "DEBUG HIRGen: Function '" << id->name
+                                  << "' returns closure '" << lastFunctionName_
+                                  << "' - setting lastFunctionName_" << std::endl;
+                    }
+                }
             }
         }
     }
-    
+
 
 } // namespace nova::hir

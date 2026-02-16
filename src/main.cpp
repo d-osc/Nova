@@ -1085,7 +1085,7 @@ int main(int argc, char** argv) {
         // TODO: analyzer.analyze(ast);
 
         if (verbose) std::cout << "⏳ Phase 4: HIR Generation..." << std::endl;
-        auto* hirModule = hir::generateHIR(*ast, "main");
+        auto* hirModule = hir::generateHIR(*ast, "main", inputFile);
         if (!hirModule) {
             std::cerr << "❌ Error: HIR generation failed" << std::endl;
             return 1;

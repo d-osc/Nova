@@ -1,2 +1,0 @@
-// Template literal test
-console.log(`Boolean: ${true}`);

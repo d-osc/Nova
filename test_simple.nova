@@ -1,2 +1,0 @@
-const arr3 = [10, 20, 30, 40, 50];
-console.log("arr3.length: " + arr3.length);
