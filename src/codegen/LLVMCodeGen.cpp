@@ -11,12 +11,16 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #include "nova/CodeGen/LLVMCodeGen.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/Utils.h>
@@ -121,6 +125,26 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
             generateFunction(mirFunc.get());
             // std::cerr << "TRACE: Finished generating function: " << mirFunc->name << std::endl;
         }
+
+        // Programs that declare their own `main` do not use the __nova_main
+        // wrapper below. Insert the same end-of-job microtask checkpoint before
+        // each return from that native entry point.
+        if (functionMap.find("__nova_main") == functionMap.end()) {
+            auto mainFunction = functionMap.find("main");
+            if (mainFunction != functionMap.end() && !mainFunction->second->isDeclaration()) {
+                llvm::FunctionType* checkpointType = llvm::FunctionType::get(
+                    llvm::Type::getVoidTy(*context), {}, false);
+                llvm::FunctionCallee checkpoint = module->getOrInsertFunction(
+                    "nova_promise_runMicrotasks", checkpointType);
+                for (llvm::BasicBlock& block : *mainFunction->second) {
+                    if (auto* returnInstruction =
+                            llvm::dyn_cast<llvm::ReturnInst>(block.getTerminator())) {
+                        llvm::IRBuilder<> checkpointBuilder(returnInstruction);
+                        checkpointBuilder.CreateCall(checkpoint);
+                    }
+                }
+            }
+        }
         // std::cerr << "TRACE: All functions generated successfully" << std::endl;
 
         // Create C main wrapper that calls __nova_main if it exists
@@ -148,6 +172,16 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
             // Call __nova_main()
             llvm::Function* novaMain = functionMap["__nova_main"];
             llvm::Value* result = mainBuilder.CreateCall(novaMain);
+
+            // A JavaScript job performs a microtask checkpoint after the
+            // current stack completes. This keeps Promise reactions ordered
+            // after synchronous code while still draining chained reactions
+            // before process exit.
+            llvm::FunctionType* checkpointType = llvm::FunctionType::get(
+                llvm::Type::getVoidTy(*context), {}, false);
+            llvm::FunctionCallee checkpoint = module->getOrInsertFunction(
+                "nova_promise_runMicrotasks", checkpointType);
+            mainBuilder.CreateCall(checkpoint);
 
             // If __nova_main returns i32, use it; otherwise return 0
             if (result->getType()->isIntegerTy(32)) {
@@ -451,8 +485,17 @@ int LLVMCodeGen::executeMain() {
         if(NOVA_DEBUG) std::cerr << "Module verification failed" << std::endl;
     }
     
+    // Use a process-specific stem so parallel compiler invocations do not
+    // overwrite, execute, or delete each other's temporary artifacts.
+#ifdef _WIN32
+    const auto processId = static_cast<unsigned long>(GetCurrentProcessId());
+#else
+    const auto processId = static_cast<unsigned long>(getpid());
+#endif
+    const std::string tempStem = "temp_jit_" + std::to_string(processId);
+
     // Save the LLVM IR to a temporary file
-    std::string tempFile = "temp_jit.ll";
+    std::string tempFile = tempStem + ".ll";
     std::error_code EC;
     llvm::raw_fd_ostream out(tempFile, EC);
     if (EC) {
@@ -468,8 +511,8 @@ int LLVMCodeGen::executeMain() {
     
     // Use llc to compile to assembly and then assemble with clang
     // This is a workaround for JIT not being available on this system
-    std::string objFile = "temp_jit.o";
-    std::string exeFile = "temp_jit.exe";
+    std::string objFile = tempStem + ".o";
+    std::string exeFile = tempStem + ".exe";
     
     // Compile LLVM IR to object file
     std::string llcCmd = "llc -filetype=obj -o \"" + objFile + "\" \"" + tempFile + "\"";
@@ -510,14 +553,30 @@ int LLVMCodeGen::executeMain() {
         return 1;
     }
     
-    // Execute the compiled program
+    // Execute the compiled program and normalize system()'s platform-specific
+    // status representation to the program's actual exit code.
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Executing compiled program..." << std::endl;
+#ifdef _WIN32
     int execResult = system((".\\\"" + exeFile + "\"").c_str());
+#else
+    int systemResult = system(("./\"" + exeFile + "\"").c_str());
+    int execResult = systemResult;
+    if (systemResult != -1) {
+        if (WIFEXITED(systemResult)) {
+            execResult = WEXITSTATUS(systemResult);
+        } else if (WIFSIGNALED(systemResult)) {
+            execResult = 128 + WTERMSIG(systemResult);
+        }
+    }
+#endif
     
-    // Clean up temporary files
-    remove(tempFile.c_str());
-    remove(objFile.c_str());
-    remove(exeFile.c_str());
+    // Keep generated artifacts only when explicitly requested for compiler
+    // diagnostics; normal executions still leave no temporary files behind.
+    if (std::getenv("NOVA_KEEP_TEMPS") == nullptr) {
+        remove(tempFile.c_str());
+        remove(objFile.c_str());
+        remove(exeFile.c_str());
+    }
     
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Program executed with exit code: " << execResult << std::endl;
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Temporary files cleaned up" << std::endl;
@@ -596,6 +655,9 @@ llvm::Type* LLVMCodeGen::convertType(mir::MIRType* type) {
         case mir::MIRType::Kind::Function:
             // TODO: Handle function type
             llvmType = llvm::PointerType::getUnqual(*context);
+            break;
+        case mir::MIRType::Kind::JSValue:
+            llvmType = llvm::Type::getInt64Ty(*context);
             break;
         default:
             llvmType = llvm::Type::getVoidTy(*context);
@@ -680,6 +742,33 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
             return builder->CreateLoad(convertType(moveOp->place->type.get()), 
                                      it->second, "load");
         }
+    } else if (operand->kind == mir::MIROperand::Kind::AddressOf) {
+        auto* address = static_cast<mir::MIRAddressOfOperand*>(operand);
+        if (!address->place) return nullptr;
+        auto it = valueMap.find(address->place.get());
+        return it == valueMap.end() ? nullptr : it->second;
+    } else if (operand->kind == mir::MIROperand::Kind::HeapCell) {
+        auto* heapCell = static_cast<mir::MIRHeapCellOperand*>(operand);
+        llvm::Value* initial = convertOperand(heapCell->value.get());
+        if (!initial) return nullptr;
+
+        llvm::Function* allocator = module->getFunction("nova_alloc_closure_env");
+        if (!allocator) {
+            auto* allocatorType = llvm::FunctionType::get(
+                llvm::PointerType::getUnqual(*context),
+                {llvm::Type::getInt64Ty(*context)}, false);
+            allocator = llvm::Function::Create(
+                allocatorType, llvm::Function::ExternalLinkage,
+                "nova_alloc_closure_env", module.get());
+        }
+        const auto bytes = module->getDataLayout().getTypeAllocSize(
+            initial->getType());
+        llvm::Value* cell = builder->CreateCall(
+            allocator,
+            {llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), bytes)},
+            "closure_heap_cell");
+        builder->CreateStore(initial, cell);
+        return cell;
     } else if (operand->kind == mir::MIROperand::Kind::Constant) {
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Processing Constant operand" << std::endl;
         // Create constant
@@ -719,7 +808,8 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
                 strConstant, ".str");
             // Get pointer to the string
             return builder->CreateBitCast(globalStr, llvm::PointerType::getUnqual(*context), "str");
-        } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::Null) {
+        } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::Null ||
+                   constOp->constKind == mir::MIRConstOperand::ConstKind::Undefined) {
             return llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(*context));
         }
     }
@@ -772,15 +862,52 @@ switch (rvalue->kind) {
             return generateAggregate(aggOp);
         }
 
+        case mir::MIRRValue::Kind::IndirectLoad: {
+            auto* indirect = static_cast<mir::MIRIndirectLoadRValue*>(rvalue);
+            if (!indirect->pointerPlace) return nullptr;
+            auto it = valueMap.find(indirect->pointerPlace.get());
+            if (it == valueMap.end()) return nullptr;
+
+            llvm::Value* cell = it->second;
+            if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(cell)) {
+                llvm::Type* storedType = alloca->getAllocatedType();
+                if (storedType->isPointerTy()) {
+                    cell = builder->CreateLoad(storedType, alloca, "closure_cell");
+                }
+            }
+            if (!cell->getType()->isPointerTy()) {
+                cell = builder->CreateIntToPtr(
+                    cell, llvm::PointerType::getUnqual(*context),
+                    "closure_cell_ptr");
+            }
+            llvm::Type* resultType = convertType(indirect->resultType.get());
+            if (resultType->isVoidTy()) {
+                resultType = llvm::Type::getInt64Ty(*context);
+            }
+            llvm::Value* loaded = builder->CreateLoad(
+                resultType, cell, "closure_value");
+            if (indirect->isObjectPointer) {
+                auto* objectType = llvm::StructType::getTypeByName(
+                    *context, "struct.NovaObject");
+                if (!objectType) {
+                    std::vector<llvm::Type*> fields{
+                        llvm::ArrayType::get(
+                            llvm::Type::getInt8Ty(*context), 24)};
+                    fields.resize(9, llvm::Type::getInt64Ty(*context));
+                    objectType = llvm::StructType::create(
+                        *context, fields, "struct.NovaObject");
+                }
+                arrayTypeMap[loaded] = objectType;
+            }
+            return loaded;
+        }
+
         case mir::MIRRValue::Kind::Ref: {
             // Ref kind is used for GetElement temporarily
-            std::cerr << "=== Ref rvalue case ===" << std::endl;
             auto* getElemOp = dynamic_cast<mir::MIRGetElementRValue*>(rvalue);
             if (getElemOp) {
-                std::cerr << "=== Confirmed GetElement, calling generateGetElement ===" << std::endl;
                 return generateGetElement(getElemOp);
             }
-            std::cerr << "=== Not a GetElement ===" << std::endl;
             return nullptr;
         }
 
@@ -938,11 +1065,11 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                         }
                         if (maxFieldIndex == 0) maxFieldIndex = 1; // At least 1 field
 
-                        // Create NovaObject struct: [24 x i8] header + N x i64 fields
+                        // Closure environments contain pointers to binding cells.
                         std::vector<llvm::Type*> structFields;
                         structFields.push_back(llvm::ArrayType::get(llvm::Type::getInt8Ty(*context), 24)); // ObjectHeader
                         for (int i = 0; i < maxFieldIndex; ++i) {
-                            structFields.push_back(llvm::Type::getInt64Ty(*context));
+                            structFields.push_back(llvm::PointerType::getUnqual(*context));
                         }
                         llvm::StructType* envStructType = llvm::StructType::get(*context, structFields);
 
@@ -982,7 +1109,10 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
                     // Override the type to i64 to prevent inttoptr conversions
                     if (assign->rvalue && assign->rvalue->kind == mir::MIRRValue::Kind::Ref) {
                         auto* getElemOp = dynamic_cast<mir::MIRGetElementRValue*>(assign->rvalue.get());
-                        if (getElemOp && getElemOp->isFieldAccess) {
+                        if (getElemOp && getElemOp->isFieldAccess &&
+                            (!getElemOp->resultType ||
+                             getElemOp->resultType->kind !=
+                                 mir::MIRType::Kind::Pointer)) {
                             varType = llvm::Type::getInt64Ty(*context);
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Overriding type to i64 for GetField result" << std::endl;
                         }
@@ -1061,12 +1191,50 @@ llvm::Function* LLVMCodeGen::generateFunction(mir::MIRFunction* function) {
         valueMap[function->arguments[i].get()] = argAlloca;
         argIt->setName("arg" + std::to_string(i));
 
+        if (function->arguments[i]->name == "__env") {
+            size_t fieldCount = 0;
+            for (const auto& scanBlock : function->basicBlocks) {
+                for (const auto& scanStatement : scanBlock->statements) {
+                    if (scanStatement->kind != mir::MIRStatement::Kind::Assign) continue;
+                    auto* scanAssign = static_cast<mir::MIRAssignStatement*>(
+                        scanStatement.get());
+                    auto* access = scanAssign->rvalue
+                        ? dynamic_cast<mir::MIRGetElementRValue*>(
+                              scanAssign->rvalue.get())
+                        : nullptr;
+                    if (!access || !access->isFieldAccess) continue;
+                    auto* copy = dynamic_cast<mir::MIRCopyOperand*>(
+                        access->array.get());
+                    auto* index = dynamic_cast<mir::MIRConstOperand*>(
+                        access->index.get());
+                    if (!copy || copy->place.get() != function->arguments[i].get() ||
+                        !index || index->constKind !=
+                            mir::MIRConstOperand::ConstKind::Int) {
+                        continue;
+                    }
+                    fieldCount = std::max(
+                        fieldCount, static_cast<size_t>(
+                            std::get<int64_t>(index->value) + 1));
+                }
+            }
+            if (fieldCount == 0) fieldCount = 1;
+            std::vector<llvm::Type*> fields{
+                llvm::ArrayType::get(llvm::Type::getInt8Ty(*context), 24)};
+            fields.resize(fieldCount + 1,
+                          llvm::PointerType::getUnqual(*context));
+            arrayTypeMap[argAlloca] = llvm::StructType::get(*context, fields);
+        }
+
         // If this is the first parameter of a method function, associate it with the struct type
         if (i == 0) {
             std::string funcName = function->name;
             // Check if this is a method function (ClassName_methodName but not ClassName_constructor)
             size_t methodUnderscorePos = funcName.find('_');
-            if (methodUnderscorePos != std::string::npos && funcName.find("_constructor") == std::string::npos) {
+            const bool isGeneratedFunction =
+                funcName.rfind("__arrow_", 0) == 0 ||
+                funcName.rfind("__func_", 0) == 0;
+            if (!isGeneratedFunction && methodUnderscorePos != std::string::npos &&
+                funcName.find("_constructor") == std::string::npos) {
                 // Extract class name
                 std::string className = funcName.substr(0, methodUnderscorePos);
                 std::string structName = "struct.NovaObject";  // Use unified struct type
@@ -1348,6 +1516,48 @@ void LLVMCodeGen::generateStatement(mir::MIRStatement* stmt) {
         case mir::MIRStatement::Kind::StorageDead:
             // These are lifetime markers - can be ignored or used for optimization
             break;
+
+        case mir::MIRStatement::Kind::IndirectStore: {
+            auto* store = static_cast<mir::MIRIndirectStoreStatement*>(stmt);
+            if (!store->pointerPlace) break;
+            auto pointerIt = valueMap.find(store->pointerPlace.get());
+            if (pointerIt == valueMap.end()) break;
+
+            llvm::Value* cell = pointerIt->second;
+            if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(cell)) {
+                llvm::Type* storedType = alloca->getAllocatedType();
+                if (storedType->isPointerTy()) {
+                    cell = builder->CreateLoad(storedType, alloca,
+                                               "closure_cell_store");
+                }
+            }
+            if (!cell->getType()->isPointerTy()) {
+                cell = builder->CreateIntToPtr(
+                    cell, llvm::PointerType::getUnqual(*context),
+                    "closure_cell_store_ptr");
+            }
+
+            llvm::Value* value = convertOperand(store->value.get());
+            if (!value) break;
+            llvm::Type* expected = convertType(store->valueType.get());
+            if (expected->isVoidTy()) expected = value->getType();
+            if (value->getType() != expected) {
+                if (value->getType()->isIntegerTy() && expected->isIntegerTy()) {
+                    value = builder->CreateIntCast(value, expected, true,
+                                                   "closure_store_cast");
+                } else if (value->getType()->isPointerTy() &&
+                           expected->isIntegerTy()) {
+                    value = builder->CreatePtrToInt(value, expected,
+                                                    "closure_store_ptrint");
+                } else if (value->getType()->isIntegerTy() &&
+                           expected->isPointerTy()) {
+                    value = builder->CreateIntToPtr(value, expected,
+                                                    "closure_store_intptr");
+                }
+            }
+            builder->CreateStore(value, cell);
+            break;
+        }
         
         default:
             break;
@@ -1547,7 +1757,6 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         // Try to find it in the LLVM module
                         callee = module->getFunction(funcName);
                         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Tried module->getFunction, result: " << callee << std::endl;
-                        std::cerr << "[FORCE DEBUG] After module->getFunction, before if chain" << std::endl;
                         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: About to check if chain for external declarations, callee=" << callee << ", funcName=" << funcName << std::endl;
 
                         if (!callee && funcName == "malloc") {
@@ -2535,10 +2744,10 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         // These work with value-based arrays (int64 elements)
 
                         if (!callee && funcName == "nova_value_array_push") {
-                            // void @nova_value_array_push(ptr, i64)
+                            // i64 @nova_value_array_push(ptr, i64) returns the new length
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_push declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
-                                llvm::Type::getVoidTy(*context),
+                                llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
                                  llvm::Type::getInt64Ty(*context)},
                                 false
@@ -2584,10 +2793,10 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
 
                         if (!callee && funcName == "nova_value_array_unshift") {
-                            // void @nova_value_array_unshift(ptr, i64)
+                            // i64 @nova_value_array_unshift(ptr, i64) - new length
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_value_array_unshift declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
-                                llvm::Type::getVoidTy(*context),
+                                llvm::Type::getInt64Ty(*context),
                                 {llvm::PointerType::getUnqual(*context),
                                  llvm::Type::getInt64Ty(*context)},
                                 false
@@ -2995,6 +3204,38 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 funcType,
                                 llvm::Function::ExternalLinkage,
                                 "nova_object_is",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_object_is_number") {
+                            // i64 @nova_object_is_number(double, double) - SameValue for Number
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::Type::getDoubleTy(*context),
+                                 llvm::Type::getDoubleTy(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_object_is_number",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_object_is_identity") {
+                            // i64 @nova_object_is_identity(ptr, ptr) - pointer identity
+                            llvm::Type* ptrType = llvm::PointerType::getUnqual(*context);
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {ptrType, ptrType},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "nova_object_is_identity",
                                 module.get()
                             );
                         }
@@ -3414,6 +3655,39 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 funcType,
                                 llvm::Function::ExternalLinkage,
                                 "nova_global_isNaN",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee &&
+                            (funcName == "nova_number_isNaN" ||
+                             funcName == "nova_number_isFinite" ||
+                             funcName == "nova_number_isInteger" ||
+                             funcName == "nova_number_isSafeInteger")) {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::Type::getDoubleTy(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                funcName,
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "nova_abstract_equal_number_string") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::Type::getDoubleTy(*context),
+                                 llvm::PointerType::getUnqual(*context)},
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                funcName,
                                 module.get()
                             );
                         }
@@ -4923,38 +5197,33 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                 }
                 if (!fallbackFuncName.empty() && fallbackFuncName.substr(0, 5) == "nova_") {
                     std::vector<llvm::Type*> paramTypes;
-                    for (size_t i = 0; i < callTerm->args.size(); ++i) {
-                        // Check MIR type of each argument to determine if it should be ptr or i64
-                        bool isPtr = false;
-                        auto& arg = callTerm->args[i];
+                    for (const auto& arg : callTerm->args) {
+                        mir::MIRType* mirArgType = nullptr;
                         if (auto* copyOp = dynamic_cast<mir::MIRCopyOperand*>(arg.get())) {
                             if (copyOp->place && copyOp->place->type) {
-                                isPtr = (copyOp->place->type->kind == mir::MIRType::Kind::Pointer);
+                                mirArgType = copyOp->place->type.get();
                             }
                         } else if (auto* moveOp = dynamic_cast<mir::MIRMoveOperand*>(arg.get())) {
                             if (moveOp->place && moveOp->place->type) {
-                                isPtr = (moveOp->place->type->kind == mir::MIRType::Kind::Pointer);
+                                mirArgType = moveOp->place->type.get();
                             }
                         } else if (auto* constArgOp = dynamic_cast<mir::MIRConstOperand*>(arg.get())) {
                             if (constArgOp->type) {
-                                isPtr = (constArgOp->type->kind == mir::MIRType::Kind::Pointer);
+                                mirArgType = constArgOp->type.get();
                             }
                         }
-                        if (isPtr) {
-                            paramTypes.push_back(llvm::PointerType::getUnqual(*context));
-                        } else {
-                            paramTypes.push_back(llvm::Type::getInt64Ty(*context));
-                        }
+
+                        // Preserve the MIR ABI exactly. Treating every non-pointer value as
+                        // i64 truncated f32/f64 runtime arguments (for example, Promise
+                        // payload boxing converted 3.5 to 3 before nova_value_from_f64).
+                        paramTypes.push_back(mirArgType
+                            ? convertType(mirArgType)
+                            : llvm::Type::getInt64Ty(*context));
                     }
                     // Determine return type from destination
                     llvm::Type* retType = llvm::Type::getInt64Ty(*context);
                     if (callTerm->destination && callTerm->destination->type) {
-                        auto mirType = callTerm->destination->type.get();
-                        if (mirType->kind == mir::MIRType::Kind::Void) {
-                            retType = llvm::Type::getVoidTy(*context);
-                        } else if (mirType->kind == mir::MIRType::Kind::Pointer) {
-                            retType = llvm::PointerType::getUnqual(*context);
-                        }
+                        retType = convertType(callTerm->destination->type.get());
                     }
                     llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
                     callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fallbackFuncName, module.get());
@@ -5363,6 +5632,35 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
         }
     }
     
+    const auto promoteNumericToFloat = [&](llvm::Value*& left,
+                                           llvm::Value*& right,
+                                           bool forceDouble = false) {
+        const bool hasFloatingOperand =
+            left->getType()->isFloatingPointTy() ||
+            right->getType()->isFloatingPointTy();
+        if (!hasFloatingOperand && !forceDouble) {
+            return false;
+        }
+
+        llvm::Type* targetType = llvm::Type::getDoubleTy(*context);
+        const auto convert = [&](llvm::Value* value) -> llvm::Value* {
+            if (value->getType() == targetType) return value;
+            if (value->getType()->isIntegerTy()) {
+                return builder->CreateSIToFP(value, targetType, "number_to_f64");
+            }
+            if (value->getType()->isFloatTy()) {
+                return builder->CreateFPExt(value, targetType, "number_to_f64");
+            }
+            return value;
+        };
+        left = convert(left);
+        right = convert(right);
+        return left->getType()->isDoubleTy() && right->getType()->isDoubleTy();
+    };
+
+    const bool floatingNumericOperation = promoteNumericToFloat(
+        lhs, rhs, op == mir::MIRBinaryOpRValue::BinOp::Div);
+
     switch (op) {
         case mir::MIRBinaryOpRValue::BinOp::Add: {
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating add instruction" << std::endl;
@@ -5525,17 +5823,31 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
 
             // Not a string concatenation - perform numeric addition
-            return builder->CreateAdd(lhs, rhs, "add");
+            return floatingNumericOperation
+                ? builder->CreateFAdd(lhs, rhs, "fadd")
+                : builder->CreateAdd(lhs, rhs, "add");
         }
         case mir::MIRBinaryOpRValue::BinOp::Sub:
-            return builder->CreateSub(lhs, rhs, "sub");
+            return floatingNumericOperation
+                ? builder->CreateFSub(lhs, rhs, "fsub")
+                : builder->CreateSub(lhs, rhs, "sub");
         case mir::MIRBinaryOpRValue::BinOp::Mul:
-            return builder->CreateMul(lhs, rhs, "mul");
+            return floatingNumericOperation
+                ? builder->CreateFMul(lhs, rhs, "fmul")
+                : builder->CreateMul(lhs, rhs, "mul");
         case mir::MIRBinaryOpRValue::BinOp::Div:
-            return builder->CreateSDiv(lhs, rhs, "div");
+            return builder->CreateFDiv(lhs, rhs, "fdiv");
         case mir::MIRBinaryOpRValue::BinOp::Rem:
-            return builder->CreateSRem(lhs, rhs, "rem");
+            return floatingNumericOperation
+                ? builder->CreateFRem(lhs, rhs, "frem")
+                : builder->CreateSRem(lhs, rhs, "rem");
         case mir::MIRBinaryOpRValue::BinOp::Pow: {
+            if (floatingNumericOperation) {
+                llvm::Function* powIntrinsic = llvm::Intrinsic::getDeclaration(
+                    module.get(), llvm::Intrinsic::pow,
+                    {llvm::Type::getDoubleTy(*context)});
+                return builder->CreateCall(powIntrinsic, {lhs, rhs}, "fpow");
+            }
             // For integer exponentiation, implement as repeated multiplication
             // This is a simple inline implementation for integer pow
             // result = base ** exponent
@@ -5592,6 +5904,9 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             return builder->CreateLShr(lhs, rhs, "ushr");
         case mir::MIRBinaryOpRValue::BinOp::Eq:
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP EQ instruction" << std::endl;
+            if (floatingNumericOperation) {
+                return builder->CreateFCmpOEQ(lhs, rhs, "feq");
+            }
             // Check if operands are pointers (strings) - use content comparison
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String content comparison (==)" << std::endl;
@@ -5637,6 +5952,9 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             return builder->CreateICmpEQ(lhs, rhs, "eq");
         case mir::MIRBinaryOpRValue::BinOp::Ne:
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP NE instruction" << std::endl;
+            if (floatingNumericOperation) {
+                return builder->CreateFCmpUNE(lhs, rhs, "fne");
+            }
             // Check if operands are pointers (strings) - use content comparison
             if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: String content comparison (!=)" << std::endl;
@@ -5681,6 +5999,9 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpNE(lhs, rhs, "ne");
         case mir::MIRBinaryOpRValue::BinOp::Lt:
+            if (floatingNumericOperation) {
+                return builder->CreateFCmpOLT(lhs, rhs, "flt");
+            }
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SLT instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
@@ -5705,6 +6026,9 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpSLT(lhs, rhs, "lt");
         case mir::MIRBinaryOpRValue::BinOp::Le:
+            if (floatingNumericOperation) {
+                return builder->CreateFCmpOLE(lhs, rhs, "fle");
+            }
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SLE instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
@@ -5729,6 +6053,9 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpSLE(lhs, rhs, "le");
         case mir::MIRBinaryOpRValue::BinOp::Gt:
+            if (floatingNumericOperation) {
+                return builder->CreateFCmpOGT(lhs, rhs, "fgt");
+            }
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SGT instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
@@ -5753,6 +6080,9 @@ llvm::Value* LLVMCodeGen::generateBinaryOp(mir::MIRBinaryOpRValue::BinOp op,
             }
             return builder->CreateICmpSGT(lhs, rhs, "gt");
         case mir::MIRBinaryOpRValue::BinOp::Ge:
+            if (floatingNumericOperation) {
+                return builder->CreateFCmpOGE(lhs, rhs, "fge");
+            }
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating ICMP SGE instruction" << std::endl;
             // Handle type conversion for comparisons
             if (lhs->getType() != rhs->getType()) {
@@ -5790,7 +6120,9 @@ llvm::Value* LLVMCodeGen::generateUnaryOp(mir::MIRUnaryOpRValue::UnOp op,
         case mir::MIRUnaryOpRValue::UnOp::Not:
             return builder->CreateNot(operand, "not");
         case mir::MIRUnaryOpRValue::UnOp::Neg:
-            return builder->CreateNeg(operand, "neg");
+            return operand->getType()->isFloatingPointTy()
+                ? builder->CreateFNeg(operand, "fneg")
+                : builder->CreateNeg(operand, "neg");
         default:
             return nullptr;
     }
@@ -5832,15 +6164,67 @@ llvm::Value* LLVMCodeGen::generateCast(mir::MIRCastRValue::CastKind kind,
 llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
     if (!aggOp) return nullptr;
 
+    auto boxJSValue = [&](llvm::Value* value,
+                          mir::MIRAggregateRValue::ValueKind kind) -> llvm::Value* {
+        using ValueKind = mir::MIRAggregateRValue::ValueKind;
+        llvm::Type* slotType = llvm::Type::getInt64Ty(*context);
+        if (kind == ValueKind::Boxed && value->getType()->isIntegerTy(64)) return value;
+        if (kind == ValueKind::Null || kind == ValueKind::Undefined) {
+            return llvm::ConstantInt::get(slotType, kind == ValueKind::Null
+                ? 0x7ffa000000000000ULL : 0x7ff9000000000000ULL);
+        }
+        if (kind == ValueKind::Boolean) {
+            llvm::Value* truthy = value;
+            if (!truthy->getType()->isIntegerTy(1)) {
+                truthy = builder->CreateICmpNE(
+                    truthy, llvm::ConstantInt::get(truthy->getType(), 0));
+            }
+            return builder->CreateSelect(
+                truthy,
+                llvm::ConstantInt::get(slotType, 0x7ffc000000000000ULL),
+                llvm::ConstantInt::get(slotType, 0x7ffb000000000000ULL),
+                "box_value_bool");
+        }
+        if (kind == ValueKind::String || kind == ValueKind::Object) {
+            llvm::Value* bits = value->getType()->isPointerTy()
+                ? builder->CreatePtrToInt(value, slotType, "box_value_ptr")
+                : builder->CreateZExtOrTrunc(value, slotType, "box_value_ptr_bits");
+            bits = builder->CreateAnd(bits, llvm::ConstantInt::get(
+                slotType, 0x0000ffffffffffffULL));
+            return builder->CreateOr(bits, llvm::ConstantInt::get(slotType,
+                kind == ValueKind::String
+                    ? 0x7ffd000000000000ULL : 0x7ffe000000000000ULL),
+                "box_value_tagged_ptr");
+        }
+        if (kind == ValueKind::Number) {
+            if (value->getType()->isDoubleTy()) {
+                llvm::FunctionCallee boxer = module->getOrInsertFunction(
+                    "nova_value_from_f64",
+                    llvm::FunctionType::get(slotType,
+                        {llvm::Type::getDoubleTy(*context)}, false));
+                return builder->CreateCall(boxer, {value}, "box_value_f64");
+            }
+            if (value->getType()->isIntegerTy()) {
+                llvm::Value* number = builder->CreateSIToFP(
+                    value, llvm::Type::getDoubleTy(*context), "box_value_number");
+                return builder->CreateBitCast(number, slotType, "box_value_number_bits");
+            }
+        }
+        return value->getType()->isIntegerTy(64)
+            ? value : builder->CreateZExtOrTrunc(value, slotType, "box_value_fallback");
+    };
+
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: generateAggregate called with " << aggOp->elements.size() << " elements" << std::endl;
 
     // For arrays: allocate array on stack and initialize elements
-    if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Array) {
+    if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::Array ||
+        aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::SetElement) {
         size_t arraySize = aggOp->elements.size();
 
-        // Check if this is SetElement operation (array with 3 elements)
+        // SetElement has its own MIR kind. Inferring it from a three-element
+        // aggregate corrupts legitimate array literals such as [a, b, c].
         // elements[0] = array pointer, elements[1] = index, elements[2] = value to store
-        if (arraySize == 3) {
+        if (aggOp->aggregateKind == mir::MIRAggregateRValue::AggregateKind::SetElement) {
             llvm::Value* arrayPtr = convertOperand(aggOp->elements[0].get());
             llvm::Value* indexValue = convertOperand(aggOp->elements[1].get());
             llvm::Value* valueToStore = convertOperand(aggOp->elements[2].get());
@@ -5881,26 +6265,65 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                     // Load the elements pointer
                     llvm::Value* elementsPtr = builder->CreateLoad(ptrType, elementsFieldPtr, "elements_ptr_load");
 
-                    // Look up the array type from arrayTypeMap
-                    auto typeIt = arrayTypeMap.find(allocaInst);
-                    if (typeIt != arrayTypeMap.end()) {
-                        llvm::Type* arrayType = typeIt->second;
+                    const bool usesJSValue = aggOp->elementType &&
+                        aggOp->elementType->kind == mir::MIRType::Kind::JSValue;
+                    using ValueKind = mir::MIRAggregateRValue::ValueKind;
+                    const ValueKind valueKind = aggOp->valueKinds.size() > 2
+                        ? aggOp->valueKinds[2] : ValueKind::Object;
+                    const uint64_t payloadMask = 0x0000ffffffffffffULL;
+                    const uint64_t nullTag = 0x7ffa000000000000ULL;
+                    const uint64_t undefinedTag = 0x7ff9000000000000ULL;
+                    llvm::Type* slotType = llvm::Type::getInt64Ty(*context);
 
-                        // Now GEP into the actual array using the extracted elements pointer
-                        std::vector<llvm::Value*> indices = {
-                            llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),
-                            indexValue
-                        };
-                        llvm::Value* elementPtr = builder->CreateGEP(arrayType, elementsPtr, indices, "setelem_ptr");
-
-                        // Store the value to the element
-                        builder->CreateStore(valueToStore, elementPtr);
-
-                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: SetElement - stored value to array element" << std::endl;
-
-                        // Return a dummy value (void represented as 0)
-                        return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+                    if (usesJSValue) {
+                        if (valueKind == ValueKind::Null || valueKind == ValueKind::Undefined) {
+                            valueToStore = llvm::ConstantInt::get(slotType,
+                                valueKind == ValueKind::Null ? nullTag : undefinedTag);
+                        } else if (valueKind == ValueKind::Boolean) {
+                            llvm::Value* truthy = valueToStore;
+                            if (!truthy->getType()->isIntegerTy(1)) {
+                                truthy = builder->CreateICmpNE(
+                                    truthy, llvm::ConstantInt::get(truthy->getType(), 0));
+                            }
+                            valueToStore = builder->CreateSelect(
+                                truthy,
+                                llvm::ConstantInt::get(slotType, 0x7ffc000000000000ULL),
+                                llvm::ConstantInt::get(slotType, 0x7ffb000000000000ULL));
+                        } else if (valueKind == ValueKind::String || valueKind == ValueKind::Object) {
+                            llvm::Value* bits = valueToStore->getType()->isPointerTy()
+                                ? builder->CreatePtrToInt(valueToStore, slotType)
+                                : builder->CreateZExtOrTrunc(valueToStore, slotType);
+                            bits = builder->CreateAnd(
+                                bits, llvm::ConstantInt::get(slotType, payloadMask));
+                            valueToStore = builder->CreateOr(bits, llvm::ConstantInt::get(
+                                slotType, valueKind == ValueKind::String
+                                    ? 0x7ffd000000000000ULL : 0x7ffe000000000000ULL));
+                        } else if (valueKind == ValueKind::Number) {
+                            if (valueToStore->getType()->isDoubleTy()) {
+                                llvm::FunctionCallee boxer = module->getOrInsertFunction(
+                                    "nova_value_from_f64",
+                                    llvm::FunctionType::get(slotType,
+                                        {llvm::Type::getDoubleTy(*context)}, false));
+                                valueToStore = builder->CreateCall(boxer, {valueToStore});
+                            } else if (valueToStore->getType()->isIntegerTy()) {
+                                llvm::Value* number = builder->CreateSIToFP(
+                                    valueToStore, llvm::Type::getDoubleTy(*context));
+                                valueToStore = builder->CreateBitCast(number, slotType);
+                            }
+                        }
+                    } else if (valueToStore->getType()->isPointerTy()) {
+                        valueToStore = builder->CreatePtrToInt(valueToStore, slotType);
+                    } else if (valueToStore->getType()->isIntegerTy() &&
+                               !valueToStore->getType()->isIntegerTy(64)) {
+                        valueToStore = builder->CreateSExtOrTrunc(valueToStore, slotType);
+                    } else if (valueToStore->getType()->isDoubleTy()) {
+                        valueToStore = builder->CreateBitCast(valueToStore, slotType);
                     }
+
+                    llvm::Value* elementPtr = builder->CreateGEP(
+                        slotType, elementsPtr, indexValue, "setelem_ptr");
+                    builder->CreateStore(valueToStore, elementPtr);
+                    return llvm::ConstantInt::get(slotType, 0);
                 } else {
                     // Regular array without metadata struct
                     // Look up array type
@@ -5924,6 +6347,10 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                     }
                 }
             }
+
+            // Invalid SetElement operands must not fall through and get emitted
+            // as a new three-element array.
+            return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
         }
 
         // Create array type [N x i64]
@@ -5944,10 +6371,81 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             arrayAlloca = builder->CreateAlloca(arrayType, nullptr, "array");
         }
 
+        const bool usesJSValue = aggOp->elementType &&
+            aggOp->elementType->kind == mir::MIRType::Kind::JSValue;
+        const uint64_t payloadMask = 0x0000ffffffffffffULL;
+        const uint64_t undefinedTag = 0x7ff9000000000000ULL;
+        const uint64_t nullTag = 0x7ffa000000000000ULL;
+        const uint64_t falseTag = 0x7ffb000000000000ULL;
+        const uint64_t trueTag = 0x7ffc000000000000ULL;
+        const uint64_t stringTag = 0x7ffd000000000000ULL;
+        const uint64_t objectTag = 0x7ffe000000000000ULL;
+
         // Initialize each element
         for (size_t i = 0; i < arraySize; ++i) {
             llvm::Value* elementValue = convertOperand(aggOp->elements[i].get());
             if (!elementValue) continue;
+
+            if (usesJSValue) {
+                using ValueKind = mir::MIRAggregateRValue::ValueKind;
+                const ValueKind kind = i < aggOp->valueKinds.size()
+                    ? aggOp->valueKinds[i] : ValueKind::Object;
+                if (kind == ValueKind::Null || kind == ValueKind::Undefined) {
+                    elementValue = llvm::ConstantInt::get(
+                        elementType, kind == ValueKind::Null ? nullTag : undefinedTag);
+                } else if (kind == ValueKind::Boolean) {
+                    llvm::Value* truthy = elementValue;
+                    if (!truthy->getType()->isIntegerTy(1)) {
+                        truthy = builder->CreateICmpNE(
+                            truthy, llvm::ConstantInt::get(truthy->getType(), 0));
+                    }
+                    elementValue = builder->CreateSelect(
+                        truthy, llvm::ConstantInt::get(elementType, trueTag),
+                        llvm::ConstantInt::get(elementType, falseTag), "box_bool");
+                } else if (kind == ValueKind::String || kind == ValueKind::Object) {
+                    llvm::Value* pointerBits = elementValue->getType()->isPointerTy()
+                        ? builder->CreatePtrToInt(elementValue, elementType, "box_ptr")
+                        : builder->CreateZExtOrTrunc(elementValue, elementType, "box_ptr_bits");
+                    pointerBits = builder->CreateAnd(
+                        pointerBits, llvm::ConstantInt::get(elementType, payloadMask));
+                    elementValue = builder->CreateOr(
+                        pointerBits, llvm::ConstantInt::get(
+                            elementType, kind == ValueKind::String ? stringTag : objectTag),
+                        "box_tagged_ptr");
+                } else if (kind == ValueKind::Number) {
+                    if (elementValue->getType()->isDoubleTy()) {
+                        llvm::FunctionCallee boxer = module->getOrInsertFunction(
+                            "nova_value_from_f64",
+                            llvm::FunctionType::get(elementType,
+                                {llvm::Type::getDoubleTy(*context)}, false));
+                        elementValue = builder->CreateCall(boxer, {elementValue}, "box_f64");
+                    } else if (elementValue->getType()->isIntegerTy()) {
+                        llvm::Value* number = builder->CreateSIToFP(
+                            elementValue, llvm::Type::getDoubleTy(*context), "box_number");
+                        elementValue = builder->CreateBitCast(number, elementType, "box_number_bits");
+                    }
+                } else if (kind == ValueKind::Boxed && !elementValue->getType()->isIntegerTy(64)) {
+                    elementValue = builder->CreateZExtOrTrunc(elementValue, elementType);
+                }
+            }
+
+            // Legacy homogeneous arrays use a uniform i64 slot. Normalize
+            // pointers and narrower integers before storing so arrays of strings,
+            // nested arrays, and booleans are represented without invalid LLVM IR.
+            if (!usesJSValue && elementValue->getType()->isPointerTy()) {
+                elementValue = builder->CreatePtrToInt(elementValue, elementType, "array_elem_ptr");
+            } else if (!usesJSValue && elementValue->getType()->isIntegerTy()) {
+                unsigned bitWidth = elementValue->getType()->getIntegerBitWidth();
+                if (bitWidth < 64) {
+                    elementValue = bitWidth == 1
+                        ? builder->CreateZExt(elementValue, elementType, "array_elem_bool")
+                        : builder->CreateSExt(elementValue, elementType, "array_elem_ext");
+                } else if (bitWidth > 64) {
+                    elementValue = builder->CreateTrunc(elementValue, elementType, "array_elem_trunc");
+                }
+            } else if (!usesJSValue && elementValue->getType()->isDoubleTy()) {
+                elementValue = builder->CreateBitCast(elementValue, elementType, "array_elem_double");
+            }
 
             // Get pointer to element using GEP
             std::vector<llvm::Value*> indices = {
@@ -6016,6 +6514,13 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
         llvm::Value* typeIdValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 1);  // TypeId::ARRAY = 1
         builder->CreateStore(typeIdValue, typeIdPtr32);
 
+        // ObjectHeader::value_encoding occupies byte 13 in existing padding.
+        llvm::Value* encodingPtr = builder->CreateConstGEP1_64(
+            llvm::Type::getInt8Ty(*context), headerPtr, 13, "value_encoding_ptr");
+        builder->CreateStore(
+            llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), usesJSValue ? 1 : 0),
+            encodingPtr);
+
         // Field 1: length
         llvm::Value* lengthPtr = builder->CreateStructGEP(arrayMetadataType, metadataAlloca, 1, "meta_length_ptr");
         llvm::Value* lengthValue = llvm::ConstantInt::get(i64Type, arraySize);
@@ -6055,6 +6560,14 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             llvm::Value* structPtr = convertOperand(aggOp->elements[0].get());
             llvm::Value* indexValue = convertOperand(aggOp->elements[1].get());
             llvm::Value* valueToStore = convertOperand(aggOp->elements[2].get());
+
+            if (valueToStore && aggOp->elementType &&
+                aggOp->elementType->kind == mir::MIRType::Kind::JSValue) {
+                const auto valueKind = aggOp->valueKinds.size() > 2
+                    ? aggOp->valueKinds[2]
+                    : mir::MIRAggregateRValue::ValueKind::Boxed;
+                valueToStore = boxJSValue(valueToStore, valueKind);
+            }
 
             if(NOVA_DEBUG) {
                 std::cerr << "DEBUG LLVM: structPtr = " << (structPtr ? "valid" : "NULL") << std::endl;
@@ -6102,13 +6615,6 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                     llvm::Value* fieldPtr = builder->CreateGEP(structType, actualStructPtr, indices, "setfield_ptr");
 
                     // Debug: Print what we're storing
-                    if (auto* constIdx = llvm::dyn_cast<llvm::ConstantInt>(fieldIndex)) {
-                        std::cerr << "*** SetField (arrayTypeMap): storing at LLVM index " << constIdx->getZExtValue();
-                        std::cerr << " to pointer ";
-                        actualStructPtr->printAsOperand(llvm::errs(), false);
-                        std::cerr << std::endl;
-                    }
-
                     // Store the value to the field
                     builder->CreateStore(valueToStore, fieldPtr);
                 } else {
@@ -6160,10 +6666,6 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                         llvm::Value* fieldPtr = builder->CreateGEP(structType, actualStructPtr, indices, "setfield_ptr");
 
                         // Debug: Print what we're storing
-                        if (auto* constIdx = llvm::dyn_cast<llvm::ConstantInt>(fieldIndex)) {
-                            std::cerr << "*** SetField (inferred): storing at LLVM index " << constIdx->getZExtValue() << std::endl;
-                        }
-
                         // Store the value to the field
                         builder->CreateStore(valueToStore, fieldPtr);
 
@@ -6264,6 +6766,14 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
             llvm::Value* fieldValue = convertOperand(aggOp->elements[i].get());
             if (!fieldValue) {
                 fieldValue = llvm::ConstantInt::get(llvm::Type::getInt64Ty(*context), 0);
+            }
+
+            if (i < aggOp->elementTypes.size() && aggOp->elementTypes[i] &&
+                aggOp->elementTypes[i]->kind == mir::MIRType::Kind::JSValue) {
+                const auto valueKind = i < aggOp->valueKinds.size()
+                    ? aggOp->valueKinds[i]
+                    : mir::MIRAggregateRValue::ValueKind::Object;
+                fieldValue = boxJSValue(fieldValue, valueKind);
             }
 
             fieldValues.push_back(fieldValue);
@@ -6403,9 +6913,6 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
 llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp) {
     if (!getElemOp) return nullptr;
 
-    std::cerr << "\n=== generateGetElement CALLED ===" << std::endl;
-    std::cerr << "isFieldAccess: " << getElemOp->isFieldAccess << std::endl;
-
     // Get the array pointer (should be from a Copy operand)
     llvm::Value* arrayPtr = convertOperand(getElemOp->array.get());
     if (!arrayPtr) {
@@ -6468,7 +6975,11 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 if (currentFunc) {
                     std::string funcName = currentFunc->getName().str();
                     size_t underscorePos = funcName.find('_');
-                    if (underscorePos != std::string::npos && funcName.find("_constructor") == std::string::npos) {
+                    const bool isGeneratedFunction =
+                        funcName.rfind("__arrow_", 0) == 0 ||
+                        funcName.rfind("__func_", 0) == 0;
+                    if (!isGeneratedFunction && underscorePos != std::string::npos &&
+                        funcName.find("_constructor") == std::string::npos) {
                         // This is a class method
                         std::string className = funcName.substr(0, underscorePos);
                         std::string structName = "struct.NovaObject";  // Use unified struct type
@@ -6481,6 +6992,24 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                         }
                     }
                 }
+            }
+        }
+
+        // Closure environments arrive as opaque pointer parameters after MIR
+        // lowering. Recover their stable ObjectHeader + slot layout before the
+        // generic pointer fallback mistakes them for array metadata.
+        if (!arrayType && getElemOp->isFieldAccess) {
+            bool isClosureEnvironment = false;
+            if (auto* copy = dynamic_cast<mir::MIRCopyOperand*>(
+                    getElemOp->array.get());
+                copy && copy->place) {
+                isClosureEnvironment =
+                    copy->place->name.find("__env") != std::string::npos;
+            }
+            if (isClosureEnvironment) {
+                arrayType = llvm::StructType::getTypeByName(
+                    *context, "struct.NovaObject");
+                if (arrayType) arrayTypeMap[allocaInst] = arrayType;
             }
         }
 
@@ -6525,22 +7054,6 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         arrayType->print(llvm::errs());
         std::cerr << std::endl;
     }
-    std::cerr << std::endl;
-
-    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: loadedArrayPtr type: ";
-    loadedArrayPtr->getType()->print(llvm::errs());
-    std::cerr << std::endl;
-
-    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: loadedArrayPtr is ";
-    if (llvm::isa<llvm::AllocaInst>(loadedArrayPtr)) {
-        std::cerr << "an AllocaInst";
-    } else if (llvm::isa<llvm::LoadInst>(loadedArrayPtr)) {
-        std::cerr << "a LoadInst";
-    } else {
-        std::cerr << "something else: ";
-        loadedArrayPtr->print(llvm::errs());
-    }
-    std::cerr << std::endl;
 
     // Use GEP to get pointer to the element
     // loadedArrayPtr is the pointer to the array/struct (either directly or loaded from variable)
@@ -6570,24 +7083,25 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
     bool isMetadataFieldAccess = false;
     bool isArrayMetadataStruct = false;
 
-    // IMPORTANT: Only check for array metadata if this is NOT a struct field access
-    // Class structs also have [24 x i8] as first field (ObjectHeader), but isFieldAccess distinguishes them
-    if (!getElemOp->isFieldAccess) {
-        // Check if arrayType is an array metadata struct (first field is [24 x i8])
-        if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
-            if (structType->getNumElements() >= 4) {
-                llvm::Type* firstField = structType->getElementType(0);
-                if (auto* arrayTypeField = llvm::dyn_cast<llvm::ArrayType>(firstField)) {
-                    if (arrayTypeField->getNumElements() == 24 &&
-                        arrayTypeField->getElementType()->isIntegerTy(8)) {
-                        isArrayMetadataStruct = true;
-                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array metadata struct pattern" << std::endl;
-                    }
+    // Detect array metadata for both element access and property access. In
+    // particular, arr.length is represented as a field access and must use
+    // metadata field 1 directly. Treating it as a regular object field adds an
+    // ObjectHeader offset a second time and reads capacity (field 2) instead.
+    if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
+        if (structType->getNumElements() == 4) {
+            llvm::Type* firstField = structType->getElementType(0);
+            if (auto* arrayTypeField = llvm::dyn_cast<llvm::ArrayType>(firstField)) {
+                if (arrayTypeField->getNumElements() == 24 &&
+                    arrayTypeField->getElementType()->isIntegerTy(8) &&
+                    structType->getElementType(1)->isIntegerTy(64) &&
+                    structType->getElementType(2)->isIntegerTy(64) &&
+                    structType->getElementType(3)->isPointerTy()) {
+                    isArrayMetadataStruct = true;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array metadata struct pattern" << std::endl;
                 }
             }
+
         }
-    } else {
-        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Skipping array metadata check because isFieldAccess=true" << std::endl;
     }
 
     if (allocaInst && isArrayMetadataStruct) {
@@ -6747,20 +7261,22 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             // Load the element value
             llvm::Value* elementValue = builder->CreateLoad(i64Type, elementPtr, "array_elem_value");
 
+            // Arrays store values in i64 slots, but HIR/MIR retains whether the
+            // logical element is a pointer (string or nested array). Restore the
+            // pointer here so calls and string equality receive the correct type.
+            if (getElemOp->resultType &&
+                getElemOp->resultType->kind == mir::MIRType::Kind::Pointer) {
+                return builder->CreateIntToPtr(
+                    elementValue, llvm::PointerType::getUnqual(*context), "array_elem_as_ptr");
+            }
+
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Loaded array element at index" << std::endl;
             return elementValue;
         }
     }
 
-    std::cerr << "\n=== BEFORE STRUCT FIELD ACCESS CHECK ===" << std::endl;
-    std::cerr << "isFieldAccess=" << getElemOp->isFieldAccess << std::endl;
-    std::cerr << "isMetadataFieldAccess=" << isMetadataFieldAccess << std::endl;
-    std::cerr << "arrayType is StructType: " << (llvm::isa<llvm::StructType>(arrayType) ? "YES" : "NO") << std::endl;
-    std::cerr << "indexValue is ConstantInt: " << (llvm::isa<llvm::ConstantInt>(indexValue) ? "YES" : "NO") << std::endl;
-
     // For regular struct field access (not array metadata), use the actual struct type
     if (getElemOp->isFieldAccess && !isMetadataFieldAccess) {
-        std::cerr << "=== STRUCT FIELD ACCESS PATH TAKEN ===" << std::endl;
         if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
             if (auto* constIndex = llvm::dyn_cast<llvm::ConstantInt>(indexValue)) {
                 unsigned fieldIndex = constIndex->getZExtValue();
@@ -6787,8 +7303,6 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
 
                 // Get the field type (use actualFieldIndex to account for ObjectHeader)
                 llvm::Type* fieldType = structType->getElementType(actualFieldIndex);
-
-                std::cerr << "*** GetElement: loading from LLVM index " << actualFieldIndex << std::endl;
 
                 // Load the field value
                 llvm::Value* fieldValue = builder->CreateLoad(fieldType, fieldPtr, "field_value");

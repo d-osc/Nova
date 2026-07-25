@@ -30,7 +30,7 @@ public:
         Void, I1, I8, I16, I32, I64, ISize,
         U8, U16, U32, U64, USize,
         F32, F64,
-        Pointer, Struct, Array, Function
+        Pointer, Struct, Array, Function, JSValue
     };
     
     Kind kind;
@@ -75,7 +75,9 @@ public:
     enum class Kind {
         Copy,      // copy _1
         Move,      // move _2
-        Constant   // const 42
+        Constant,  // const 42
+        AddressOf, // address_of _3
+        HeapCell   // heap_cell(copy _4)
     };
     
     Kind kind;
@@ -106,10 +108,35 @@ public:
     std::string toString() const override;
 };
 
+class MIRAddressOfOperand : public MIROperand {
+public:
+    MIRPlacePtr place;
+
+    explicit MIRAddressOfOperand(MIRPlacePtr p) : place(std::move(p)) {
+        kind = Kind::AddressOf;
+    }
+
+    std::string toString() const override;
+};
+
+class MIRHeapCellOperand : public MIROperand {
+public:
+    std::shared_ptr<MIROperand> value;
+    MIRTypePtr valueType;
+
+    MIRHeapCellOperand(std::shared_ptr<MIROperand> initialValue,
+                       MIRTypePtr initialType)
+        : value(std::move(initialValue)), valueType(std::move(initialType)) {
+        kind = Kind::HeapCell;
+    }
+
+    std::string toString() const override;
+};
+
 class MIRConstOperand : public MIROperand {
 public:
     enum class ConstKind {
-        Int, Float, Bool, String, Null, ZeroInit
+        Int, Float, Bool, String, Null, Undefined, ZeroInit
     };
     
     ConstKind constKind;
@@ -140,6 +167,7 @@ public:
         AddressOf,        // AddressOf(Mut, place)
         Cast,             // Cast(IntToInt, op, type)
         Aggregate,        // Aggregate(Array, [op1, op2])
+        IndirectLoad,     // load through a pointer stored in a place
         Len,              // Len(place)
         Discriminant      // Discriminant(place)
     };
@@ -221,14 +249,24 @@ public:
 class MIRAggregateRValue : public MIRRValue {
 public:
     enum class AggregateKind {
-        Array, Tuple, Struct, SetField
+        Array, Tuple, Struct, SetField, SetElement
+    };
+    enum class ValueKind {
+        Legacy, Number, Boolean, String, Null, Undefined, Object, Boxed
     };
 
     AggregateKind aggregateKind;
     std::vector<MIROperandPtr> elements;
+    MIRTypePtr elementType;
+    std::vector<ValueKind> valueKinds;
+    std::vector<MIRTypePtr> elementTypes;
 
-    MIRAggregateRValue(AggregateKind ak, std::vector<MIROperandPtr> elems)
-        : aggregateKind(ak), elements(std::move(elems)) {
+    MIRAggregateRValue(AggregateKind ak, std::vector<MIROperandPtr> elems,
+                       MIRTypePtr elemType = nullptr,
+                       std::vector<ValueKind> kinds = {},
+                       std::vector<MIRTypePtr> elemTypes = {})
+        : aggregateKind(ak), elements(std::move(elems)), elementType(std::move(elemType)),
+          valueKinds(std::move(kinds)), elementTypes(std::move(elemTypes)) {
         kind = Kind::Aggregate;
     }
 
@@ -240,10 +278,28 @@ public:
     MIROperandPtr array;   // The array operand
     MIROperandPtr index;   // The index operand
     bool isFieldAccess;    // true for struct field access (arr.length), false for array element access (arr[0])
+    MIRTypePtr resultType; // Preserves pointer element types such as strings/nested arrays
 
-    MIRGetElementRValue(MIROperandPtr arr, MIROperandPtr idx, bool isField = false)
-        : array(arr), index(idx), isFieldAccess(isField) {
+    MIRGetElementRValue(MIROperandPtr arr, MIROperandPtr idx, bool isField = false,
+                        MIRTypePtr result = nullptr)
+        : array(arr), index(idx), isFieldAccess(isField), resultType(std::move(result)) {
         kind = Kind::Ref;  // Use Ref kind temporarily (will add GetElement kind later)
+    }
+
+    std::string toString() const override;
+};
+
+class MIRIndirectLoadRValue : public MIRRValue {
+public:
+    MIRPlacePtr pointerPlace;
+    MIRTypePtr resultType;
+    bool isObjectPointer;
+
+    MIRIndirectLoadRValue(MIRPlacePtr pointer, MIRTypePtr result,
+                          bool objectPointer = false)
+        : pointerPlace(std::move(pointer)), resultType(std::move(result)),
+          isObjectPointer(objectPointer) {
+        kind = Kind::IndirectLoad;
     }
 
     std::string toString() const override;
@@ -259,6 +315,7 @@ public:
         Assign,        // _1 = rvalue
         StorageLive,   // StorageLive(_1)
         StorageDead,   // StorageDead(_1)
+        IndirectStore, // *pointer_place = value
         SetDiscriminant,
         Deinit,
         Nop
@@ -302,6 +359,22 @@ public:
         kind = Kind::StorageDead;
     }
     
+    std::string toString() const override;
+};
+
+class MIRIndirectStoreStatement : public MIRStatement {
+public:
+    MIRPlacePtr pointerPlace;
+    MIROperandPtr value;
+    MIRTypePtr valueType;
+
+    MIRIndirectStoreStatement(MIRPlacePtr pointer, MIROperandPtr storedValue,
+                              MIRTypePtr storedType)
+        : pointerPlace(std::move(pointer)), value(std::move(storedValue)),
+          valueType(std::move(storedType)) {
+        kind = Kind::IndirectStore;
+    }
+
     std::string toString() const override;
 };
 

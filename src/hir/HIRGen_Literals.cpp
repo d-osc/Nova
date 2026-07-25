@@ -12,8 +12,16 @@ namespace nova::hir {
 // NumberLiteral - handles numeric constants (integers and floats)
 void HIRGenerator::visit(NumberLiteral& node) {
     // Create numeric constant
-    // Check if the value is an integer
-    if (node.value == static_cast<int64_t>(node.value)) {
+    // Preserve explicitly decimal/exponent literals as floating point even
+    // when their mathematical value is integral. This is required for signed
+    // zero and prevents `1.0` from silently becoming an integer HIR value.
+    const bool prefixedInteger = node.raw.size() > 2 && node.raw[0] == '0' &&
+        (node.raw[1] == 'x' || node.raw[1] == 'X' ||
+         node.raw[1] == 'b' || node.raw[1] == 'B' ||
+         node.raw[1] == 'o' || node.raw[1] == 'O');
+    const bool explicitFloat = !prefixedInteger &&
+        node.raw.find_first_of(".eE") != std::string::npos;
+    if (!explicitFloat && node.value == static_cast<int64_t>(node.value)) {
         lastValue_ = builder_->createIntConstant(static_cast<int64_t>(node.value));
     } else {
         lastValue_ = builder_->createFloatConstant(node.value);
@@ -92,21 +100,21 @@ void HIRGenerator::visit(RegexLiteralExpr& node) {
 
 // BooleanLiteral - handles true/false constants
 void HIRGenerator::visit(BooleanLiteral& node) {
-    lastValue_ = builder_->createIntConstant(node.value ? 1 : 0);
+    lastValue_ = builder_->createBoolConstant(node.value);
 }
 
 // NullLiteral - handles null constant
 void HIRGenerator::visit(NullLiteral& node) {
-    // Create null value as integer 0 (will be represented as pointer 0)
-    auto* nullValue = builder_->createIntConstant(0);
-    lastValue_ = nullValue;
+    (void)node;
+    auto nullType = std::make_shared<HIRType>(HIRType::Kind::Unknown);
+    lastValue_ = builder_->createNullConstant(nullType.get());
 }
 
 // UndefinedLiteral - handles undefined constant
 void HIRGenerator::visit(UndefinedLiteral& node) {
     (void)node;
     auto undefType = std::make_shared<HIRType>(HIRType::Kind::Unknown);
-    lastValue_ = builder_->createNullConstant(undefType.get());
+    lastValue_ = builder_->createUndefinedConstant(undefType.get());
 }
 
 } // namespace nova::hir

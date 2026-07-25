@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <variant>
 #include "nova/Frontend/Token.h"
@@ -35,13 +37,17 @@ class Type : public ASTNode {
 public:
     enum class Kind {
         Void, Any, Unknown, Never,
-        Number, String, Boolean, Null, Undefined,
+        Number, String, Boolean, BigInt, Symbol, Null, Undefined,
         Object, Array, Function, Union, Intersection,
         Tuple, Literal, TypeParameter, IndexedAccess
     };
     
     Kind kind;
     std::string name;  // For named types
+    std::vector<TypePtr> types;  // Union/intersection/tuple members
+    TypePtr elementType;         // Array element type
+    std::unordered_map<std::string, TypePtr> properties; // Structural object members
+    std::unordered_set<std::string> optionalProperties;
     
     explicit Type(Kind k, const std::string& n = "") : kind(k), name(n) {}
     void accept(ASTVisitor& visitor) override { (void)visitor; }
@@ -58,7 +64,9 @@ public:
 class NumberLiteral : public Expr {
 public:
     double value;
-    explicit NumberLiteral(double v) : value(v) {}
+    std::string raw;
+    explicit NumberLiteral(double v, const std::string& spelling = "")
+        : value(v), raw(spelling) {}
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -220,6 +228,9 @@ class FunctionExpr : public Expr {
 public:
     std::string name;  // optional for named function expressions
     std::vector<std::string> params;
+    std::vector<std::shared_ptr<Pattern>> paramPatterns;
+    std::vector<ExprPtr> defaultValues;
+    std::vector<TypePtr> paramTypes;  // Type annotations for parameters
     std::string restParam;  // Rest parameter name (empty if none)
     StmtPtr body;
     bool isAsync = false;
@@ -233,6 +244,8 @@ public:
 class ArrowFunctionExpr : public Expr {
 public:
     std::vector<std::string> params;
+    std::vector<std::shared_ptr<Pattern>> paramPatterns;
+    std::vector<ExprPtr> defaultValues;
     std::vector<TypePtr> paramTypes;  // Type annotations for parameters
     std::string restParam;  // Rest parameter name (empty if none)
     StmtPtr body;  // Always a block statement or expression statement
@@ -390,6 +403,7 @@ public:
     Op op;
     ExprPtr left;
     ExprPtr right;
+    std::shared_ptr<Pattern> pattern;
     
     AssignmentExpr(Op o, ExprPtr l, ExprPtr r)
         : op(o), left(l), right(r) {}
@@ -802,7 +816,10 @@ class Decl : public ASTNode {
 class FunctionDecl : public Decl {
 public:
     std::string name;
+    std::vector<std::string> typeParams;
+    std::vector<TypePtr> typeParamConstraints;
     std::vector<std::string> params;
+    std::vector<std::shared_ptr<Pattern>> paramPatterns;
     std::vector<TypePtr> paramTypes;  // Type annotations for parameters
     std::vector<ExprPtr> defaultValues;  // Default values for parameters (nullptr if no default)
     std::string restParam;  // Rest parameter name (empty if none), e.g., "args" in function(...args)
@@ -931,6 +948,7 @@ public:
     std::string namespaceExport;
     ExprPtr declaration;  // For export default <expr>
     DeclPtr exportedDecl; // For export <decl>
+    StmtPtr exportedStmt; // For export const/let/var declarations
     std::vector<Specifier> specifiers;
     
     ExportDecl() = default;

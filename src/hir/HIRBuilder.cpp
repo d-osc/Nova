@@ -121,18 +121,9 @@ HIRInstruction* HIRBuilder::createMul(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createDiv(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    // Apply type promotion: F64 if either is float, otherwise I64
-    HIRTypePtr resultType;
-    bool lhsIsFloat = (lhs->type && (lhs->type->kind == HIRType::Kind::F64 ||
-                                     lhs->type->kind == HIRType::Kind::F32));
-    bool rhsIsFloat = (rhs->type && (rhs->type->kind == HIRType::Kind::F64 ||
-                                     rhs->type->kind == HIRType::Kind::F32));
-
-    if (lhsIsFloat || rhsIsFloat) {
-        resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
-    } else {
-        resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
-    }
+    // JavaScript Number division is floating-point even when both source
+    // literals happen to be integral (for example, 5 / 2 === 2.5).
+    HIRTypePtr resultType = std::make_shared<HIRType>(HIRType::Kind::F64);
 
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Div, resultType, generateName(name));
@@ -197,8 +188,13 @@ HIRInstruction* HIRBuilder::createPow(HIRValue* lhs, HIRValue* rhs, const std::s
 
 // Bitwise Operations
 HIRInstruction* HIRBuilder::createAnd(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    // Bitwise operations always return I64 in JavaScript
-    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    // Boolean conjunction is also used internally for ToBoolean. Preserve
+    // i1 in that case; JavaScript's user-visible bitwise operator remains I64.
+    const bool booleanOperands = lhs && rhs && lhs->type && rhs->type &&
+        lhs->type->kind == HIRType::Kind::Bool &&
+        rhs->type->kind == HIRType::Kind::Bool;
+    auto resultType = std::make_shared<HIRType>(
+        booleanOperands ? HIRType::Kind::Bool : HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::And, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -211,8 +207,11 @@ HIRInstruction* HIRBuilder::createAnd(HIRValue* lhs, HIRValue* rhs, const std::s
 }
 
 HIRInstruction* HIRBuilder::createOr(HIRValue* lhs, HIRValue* rhs, const std::string& name) {
-    // Bitwise operations always return I64 in JavaScript
-    auto resultType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    const bool booleanOperands = lhs && rhs && lhs->type && rhs->type &&
+        lhs->type->kind == HIRType::Kind::Bool &&
+        rhs->type->kind == HIRType::Kind::Bool;
+    auto resultType = std::make_shared<HIRType>(
+        booleanOperands ? HIRType::Kind::Bool : HIRType::Kind::I64);
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Or, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(lhs, [](HIRValue*){}));
@@ -284,6 +283,20 @@ HIRInstruction* HIRBuilder::createNot(HIRValue* operand, const std::string& name
     auto resultType = operand->type;
     auto inst = std::make_shared<HIRInstruction>(
         HIRInstruction::Opcode::Not, resultType, generateName(name));
+    inst->addOperand(std::shared_ptr<HIRValue>(operand, [](HIRValue*){}));
+
+    if (currentBlock_) {
+        currentBlock_->addInstruction(inst);
+    }
+    return inst.get();
+}
+
+HIRInstruction* HIRBuilder::createNeg(HIRValue* operand, const std::string& name) {
+    auto resultType = operand && operand->type
+        ? operand->type
+        : std::make_shared<HIRType>(HIRType::Kind::I64);
+    auto inst = std::make_shared<HIRInstruction>(
+        HIRInstruction::Opcode::Neg, resultType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(operand, [](HIRValue*){}));
 
     if (currentBlock_) {
@@ -656,9 +669,22 @@ HIRInstruction* HIRBuilder::createSetField(HIRValue* struct_, uint32_t fieldInde
 }
 
 HIRInstruction* HIRBuilder::createGetElement(HIRValue* array, HIRValue* index, const std::string& name) {
-    auto anyType = std::make_shared<HIRType>(HIRType::Kind::Any);
+    HIRTypePtr elementType = std::make_shared<HIRType>(HIRType::Kind::Any);
+    if (array && array->type) {
+        if (auto* pointerType = dynamic_cast<HIRPointerType*>(array->type.get())) {
+            if (auto* arrayType = dynamic_cast<HIRArrayType*>(pointerType->pointeeType.get())) {
+                if (arrayType->elementType) {
+                    elementType = arrayType->elementType;
+                }
+            }
+        } else if (auto* arrayType = dynamic_cast<HIRArrayType*>(array->type.get())) {
+            if (arrayType->elementType) {
+                elementType = arrayType->elementType;
+            }
+        }
+    }
     auto inst = std::make_shared<HIRInstruction>(
-        HIRInstruction::Opcode::GetElement, anyType, generateName(name));
+        HIRInstruction::Opcode::GetElement, elementType, generateName(name));
     inst->addOperand(std::shared_ptr<HIRValue>(array, [](HIRValue*){}));
     inst->addOperand(std::shared_ptr<HIRValue>(index, [](HIRValue*){}));
 
@@ -683,8 +709,28 @@ HIRInstruction* HIRBuilder::createSetElement(HIRValue* array, HIRValue* index, H
 }
 
 HIRInstruction* HIRBuilder::createArrayConstruct(const std::vector<HIRValue*>& elements, const std::string& name) {
-    // Create array type based on elements
-    auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);  // For now, assume i64 arrays
+    // Preserve homogeneous element types. Heterogeneous arrays use the unified
+    // tagged JavaScript value representation rather than ambiguous raw i64 bits.
+    HIRTypePtr elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
+    if (!elements.empty() && elements.front() && elements.front()->type) {
+        elementType = elements.front()->type;
+        // Null and undefined literals carry the internal Unknown type. Arrays
+        // containing them must use the tagged representation so their identity
+        // survives storage and later default-value checks.
+        if (elementType->kind == HIRType::Kind::Unknown ||
+            elementType->kind == HIRType::Kind::Any) {
+            elementType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+        }
+        for (const auto* element : elements) {
+            if (!element || !element->type ||
+                element->type->kind == HIRType::Kind::Unknown ||
+                element->type->kind == HIRType::Kind::Any ||
+                element->type->kind != elementType->kind) {
+                elementType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                break;
+            }
+        }
+    }
     auto arrayType = std::make_shared<HIRArrayType>(elementType, elements.size());
 
     // ArrayConstruct returns a pointer to the array, not the array itself
@@ -757,6 +803,13 @@ HIRConstant* HIRBuilder::createNullConstant(HIRType* type) {
     }
 
     return new HIRConstant(ownedType, HIRConstant::Kind::Null, 0);
+}
+
+HIRConstant* HIRBuilder::createUndefinedConstant(HIRType* type) {
+    HIRTypePtr ownedType = type
+        ? std::make_shared<HIRType>(*type)
+        : std::make_shared<HIRType>(HIRType::Kind::Unknown);
+    return new HIRConstant(ownedType, HIRConstant::Kind::Undefined, 0);
 }
 
 } // namespace nova::hir

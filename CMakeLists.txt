@@ -197,6 +197,7 @@ set(NOVA_SOURCES
     src/runtime/ClosureEnv.cpp
     src/runtime/String.cpp
     src/runtime/Object.cpp
+    src/runtime/Value.cpp
     src/runtime/Number.cpp
     src/runtime/Math.cpp
     src/runtime/Function.cpp
@@ -204,6 +205,7 @@ set(NOVA_SOURCES
     src/runtime/Regex.cpp
     src/runtime/Error.cpp
     src/runtime/ArrayBuffer.cpp
+    src/runtime/BigInt.cpp
     src/runtime/Disposable.cpp
     src/runtime/Promise.cpp
     src/runtime/Generator.cpp
@@ -325,9 +327,27 @@ install(TARGETS nova DESTINATION bin)
 install(TARGETS novacore DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
 
-# Testing - temporarily disabled
-# enable_testing()
-# add_subdirectory(tests)
+# Conformance tests
+#
+# The historical GoogleTest targets in tests/CMakeLists.txt are intentionally
+# not enabled here yet because most of them are placeholders. This suite runs
+# only source files that declare explicit expectations.
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME nova-conformance
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_all_tests.py"
+            --nova "$<TARGET_FILE:nova>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/conformance"
+    )
+    set_tests_properties(nova-conformance PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        TIMEOUT 180
+    )
+endif()
 
 # Documentation
 option(BUILD_DOCS "Build documentation" OFF)

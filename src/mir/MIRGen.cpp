@@ -145,6 +145,9 @@ private:
                 // This allows untyped parameters to work with array callbacks
                 // Fixed: Changed from Pointer to I64 as comment intended
                 return std::make_shared<MIRType>(MIRType::Kind::I64);
+
+            case hir::HIRType::Kind::JSValue:
+                return std::make_shared<MIRType>(MIRType::Kind::JSValue);
             
             default:
                 return std::make_shared<MIRType>(MIRType::Kind::Void);
@@ -637,9 +640,9 @@ private:
         // Analyze switch statements to set up switch break contexts
         analyzeSwitches(hirFunc);
 
-        // MIR-Level Copy-In: If this function has an __env parameter, create local variables
-        // for captured variables and load them from environment at function entry
-        if (!hirFunc->parameters.empty()) {
+        // Captures are lowered explicitly by HIR as binding-cell accesses.
+        // The legacy MIR copy-in path snapshots values and breaks mutation.
+        if (false && !hirFunc->parameters.empty()) {
             auto lastParam = hirFunc->parameters.back();
             if (lastParam->name == "__env") {
                 std::string funcName = hirFunc->name;
@@ -675,8 +678,15 @@ private:
                                 const std::string& varName = capturedNames[i];
                                 hir::HIRValue* hirValue = capturedValues[i];
 
-                                // Get the type from the HIR value
-                                auto varType = translateType(hirValue->type.get());
+                                // The environment field stores the captured
+                                // value, while hirValue can be an alloca pointer.
+                                hir::HIRType* capturedType = hirValue->type.get();
+                                if (auto* pointer = dynamic_cast<
+                                        hir::HIRPointerType*>(capturedType);
+                                    pointer && pointer->pointeeType) {
+                                    capturedType = pointer->pointeeType.get();
+                                }
+                                auto varType = translateType(capturedType);
 
                                 // Create a local place for this captured variable
                                 auto localPlace = currentFunction_->createLocal(varType, "__captured_" + varName);
@@ -685,7 +695,6 @@ private:
                                 // Map the HIR value to this MIR place so references to it work
                                 valueMap_[hirValue] = localPlace;
 
-                                std::cout << "[COPY-IN] Creating local for '" << varName << "' field " << i << std::endl;
 
                                 // Generate Copy-In: load from __env.field[i] to local
                                 auto envOperand = builder_->createCopyOperand(envPlace);
@@ -695,7 +704,7 @@ private:
                                 );
 
                                 auto getElemRValue = std::make_shared<MIRGetElementRValue>(
-                                    envOperand, fieldIndexOperand, true);
+                                    envOperand, fieldIndexOperand, true, varType);
 
                                 builder_->createAssign(localPlace, getElemRValue);
 
@@ -851,9 +860,17 @@ private:
         // Create new local for this value
         // For pointer types (like alloca), use the pointee type instead
         hir::HIRType* typeToTranslate = hirValue->type.get();
+        bool preservePointer = false;
+        if (auto* instruction = dynamic_cast<hir::HIRInstruction*>(hirValue);
+            instruction &&
+            ((instruction->opcode == hir::HIRInstruction::Opcode::GetField &&
+              instruction->name.find(".cell") != std::string::npos) ||
+             instruction->name.find(".closure.cell") != std::string::npos)) {
+            preservePointer = true;
+        }
 
         try {
-            if (typeToTranslate) {
+            if (typeToTranslate && !preservePointer) {
                 if (auto* ptrType = dynamic_cast<hir::HIRPointerType*>(typeToTranslate)) {
                     if (ptrType && ptrType->pointeeType) {
                         // Don't extract pointee for array/struct pointers - keep them as pointers
@@ -914,6 +931,8 @@ private:
 
                 case hir::HIRConstant::Kind::Null:
                     return builder_->createNullConstant(mirType);
+                case hir::HIRConstant::Kind::Undefined:
+                    return builder_->createUndefinedConstant(mirType);
 
                 default:
                     return builder_->createZeroInitConstant(mirType);
@@ -1065,6 +1084,29 @@ private:
     void generateLoad(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
         if (hirInst->operands.empty()) return;
+
+        if (auto* pointerInstruction = dynamic_cast<hir::HIRInstruction*>(
+                hirInst->operands[0].get());
+            pointerInstruction &&
+            ((pointerInstruction->opcode ==
+                  hir::HIRInstruction::Opcode::GetField &&
+              pointerInstruction->name.find(".cell") != std::string::npos) ||
+             pointerInstruction->name.find(".closure.cell") !=
+                 std::string::npos)) {
+            auto pointerPlace = getOrCreatePlace(pointerInstruction);
+            auto dest = getOrCreatePlace(hirInst);
+            bool isObjectPointer = false;
+            if (auto* resultPointer = dynamic_cast<hir::HIRPointerType*>(
+                    hirInst->type.get());
+                resultPointer && resultPointer->pointeeType &&
+                resultPointer->pointeeType->kind ==
+                    hir::HIRType::Kind::Struct) {
+                isObjectPointer = true;
+            }
+            builder_->createAssign(dest, std::make_shared<MIRIndirectLoadRValue>(
+                pointerPlace, dest->type, isObjectPointer));
+            return;
+        }
         
         auto ptr = translateOperand(hirInst->operands[0].get());
         auto dest = getOrCreatePlace(hirInst);
@@ -1081,13 +1123,41 @@ private:
         // Check if the store destination is a GetField instruction
         // If so, we need to generate a SetField operation to write into the struct
         auto* destInst = dynamic_cast<hir::HIRInstruction*>(hirInst->operands[1].get());
+        if (destInst &&
+            destInst->name.find(".closure.cell") != std::string::npos) {
+            auto pointerPlace = getOrCreatePlace(destInst);
+            auto valueOperand = translateOperand(hirInst->operands[0].get());
+            auto valueType = translateType(hirInst->operands[0]->type.get());
+            builder_->getInsertBlock()->statements.push_back(
+                std::make_shared<MIRIndirectStoreStatement>(
+                    pointerPlace, valueOperand, valueType));
+            return;
+        }
         if (destInst && destInst->opcode == hir::HIRInstruction::Opcode::GetField) {
+            if (destInst->name.find(".cell") != std::string::npos) {
+                auto pointerPlace = getOrCreatePlace(destInst);
+                auto valueOperand = translateOperand(hirInst->operands[0].get());
+                auto valueType = translateType(hirInst->operands[0]->type.get());
+                builder_->getInsertBlock()->statements.push_back(
+                    std::make_shared<MIRIndirectStoreStatement>(
+                        pointerPlace, valueOperand, valueType));
+                return;
+            }
             // Store to struct field: generate SetField
             // GetField operands: [0] = struct pointer, [1] = field index constant
             if (destInst->operands.size() >= 2) {
                 auto structOperand = translateOperand(destInst->operands[0].get());
                 auto fieldIndexOperand = translateOperand(destInst->operands[1].get());
-                auto valueOperand = translateOperand(hirInst->operands[0].get());
+                MIROperandPtr valueOperand;
+                if (auto* valueInstruction = dynamic_cast<hir::HIRInstruction*>(
+                        hirInst->operands[0].get());
+                    valueInstruction && valueInstruction->opcode ==
+                        hir::HIRInstruction::Opcode::Alloca) {
+                    valueOperand = std::make_shared<MIRAddressOfOperand>(
+                        getOrCreatePlace(valueInstruction));
+                } else {
+                    valueOperand = translateOperand(hirInst->operands[0].get());
+                }
 
                 // Get the struct place from the operand
                 MIRPlacePtr structPlace = nullptr;
@@ -1280,77 +1350,8 @@ private:
     void generateReturn(hir::HIRInstruction* hirInst, MIRBasicBlock* mirBlock) {
         (void)mirBlock;
 
-        // Copy-Out: Write modified captured variables back to environment before returning
-        if (currentHIRFunction_ && !currentHIRFunction_->parameters.empty()) {
-            auto lastParam = currentHIRFunction_->parameters.back();
-            if (lastParam->name == "__env") {
-                std::string funcName = currentHIRFunction_->name;
-                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Function " << funcName << " returning, performing Copy-Out" << std::endl;
-
-                // Get captured variable names and values for this function
-                auto capturedNamesIt = hirModule_->closureCapturedVars.find(funcName);
-                auto capturedValuesIt = hirModule_->closureCapturedVarValues.find(funcName);
-
-                if (capturedNamesIt != hirModule_->closureCapturedVars.end() &&
-                    capturedValuesIt != hirModule_->closureCapturedVarValues.end()) {
-
-                    const auto& capturedNames = capturedNamesIt->second;
-                    const auto& capturedValues = capturedValuesIt->second;
-
-                    if (!capturedNames.empty()) {
-                        // Get the __env parameter place
-                        MIRPlacePtr envPlace = valueMap_[lastParam];
-
-                        if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Copy-Out for " << capturedNames.size()
-                                                  << " captured variables" << std::endl;
-
-                        // For each captured variable, write it back to the environment
-                        for (size_t i = 0; i < capturedNames.size() && i < capturedValues.size(); ++i) {
-                            const std::string& varName = capturedNames[i];
-                            hir::HIRValue* hirValue = capturedValues[i];
-
-                            // Look up the local place for this captured variable
-                            auto localPlaceIt = valueMap_.find(hirValue);
-                            if (localPlaceIt != valueMap_.end()) {
-                                auto localPlace = localPlaceIt->second;
-
-                                std::cout << "[COPY-OUT] Writing '" << varName << "' back to env field " << i << std::endl;
-
-                                // Generate Copy-Out: __env.field[i] = local
-                                // Using SetField pattern (3-element Aggregate)
-                                auto envOperand = builder_->createCopyOperand(envPlace);
-                                auto fieldIndexOperand = builder_->createIntConstant(
-                                    static_cast<int64_t>(i),
-                                    std::make_shared<MIRType>(MIRType::Kind::I64)
-                                );
-                                auto valueOperand = builder_->createCopyOperand(localPlace);
-
-                                std::vector<MIROperandPtr> setFieldElements;
-                                setFieldElements.push_back(envOperand);
-                                setFieldElements.push_back(fieldIndexOperand);
-                                setFieldElements.push_back(valueOperand);
-
-                                auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
-                                    MIRAggregateRValue::AggregateKind::SetField,
-                                    setFieldElements
-                                );
-
-                                // Create temp place for the SetField result
-                                auto tempPlace = currentFunction_->createLocal(
-                                    std::make_shared<MIRType>(MIRType::Kind::Void),
-                                    "__copyout_temp"
-                                );
-
-                                builder_->createAssign(tempPlace, setFieldRValue);
-
-                                if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Copied '" << varName
-                                                          << "' to __env field " << i << std::endl;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Captured assignments already target __env fields directly. A second
+        // return-time copy-out would restore stale entry values over mutations.
 
         if (!hirInst->operands.empty()) {
             // Check if we're returning a function reference (closure)
@@ -1484,6 +1485,8 @@ private:
                         auto varValuesIt = hirModule_->closureCapturedVarValues.find(functionName);
                         if (varValuesIt != hirModule_->closureCapturedVarValues.end()) {
                             const auto& capturedVarValues = varValuesIt->second;
+                            auto capturedNamesIt =
+                                hirModule_->closureCapturedVars.find(functionName);
 
                             if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Initializing " << capturedVarValues.size()
                                                       << " environment fields" << std::endl;
@@ -1491,14 +1494,87 @@ private:
                             // Initialize each field
                             for (size_t i = 0; i < capturedVarValues.size(); ++i) {
                                 hir::HIRValue* hirVarValue = capturedVarValues[i];
+                                MIROperandPtr varOperand;
 
                                 // Look up the MIR place for this HIR value
                                 auto mirPlaceIt = valueMap_.find(hirVarValue);
-                                if (mirPlaceIt != valueMap_.end()) {
+                                const bool belongsToCurrentFunction =
+                                    mirPlaceIt != valueMap_.end() &&
+                                    (std::find(currentFunction_->arguments.begin(),
+                                               currentFunction_->arguments.end(),
+                                               mirPlaceIt->second) !=
+                                         currentFunction_->arguments.end() ||
+                                     std::find(currentFunction_->locals.begin(),
+                                               currentFunction_->locals.end(),
+                                               mirPlaceIt->second) !=
+                                         currentFunction_->locals.end());
+                                if (belongsToCurrentFunction) {
                                     auto varPlace = mirPlaceIt->second;
 
-                                    // Create operand from the variable place
-                                    auto varOperand = builder_->createCopyOperand(varPlace);
+                                    // A local binding escapes this frame, so move
+                                    // its current value into a heap-backed cell.
+                                    varOperand = std::make_shared<MIRHeapCellOperand>(
+                                        builder_->createCopyOperand(varPlace),
+                                        varPlace->type);
+                                } else if (capturedNamesIt !=
+                                               hirModule_->closureCapturedVars.end() &&
+                                           i < capturedNamesIt->second.size() &&
+                                           currentHIRFunction_ &&
+                                           !currentHIRFunction_->parameters.empty()) {
+                                    const std::string& capturedName =
+                                        capturedNamesIt->second[i];
+                                    auto parentNamesIt =
+                                        hirModule_->closureCapturedVars.find(
+                                            currentHIRFunction_->name);
+                                    auto* parentEnvironment =
+                                        currentHIRFunction_->parameters.back();
+                                    auto parentEnvironmentPlace =
+                                        valueMap_.find(parentEnvironment);
+                                    if (parentEnvironment->name == "__env" &&
+                                        parentNamesIt !=
+                                            hirModule_->closureCapturedVars.end() &&
+                                        parentEnvironmentPlace != valueMap_.end()) {
+                                        auto parentName = std::find(
+                                            parentNamesIt->second.begin(),
+                                            parentNamesIt->second.end(),
+                                            capturedName);
+                                        if (parentName !=
+                                            parentNamesIt->second.end()) {
+                                            const auto parentIndex =
+                                                static_cast<int64_t>(std::distance(
+                                                    parentNamesIt->second.begin(),
+                                                    parentName));
+                                            auto pointerType =
+                                                std::make_shared<MIRType>(
+                                                    MIRType::Kind::Pointer);
+                                            auto inheritedCell =
+                                                currentFunction_->createLocal(
+                                                    pointerType,
+                                                    "__transitive_cell_" +
+                                                        capturedName);
+                                            builder_->createStorageLive(
+                                                inheritedCell);
+                                            auto access = std::make_shared<
+                                                MIRGetElementRValue>(
+                                                builder_->createCopyOperand(
+                                                    parentEnvironmentPlace->second),
+                                                builder_->createIntConstant(
+                                                    parentIndex,
+                                                    std::make_shared<MIRType>(
+                                                        MIRType::Kind::I64)),
+                                                true, pointerType);
+                                            builder_->createAssign(
+                                                inheritedCell, access);
+                                            // Reuse the ancestor cell so writes
+                                            // remain shared across all levels.
+                                            varOperand =
+                                                builder_->createCopyOperand(
+                                                    inheritedCell);
+                                        }
+                                    }
+                                }
+
+                                if (varOperand) {
 
                                     // Create field index operand
                                     auto fieldIndexOperand = builder_->createIntConstant(i,
@@ -1527,9 +1603,8 @@ private:
 
                                     builder_->createAssign(tempPlace, setFieldRValue);
 
-                                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Set field " << i
-                                                              << " from variable (type: "
-                                                              << static_cast<int>(varPlace->type->kind) << ")" << std::endl;
+                                    if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: Set closure field "
+                                                              << i << std::endl;
                                 } else {
                                     if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: WARNING - Could not find MIR place for captured variable"
                                                               << std::endl;
@@ -1710,15 +1785,42 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
 
         // Convert HIR array elements to MIR operands
         std::vector<MIROperandPtr> mirElements;
+        std::vector<MIRAggregateRValue::ValueKind> valueKinds;
         for (const auto& elem : hirInst->operands) {
             auto operand = translateOperand(elem.get());
             mirElements.push_back(operand);
+            using ValueKind = MIRAggregateRValue::ValueKind;
+            ValueKind valueKind = ValueKind::Object;
+            if (auto* constant = dynamic_cast<hir::HIRConstant*>(elem.get())) {
+                switch (constant->kind) {
+                    case hir::HIRConstant::Kind::Integer:
+                    case hir::HIRConstant::Kind::Float: valueKind = ValueKind::Number; break;
+                    case hir::HIRConstant::Kind::Boolean: valueKind = ValueKind::Boolean; break;
+                    case hir::HIRConstant::Kind::String: valueKind = ValueKind::String; break;
+                    case hir::HIRConstant::Kind::Null: valueKind = ValueKind::Null; break;
+                    case hir::HIRConstant::Kind::Undefined: valueKind = ValueKind::Undefined; break;
+                }
+            } else if (elem && elem->type) {
+                if (elem->type->isNumeric()) valueKind = ValueKind::Number;
+                else if (elem->type->kind == hir::HIRType::Kind::Bool) valueKind = ValueKind::Boolean;
+                else if (elem->type->kind == hir::HIRType::Kind::String) valueKind = ValueKind::String;
+                else if (elem->type->kind == hir::HIRType::Kind::JSValue) valueKind = ValueKind::Boxed;
+            }
+            valueKinds.push_back(valueKind);
         }
 
         // Create aggregate rvalue for array
+        MIRTypePtr elementType;
+        if (auto* pointerType = dynamic_cast<hir::HIRPointerType*>(hirInst->type.get())) {
+            if (auto* arrayType = dynamic_cast<hir::HIRArrayType*>(pointerType->pointeeType.get())) {
+                elementType = translateType(arrayType->elementType.get());
+            }
+        }
         auto aggregateRValue = std::make_shared<MIRAggregateRValue>(
             MIRAggregateRValue::AggregateKind::Array,
-            mirElements
+            mirElements,
+            elementType,
+            valueKinds
         );
 
         builder_->createAssign(dest, aggregateRValue);
@@ -1733,7 +1835,7 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         auto dest = getOrCreatePlace(hirInst);
 
         // Create GetElement rvalue
-        auto getElementRValue = std::make_shared<MIRGetElementRValue>(array, index);
+        auto getElementRValue = std::make_shared<MIRGetElementRValue>(array, index, false, dest->type);
         builder_->createAssign(dest, getElementRValue);
     }
 
@@ -1746,6 +1848,36 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         auto index = translateOperand(hirInst->operands[1].get());
         auto value = translateOperand(hirInst->operands[2].get());
 
+        MIRTypePtr elementType;
+        if (hirInst->operands[0] && hirInst->operands[0]->type) {
+            if (auto* pointerType = dynamic_cast<hir::HIRPointerType*>(
+                    hirInst->operands[0]->type.get())) {
+                if (auto* arrayType = dynamic_cast<hir::HIRArrayType*>(
+                        pointerType->pointeeType.get())) {
+                    elementType = translateType(arrayType->elementType.get());
+                }
+            }
+        }
+
+        using ValueKind = MIRAggregateRValue::ValueKind;
+        ValueKind valueKind = ValueKind::Object;
+        auto* hirValue = hirInst->operands[2].get();
+        if (auto* constant = dynamic_cast<hir::HIRConstant*>(hirValue)) {
+            switch (constant->kind) {
+                case hir::HIRConstant::Kind::Integer:
+                case hir::HIRConstant::Kind::Float: valueKind = ValueKind::Number; break;
+                case hir::HIRConstant::Kind::Boolean: valueKind = ValueKind::Boolean; break;
+                case hir::HIRConstant::Kind::String: valueKind = ValueKind::String; break;
+                case hir::HIRConstant::Kind::Null: valueKind = ValueKind::Null; break;
+                case hir::HIRConstant::Kind::Undefined: valueKind = ValueKind::Undefined; break;
+            }
+        } else if (hirValue && hirValue->type) {
+            if (hirValue->type->isNumeric()) valueKind = ValueKind::Number;
+            else if (hirValue->type->kind == hir::HIRType::Kind::Bool) valueKind = ValueKind::Boolean;
+            else if (hirValue->type->kind == hir::HIRType::Kind::String) valueKind = ValueKind::String;
+            else if (hirValue->type->kind == hir::HIRType::Kind::JSValue) valueKind = ValueKind::Boxed;
+        }
+
         // Encode as special 3-element aggregate (same pattern as SetField)
         std::vector<MIROperandPtr> elements;
         elements.push_back(arrayPtr);
@@ -1754,8 +1886,10 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
 
         // Use Array aggregate kind to differentiate from SetField
         auto setElemRValue = std::make_shared<MIRAggregateRValue>(
-            MIRAggregateRValue::AggregateKind::Array,  // Use Array kind for SetElement
-            elements
+            MIRAggregateRValue::AggregateKind::SetElement,
+            elements,
+            elementType,
+            std::vector<ValueKind>{ValueKind::Legacy, ValueKind::Legacy, valueKind}
         );
 
         // Create a dummy place for the result
@@ -1772,15 +1906,46 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
 
         // Convert HIR struct fields to MIR operands
         std::vector<MIROperandPtr> mirFields;
+        std::vector<MIRTypePtr> fieldTypes;
+        std::vector<MIRAggregateRValue::ValueKind> valueKinds;
+        hir::HIRStructType* structType = nullptr;
+        if (auto* pointerType = dynamic_cast<hir::HIRPointerType*>(hirInst->type.get())) {
+            structType = dynamic_cast<hir::HIRStructType*>(pointerType->pointeeType.get());
+        }
         for (const auto& field : hirInst->operands) {
             auto operand = translateOperand(field.get());
             mirFields.push_back(operand);
+            const size_t fieldIndex = mirFields.size() - 1;
+            fieldTypes.push_back(structType && fieldIndex < structType->fields.size()
+                ? translateType(structType->fields[fieldIndex].type.get())
+                : translateType(field->type.get()));
+            using ValueKind = MIRAggregateRValue::ValueKind;
+            ValueKind valueKind = ValueKind::Object;
+            if (auto* constant = dynamic_cast<hir::HIRConstant*>(field.get())) {
+                switch (constant->kind) {
+                    case hir::HIRConstant::Kind::Integer:
+                    case hir::HIRConstant::Kind::Float: valueKind = ValueKind::Number; break;
+                    case hir::HIRConstant::Kind::Boolean: valueKind = ValueKind::Boolean; break;
+                    case hir::HIRConstant::Kind::String: valueKind = ValueKind::String; break;
+                    case hir::HIRConstant::Kind::Null: valueKind = ValueKind::Null; break;
+                    case hir::HIRConstant::Kind::Undefined: valueKind = ValueKind::Undefined; break;
+                }
+            } else if (field && field->type) {
+                if (field->type->isNumeric()) valueKind = ValueKind::Number;
+                else if (field->type->kind == hir::HIRType::Kind::Bool) valueKind = ValueKind::Boolean;
+                else if (field->type->kind == hir::HIRType::Kind::String) valueKind = ValueKind::String;
+                else if (field->type->kind == hir::HIRType::Kind::JSValue) valueKind = ValueKind::Boxed;
+            }
+            valueKinds.push_back(valueKind);
         }
 
         // Create aggregate rvalue for struct
         auto aggregateRValue = std::make_shared<MIRAggregateRValue>(
             MIRAggregateRValue::AggregateKind::Struct,
-            mirFields
+            mirFields,
+            nullptr,
+            valueKinds,
+            fieldTypes
         );
 
         builder_->createAssign(dest, aggregateRValue);
@@ -1804,7 +1969,8 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: GetField dest type = " << static_cast<int>(dest->type->kind) << std::endl;
 
         // Create GetElement rvalue for field access with isFieldAccess=true
-        auto getFieldRValue = std::make_shared<MIRGetElementRValue>(structPtr, fieldIndex, true);
+        auto getFieldRValue = std::make_shared<MIRGetElementRValue>(
+            structPtr, fieldIndex, true, dest->type);
 
         builder_->createAssign(dest, getFieldRValue);
     }
@@ -1819,6 +1985,21 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         auto structPtr = translateOperand(hirInst->operands[0].get());
         auto fieldIndex = translateOperand(hirInst->operands[1].get());
         auto value = translateOperand(hirInst->operands[2].get());
+        MIRTypePtr fieldType;
+        if (auto* pointerType = dynamic_cast<hir::HIRPointerType*>(
+                hirInst->operands[0]->type.get())) {
+            if (auto* structType = dynamic_cast<hir::HIRStructType*>(
+                    pointerType->pointeeType.get())) {
+                if (auto* indexConstant = dynamic_cast<hir::HIRConstant*>(
+                        hirInst->operands[1].get())) {
+                    const auto index = static_cast<size_t>(
+                        std::get<int64_t>(indexConstant->value));
+                    if (index < structType->fields.size()) {
+                        fieldType = translateType(structType->fields[index].type.get());
+                    }
+                }
+            }
+        }
 
         // Create a SetElement RValue that encodes the store operation
         // We create a special aggregate-like operation with the value to store
@@ -1831,7 +2012,14 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         // This distinguishes it from actual struct construction with 3 fields
         auto setFieldRValue = std::make_shared<MIRAggregateRValue>(
             MIRAggregateRValue::AggregateKind::SetField,
-            elements
+            elements,
+            fieldType,
+            std::vector<MIRAggregateRValue::ValueKind>{
+                MIRAggregateRValue::ValueKind::Legacy,
+                MIRAggregateRValue::ValueKind::Legacy,
+                hirInst->operands[2]->type->kind == hir::HIRType::Kind::JSValue
+                    ? MIRAggregateRValue::ValueKind::Boxed
+                    : MIRAggregateRValue::ValueKind::Object}
         );
 
         // Create a dummy place for the result (void type)

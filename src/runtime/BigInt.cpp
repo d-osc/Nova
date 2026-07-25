@@ -356,7 +356,6 @@ void* nova_bigint_sub(void* aPtr, void* bPtr) {
     if (!bPtr) return nova_bigint_clone(aPtr);
 
     // a - b = a + (-b)
-    NovaBigInt* b = static_cast<NovaBigInt*>(bPtr);
     NovaBigInt* negB = static_cast<NovaBigInt*>(nova_bigint_clone(bPtr));
     negB->negative = !negB->negative;
     if (negB->isZero()) negB->negative = false;
@@ -744,8 +743,6 @@ void* nova_bigint_asIntN(int64_t bits, void* ptr) {
     void* quotient;
     nova_bigint_divmod(ptr, twoPowBits, &quotient, &remainder);
     nova_bigint_free(quotient);
-
-    NovaBigInt* rem = static_cast<NovaBigInt*>(remainder);
 
     // Check if we need to convert to negative (if high bit is set)
     void* twoPowBitsMinus1 = nova_bigint_shl(nova_bigint_from_int64(1), bits - 1);

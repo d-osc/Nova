@@ -27,6 +27,7 @@ public:
     MIROperandPtr createBoolConstant(bool value, MIRTypePtr type);
     MIROperandPtr createStringConstant(const std::string& value, MIRTypePtr type);
     MIROperandPtr createNullConstant(MIRTypePtr type);
+    MIROperandPtr createUndefinedConstant(MIRTypePtr type);
     MIROperandPtr createZeroInitConstant(MIRTypePtr type);
     
     // ==================== RValue Creation ====================

@@ -37,7 +37,7 @@ public:
         Array, Tuple, Struct,
         Function, Closure,
         Optional, Result,
-        Any, Unknown
+        Any, JSValue, Unknown
     };
     
     Kind kind;
@@ -344,6 +344,7 @@ public:
     HIRInstruction* createShr(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createUShr(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
     HIRInstruction* createNot(HIRValue* operand, const std::string& name = "");
+    HIRInstruction* createNeg(HIRValue* operand, const std::string& name = "");
 
     // Comparison
     HIRInstruction* createEq(HIRValue* lhs, HIRValue* rhs, const std::string& name = "");
@@ -384,6 +385,7 @@ public:
     HIRConstant* createBoolConstant(bool value);
     HIRConstant* createStringConstant(const std::string& value);
     HIRConstant* createNullConstant(HIRType* type);
+    HIRConstant* createUndefinedConstant(HIRType* type);
     
 private:
     [[maybe_unused]] HIRModule* module_;

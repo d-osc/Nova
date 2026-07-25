@@ -245,15 +245,28 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     
     // Type parameters (generics)
     if (match(TokenType::Less)) {
-        // Parse type parameters - placeholder for now
         while (!check(TokenType::Greater) && !isAtEnd()) {
-            advance();
+            Token typeParameter = consume(
+                TokenType::Identifier, "Expected type parameter name");
+            func->typeParams.push_back(typeParameter.value);
+            TypePtr constraint = nullptr;
+            if (match(TokenType::KeywordExtends)) {
+                constraint = parseTypeAnnotation();
+            }
+            func->typeParamConstraints.push_back(std::move(constraint));
+            if (match(TokenType::Equal)) {
+                parseTypeAnnotation();
+            }
+            if (!check(TokenType::Greater)) {
+                consume(TokenType::Comma, "Expected ',' between type parameters");
+            }
         }
         consume(TokenType::Greater, "Expected '>' after type parameters");
     }
     
     // Parameters
     std::vector<std::string> params;
+    std::vector<std::shared_ptr<Pattern>> paramPatterns;
     std::vector<TypePtr> paramTypes;
     std::vector<ExprPtr> defaultValues;
     std::string restParam;
@@ -272,8 +285,15 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
             break;
         }
 
-        Token paramName = consume(TokenType::Identifier, "Expected parameter name");
-        params.push_back(paramName.value);
+        if (check(TokenType::LeftBrace) || check(TokenType::LeftBracket)) {
+            auto pattern = parseBindingPattern();
+            params.push_back("__pattern_param_" + std::to_string(params.size()));
+            paramPatterns.push_back(std::shared_ptr<Pattern>(std::move(pattern)));
+        } else {
+            Token paramName = consume(TokenType::Identifier, "Expected parameter name");
+            params.push_back(paramName.value);
+            paramPatterns.push_back(nullptr);
+        }
 
         // Optional type annotation
         TypePtr paramType = nullptr;
@@ -295,6 +315,7 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     }
     consume(TokenType::RightParen, "Expected ')' after parameters");
     func->params = std::move(params);
+    func->paramPatterns = std::move(paramPatterns);
     func->paramTypes = std::move(paramTypes);
     func->defaultValues = std::move(defaultValues);
     func->restParam = std::move(restParam);
@@ -757,6 +778,25 @@ std::unique_ptr<Stmt> Parser::parseEnumDeclaration() {
 std::unique_ptr<Stmt> Parser::parseImportDeclaration() {
     auto import = std::make_unique<ImportDecl>();
     import->location = getCurrentLocation();
+
+    auto parseNamedImports = [&]() {
+        while (!check(TokenType::RightBrace) && !isAtEnd()) {
+            Token imported = consume(TokenType::Identifier, "Expected import name");
+            std::string local = imported.value;
+            if (match(TokenType::KeywordAs)) {
+                Token localName = consume(TokenType::Identifier, "Expected local name");
+                local = localName.value;
+            }
+            ImportDecl::Specifier spec;
+            spec.imported = imported.value;
+            spec.local = local;
+            import->specifiers.push_back(std::move(spec));
+            if (!check(TokenType::RightBrace)) {
+                consume(TokenType::Comma, "Expected ',' between imports");
+            }
+        }
+        consume(TokenType::RightBrace, "Expected '}' after imports");
+    };
     
     // import * as name from "module"
     if (match(TokenType::Star)) {
@@ -775,30 +815,23 @@ std::unique_ptr<Stmt> Parser::parseImportDeclaration() {
     
     // import { ... } from "module" or import name from "module"
     if (match(TokenType::LeftBrace)) {
-        // Named imports
-        while (!check(TokenType::RightBrace) && !isAtEnd()) {
-            Token imported = consume(TokenType::Identifier, "Expected import name");
-            std::string local = imported.value;
-            
-            if (match(TokenType::KeywordAs)) {
-                Token localName = consume(TokenType::Identifier, "Expected local name");
-                local = localName.value;
-            }
-            
-            ImportDecl::Specifier spec;
-            spec.imported = imported.value;
-            spec.local = local;
-            import->specifiers.push_back(std::move(spec));
-            
-            if (!check(TokenType::RightBrace)) {
-                consume(TokenType::Comma, "Expected ',' between imports");
-            }
-        }
-        consume(TokenType::RightBrace, "Expected '}' after imports");
+        parseNamedImports();
     } else if (check(TokenType::Identifier)) {
         // Default import
         Token name = advance();
         import->defaultImport = name.value;
+        if (match(TokenType::Comma)) {
+            if (match(TokenType::LeftBrace)) {
+                parseNamedImports();
+            } else if (match(TokenType::Star)) {
+                consume(TokenType::KeywordAs, "Expected 'as' after '*'");
+                Token namespaceName = consume(
+                    TokenType::Identifier, "Expected namespace name");
+                import->namespaceImport = namespaceName.value;
+            } else {
+                reportError("Expected named or namespace import after ','");
+            }
+        }
     }
     
     consume(TokenType::KeywordFrom, "Expected 'from' after import");
@@ -884,6 +917,8 @@ std::unique_ptr<Stmt> Parser::parseExportDeclaration() {
     // Extract the declaration from the statement
     if (auto* declStmt = dynamic_cast<DeclStmt*>(stmt.get())) {
         exportDecl->exportedDecl = std::move(declStmt->declaration);
+    } else {
+        exportDecl->exportedStmt = std::move(stmt);
     }
     
     auto resultDeclStmt = std::make_unique<DeclStmt>(std::move(exportDecl));

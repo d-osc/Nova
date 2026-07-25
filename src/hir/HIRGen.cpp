@@ -15,22 +15,14 @@
 #define NOVA_DEBUG 0
 
 #include "nova/HIR/HIRGen_Internal.h"
-#include <fstream>
 
 namespace nova::hir {
 
 // Helper method implementation: Variable lookup with closure support
 HIRValue* HIRGenerator::lookupVariable(const std::string& name) {
-    std::ofstream logfile("lookup_log.txt", std::ios::app);
-    logfile << "[LOOKUP] Looking up '" << name << "' in function '" << lastFunctionName_ << "'" << std::endl;
-    logfile.close();
-
     // Check current scope first
     auto it = symbolTable_.find(name);
     if (it != symbolTable_.end()) {
-        std::ofstream logfile2("lookup_log.txt", std::ios::app);
-        logfile2 << "[LOOKUP] Found '" << name << "' in current scope" << std::endl;
-        logfile2.close();
         return it->second;
     }
 
@@ -65,12 +57,34 @@ HIRValue* HIRGenerator::lookupVariable(const std::string& name) {
 
                     fieldNames.push_back(name);
                     environmentFieldValues_[lastFunctionName_].push_back(varIt->second);
+                    if (currentFunction_ && !currentFunction_->parameters.empty()) {
+                        auto* environment = currentFunction_->parameters.back();
+                        if (environment && environment->name == "__env") {
+                            if (auto* temporary = dynamic_cast<HIRStructType*>(
+                                    environment->type.get())) {
+                                HIRTypePtr cellType = varIt->second->type;
+                                auto* sourceInstruction =
+                                    dynamic_cast<HIRInstruction*>(varIt->second);
+                                const bool sourceIsStorage =
+                                    heapClosureCells_.count(varIt->second) != 0 ||
+                                    (sourceInstruction &&
+                                     (sourceInstruction->opcode ==
+                                          HIRInstruction::Opcode::Alloca ||
+                                      (sourceInstruction->opcode ==
+                                           HIRInstruction::Opcode::GetField &&
+                                       sourceInstruction->name.find(".cell") !=
+                                           std::string::npos)));
+                                if (name == "this" && !sourceIsStorage) {
+                                    cellType = std::make_shared<HIRPointerType>(
+                                        varIt->second->type, true);
+                                }
+                                temporary->fields.push_back({
+                                    name, cellType, true});
+                            }
+                        }
+                    }
                 }
 
-                std::ofstream logfile3("capture_log.txt", std::ios::app);
-                logfile3 << "[CAPTURE] Variable '" << name << "' captured by '" << lastFunctionName_ << "'" << std::endl;
-                logfile3.close();
-                std::cout << "[CAPTURE] Variable '" << name << "' captured by '" << lastFunctionName_ << "'" << std::endl;
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Variable '" << name << "' captured by function '" << lastFunctionName_ << "'" << std::endl;
 
                 // Return nullptr to signal that this is a captured variable
@@ -86,24 +100,31 @@ HIRValue* HIRGenerator::lookupVariable(const std::string& name) {
 
 // Helper method: Create closure environment struct for captured variables
 hir::HIRStructType* HIRGenerator::createClosureEnvironment(const std::string& funcName) {
-    std::cout << "[CREATE-ENV] Called for function '" << funcName << "'" << std::endl;
     auto it = capturedVariables_.find(funcName);
     if (it == capturedVariables_.end() || it->second.empty()) {
         // No captured variables, no environment needed
-        std::cout << "[CREATE-ENV] No captured variables found, returning nullptr" << std::endl;
         return nullptr;
     }
-    std::cout << "[CREATE-ENV] Found " << it->second.size() << " captured variables" << std::endl;
 
     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Creating closure environment for " << funcName
                              << " with " << it->second.size() << " captured variables" << std::endl;
 
     // Collect fields for the environment struct
     std::vector<HIRStructType::Field> fields;
-    std::vector<std::string> fieldNames;
+    std::vector<std::string> fieldNames = environmentFieldNames_[funcName];
     std::vector<HIRValue*> fieldValues;  // Store HIRValue pointers for MIRGen
 
+    // Preserve the encounter order used by GetField instructions emitted while
+    // the nested function body was generated. unordered_set iteration order is
+    // not stable and can otherwise connect a captured name to the wrong cell.
     for (const auto& varName : it->second) {
+        if (std::find(fieldNames.begin(), fieldNames.end(), varName) ==
+            fieldNames.end()) {
+            fieldNames.push_back(varName);
+        }
+    }
+
+    for (const auto& varName : fieldNames) {
         // Look up the variable to get its type
         HIRValue* varValue = nullptr;
 
@@ -121,6 +142,9 @@ hir::HIRStructType* HIRGenerator::createClosureEnvironment(const std::string& fu
         field.isPublic = true;  // Environment fields are accessible
 
         if (varValue && varValue->type) {
+            // Capture the binding cell itself. Reads load through this pointer
+            // and writes store through it, preserving JavaScript closure
+            // mutation semantics across every invocation.
             field.type = varValue->type;
             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Environment field: " << varName
                                      << " (type kind: " << static_cast<int>(varValue->type->kind) << ")" << std::endl;
@@ -132,7 +156,6 @@ hir::HIRStructType* HIRGenerator::createClosureEnvironment(const std::string& fu
         }
 
         fields.push_back(field);
-        fieldNames.push_back(varName);
         fieldValues.push_back(varValue);  // Store HIRValue for MIRGen to use
     }
 
@@ -150,12 +173,123 @@ hir::HIRStructType* HIRGenerator::createClosureEnvironment(const std::string& fu
     return envStruct;
 }
 
+HIRValue* HIRGenerator::getCapturedVariableStorage(const std::string& name) {
+    if (!currentFunction_ || lastFunctionName_.empty() ||
+        capturedVariables_[lastFunctionName_].count(name) == 0 ||
+        currentFunction_->parameters.empty()) {
+        return nullptr;
+    }
+    auto* environment = currentFunction_->parameters.back();
+    if (!environment || environment->name != "__env") return nullptr;
+    auto names = environmentFieldNames_.find(lastFunctionName_);
+    if (names == environmentFieldNames_.end()) return nullptr;
+    auto found = std::find(names->second.begin(), names->second.end(), name);
+    if (found == names->second.end()) return nullptr;
+    return builder_->createGetField(
+        environment, static_cast<uint32_t>(
+            std::distance(names->second.begin(), found)), name + ".cell");
+}
+
+HIRValue* HIRGenerator::materializeClosureEnvironment(
+        const std::string& funcName) {
+    auto names = environmentFieldNames_.find(funcName);
+    if (names == environmentFieldNames_.end() || names->second.empty()) {
+        return nullptr;
+    }
+    auto* envStruct = createClosureEnvironment(funcName);
+    if (!envStruct) return nullptr;
+
+    auto* environment = builder_->createAlloca(
+        envStruct, "__env_struct." + funcName);
+    for (size_t i = 0; i < names->second.size(); ++i) {
+        const std::string& variableName = names->second[i];
+        HIRValue* storage = lookupVariable(variableName);
+        if (!storage) continue;
+        if (auto* inherited = getCapturedVariableStorage(variableName)) {
+            storage = inherited;
+        }
+
+        auto* instruction = dynamic_cast<HIRInstruction*>(storage);
+        const bool alreadyCell = heapClosureCells_.count(storage) != 0 ||
+            (instruction && instruction->opcode ==
+                 HIRInstruction::Opcode::GetField &&
+             instruction->name.find(".cell") != std::string::npos);
+        if (!alreadyCell) {
+            HIRValue* initialValue = storage;
+            if (instruction && instruction->opcode ==
+                    HIRInstruction::Opcode::Alloca) {
+                initialValue = builder_->createLoad(
+                    storage, variableName + ".closure.initial");
+            }
+            auto sizeType = std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto opaqueType = std::make_shared<HIRType>(HIRType::Kind::Any);
+            auto opaquePointer = std::make_shared<HIRPointerType>(
+                opaqueType, true);
+            auto allocator = module_->getFunction("nova_alloc_closure_env");
+            HIRFunction* allocatorFunction = allocator
+                ? allocator.get() : nullptr;
+            if (!allocatorFunction) {
+                auto allocatorType = new HIRFunctionType(
+                    {sizeType}, opaquePointer);
+                auto created = module_->createFunction(
+                    "nova_alloc_closure_env", allocatorType);
+                created->linkage = HIRFunction::Linkage::External;
+                allocatorFunction = created.get();
+            }
+            auto* cell = builder_->createCall(
+                allocatorFunction, {builder_->createIntConstant(8)},
+                variableName + ".closure.cell");
+            cell->type = std::make_shared<HIRPointerType>(
+                initialValue->type, true);
+            builder_->createStore(initialValue, cell);
+            heapClosureCells_.insert(cell);
+            symbolTable_[variableName] = cell;
+            storage = cell;
+        }
+        auto* field = builder_->createGetField(
+            environment, static_cast<uint32_t>(i), variableName);
+        builder_->createStore(storage, field);
+    }
+    return environment;
+}
+
+void HIRGenerator::propagateTransitiveCaptures(
+    const std::string& enclosingFunction,
+    const std::unordered_map<std::string, HIRValue*>& enclosingLocals,
+    const std::string& childFunction) {
+    if (enclosingFunction.empty()) return;
+    auto child = capturedVariables_.find(childFunction);
+    if (child == capturedVariables_.end()) return;
+
+    for (const auto& name : child->second) {
+        // A value declared by the immediate parent can be boxed when the child
+        // closure is created. Values outside that parent must first become a
+        // capture of the parent so the same cell can cross every environment.
+        if (enclosingLocals.count(name) != 0) continue;
+
+        capturedVariables_[enclosingFunction].insert(name);
+        auto& names = environmentFieldNames_[enclosingFunction];
+        if (std::find(names.begin(), names.end(), name) != names.end()) continue;
+
+        HIRValue* storage = nullptr;
+        for (auto scope = scopeStack_.rbegin(); scope != scopeStack_.rend();
+             ++scope) {
+            auto found = scope->find(name);
+            if (found != scope->end()) {
+                storage = found->second;
+                break;
+            }
+        }
+        names.push_back(name);
+        environmentFieldValues_[enclosingFunction].push_back(storage);
+    }
+}
+
 // Visitor implementation: Identifier (basic expression)
 void HIRGenerator::visit(Identifier& node) {
-    std::ofstream logfile("visit_id_log.txt", std::ios::app);
-    logfile << "[VISIT-ID] Visiting identifier '" << node.name << "' in function '" << lastFunctionName_ << "'" << std::endl;
-    logfile.close();
-
+    lastWasBigInt_ = bigIntVars_.count(node.name) > 0;
+    lastWasSymbol_ = symbolVars_.count(node.name) > 0;
+    lastWasPromise_ = promiseVars_.count(node.name) > 0;
     // Handle globalThis (ES2020) - the global object
     if (node.name == "globalThis") {
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected globalThis identifier" << std::endl;
@@ -176,7 +310,36 @@ void HIRGenerator::visit(Identifier& node) {
         return;
     }
     if (node.name == "undefined") {
-        lastValue_ = builder_->createIntConstant(0);  // undefined represented as 0
+        auto undefType = std::make_shared<HIRType>(HIRType::Kind::Unknown);
+        lastValue_ = builder_->createUndefinedConstant(undefType.get());
+        return;
+    }
+
+    if (auto imported = importedNumberConstants_.find(node.name);
+        imported != importedNumberConstants_.end()) {
+        const double value = imported->second;
+        lastValue_ = value == static_cast<int64_t>(value)
+            ? builder_->createIntConstant(static_cast<int64_t>(value))
+            : builder_->createFloatConstant(value);
+        return;
+    }
+    if (auto imported = importedStringConstants_.find(node.name);
+        imported != importedStringConstants_.end()) {
+        lastValue_ = builder_->createStringConstant(imported->second);
+        return;
+    }
+    if (auto imported = importedBooleanConstants_.find(node.name);
+        imported != importedBooleanConstants_.end()) {
+        lastValue_ = builder_->createBoolConstant(imported->second);
+        return;
+    }
+
+    if (auto nullish = staticNullishVariables_.find(node.name);
+        nullish != staticNullishVariables_.end()) {
+        auto valueType = std::make_shared<HIRType>(HIRType::Kind::Unknown);
+        lastValue_ = nullish->second == HIRConstant::Kind::Null
+            ? builder_->createNullConstant(valueType.get())
+            : builder_->createUndefinedConstant(valueType.get());
         return;
     }
 
@@ -223,8 +386,11 @@ void HIRGenerator::visit(Identifier& node) {
                                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Variable '" << node.name
                                                           << "' is at field index " << fieldIndex << std::endl;
 
-                                // Generate GetField to access the captured variable from environment
-                                lastValue_ = builder_->createGetField(envParam, static_cast<uint32_t>(fieldIndex), node.name);
+                                // Environment fields are binding-cell pointers.
+                                auto* storage = builder_->createGetField(
+                                    envParam, static_cast<uint32_t>(fieldIndex),
+                                    node.name + ".cell");
+                                lastValue_ = builder_->createLoad(storage, node.name);
                                 return;
                             }
                         }
@@ -237,6 +403,10 @@ void HIRGenerator::visit(Identifier& node) {
     // Look up variable in symbol table and parent scopes
     HIRValue* value = lookupVariable(node.name);
     if (value) {
+        if (heapClosureCells_.count(value) != 0) {
+            lastValue_ = builder_->createLoad(value, node.name);
+            return;
+        }
         // Check if this is an alloca (memory location)
         // Try to cast to HIRInstruction to check the opcode
         try {
@@ -282,7 +452,10 @@ void HIRGenerator::visit(Identifier& node) {
                     int fieldIndex = std::distance(fieldNames.begin(), it);
                     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Creating GetField for '" << node.name
                                               << "' at field index " << fieldIndex << std::endl;
-                    lastValue_ = builder_->createGetField(envParam, static_cast<uint32_t>(fieldIndex), node.name);
+                    auto* storage = builder_->createGetField(
+                        envParam, static_cast<uint32_t>(fieldIndex),
+                        node.name + ".cell");
+                    lastValue_ = builder_->createLoad(storage, node.name);
                     return;
                 }
             }

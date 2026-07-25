@@ -26,6 +26,7 @@ std::string MIRType::toString() const {
         case Kind::Struct: return "struct";
         case Kind::Array: return "array";
         case Kind::Function: return "fn";
+        case Kind::JSValue: return "jsvalue";
         default: return "unknown";
     }
 }
@@ -58,6 +59,14 @@ std::string MIRMoveOperand::toString() const {
     return "move " + place->toString();
 }
 
+std::string MIRAddressOfOperand::toString() const {
+    return "address_of " + (place ? place->toString() : "<null>");
+}
+
+std::string MIRHeapCellOperand::toString() const {
+    return "heap_cell(" + (value ? value->toString() : "<null>") + ")";
+}
+
 std::string MIRConstOperand::toString() const {
     std::ostringstream oss;
     oss << "const ";
@@ -77,6 +86,9 @@ std::string MIRConstOperand::toString() const {
             break;
         case ConstKind::Null:
             oss << "null";
+            break;
+        case ConstKind::Undefined:
+            oss << "undefined";
             break;
         case ConstKind::ZeroInit:
             oss << "ZeroInit";
@@ -144,6 +156,7 @@ std::string MIRAggregateRValue::toString() const {
         case AggregateKind::Tuple: kindStr = "Tuple"; break;
         case AggregateKind::Struct: kindStr = "Struct"; break;
         case AggregateKind::SetField: kindStr = "SetField"; break;
+        case AggregateKind::SetElement: kindStr = "SetElement"; break;
     }
     std::string result = "Aggregate(" + kindStr + ", [";
     for (size_t i = 0; i < elements.size(); ++i) {
@@ -158,6 +171,11 @@ std::string MIRGetElementRValue::toString() const {
     return "GetElement(" + array->toString() + ", " + index->toString() + ")";
 }
 
+std::string MIRIndirectLoadRValue::toString() const {
+    return "indirect_load(" +
+           (pointerPlace ? pointerPlace->toString() : "<null>") + ")";
+}
+
 // ==================== MIRStatement Implementation ====================
 
 std::string MIRAssignStatement::toString() const {
@@ -170,6 +188,12 @@ std::string MIRStorageLiveStatement::toString() const {
 
 std::string MIRStorageDeadStatement::toString() const {
     return "StorageDead(" + place->toString() + ")";
+}
+
+std::string MIRIndirectStoreStatement::toString() const {
+    return "indirect_store(" +
+           (pointerPlace ? pointerPlace->toString() : "<null>") + ", " +
+           (value ? value->toString() : "<null>") + ")";
 }
 
 // ==================== MIRTerminator Implementation ====================

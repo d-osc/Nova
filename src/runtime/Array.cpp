@@ -1,4 +1,5 @@
 #include "nova/runtime/Runtime.h"
+#include "nova/runtime/Value.h"
 #include <cstring>
 #include <algorithm>
 #include <cstdarg>
@@ -156,6 +157,11 @@ ValueArray* create_value_array(int64 initial_capacity) {
     if (initial_capacity < 1) initial_capacity = 8;
 
     ValueArray* array = static_cast<ValueArray*>(allocate(sizeof(ValueArray), TypeId::ARRAY));
+    array->header.size = sizeof(ValueArray);
+    array->header.type_id = static_cast<uint32_t>(TypeId::ARRAY);
+    array->header.is_marked = false;
+    array->header.value_encoding = 0;
+    array->header.next = nullptr;
     array->length = 0;
     array->capacity = initial_capacity;
 
@@ -181,6 +187,8 @@ ValueArray* convert_to_value_array(void* metadata_ptr) {
     // Create a new ValueArray
     ValueArray* array = create_value_array(length > capacity ? length : capacity);
     array->length = length;
+    array->header.value_encoding = *reinterpret_cast<uint8*>(
+        static_cast<char*>(metadata_ptr) + 13);
 
     // Copy values from stack array to heap array
     if (stack_elements && length > 0) {
@@ -205,6 +213,7 @@ void* create_metadata_from_value_array(ValueArray* array) {
     metadata->header.size = 0;
     metadata->header.type_id = static_cast<uint32_t>(TypeId::ARRAY);  // Set type_id = 1
     metadata->header.is_marked = false;
+    metadata->header.value_encoding = array->header.value_encoding;
     metadata->header.next = nullptr;
 
     // Copy array data
@@ -558,6 +567,7 @@ ValueArray* value_array_concat(ValueArray* arr1, ValueArray* arr2) {
     if (!arr1) {
         // Copy arr2
         ValueArray* result = create_value_array(arr2->length);
+        result->header.value_encoding = arr2->header.value_encoding;
         result->length = arr2->length;
         std::memcpy(result->elements, arr2->elements, arr2->length * sizeof(int64));
         return result;
@@ -565,6 +575,7 @@ ValueArray* value_array_concat(ValueArray* arr1, ValueArray* arr2) {
     if (!arr2) {
         // Copy arr1
         ValueArray* result = create_value_array(arr1->length);
+        result->header.value_encoding = arr1->header.value_encoding;
         result->length = arr1->length;
         std::memcpy(result->elements, arr1->elements, arr1->length * sizeof(int64));
         return result;
@@ -573,6 +584,7 @@ ValueArray* value_array_concat(ValueArray* arr1, ValueArray* arr2) {
     // Create new array with combined length
     int64 total_len = arr1->length + arr2->length;
     ValueArray* result = create_value_array(total_len);
+    result->header.value_encoding = arr1->header.value_encoding;
     result->length = total_len;
     
     // Copy elements from both arrays
@@ -603,6 +615,7 @@ ValueArray* value_array_slice(ValueArray* array, int64 start, int64 end) {
     
     // Create new array with sliced elements
     ValueArray* result = create_value_array(slice_len);
+    result->header.value_encoding = array->header.value_encoding;
     result->length = slice_len;
     
     // Copy elements
@@ -625,6 +638,16 @@ nova::runtime::ValueArray* nova_convert_to_value_array(void* metadata_ptr) {
 void* nova_array_push(nova::runtime::Array* array, void* value) {
     nova::runtime::array_push(array, value);
     return nullptr;  // push returns void, but we return nullptr for consistency
+}
+
+void* nova_create_array(int64_t size) {
+    return nova::runtime::create_array(static_cast<int64_t>(size));
+}
+
+void nova_array_push_string(void* arr, const char* value) {
+    // Create a Nova string value from the C string
+    std::uint64_t strVal = nova_value_from_string(value);
+    nova::runtime::array_push(static_cast<nova::runtime::Array*>(arr), reinterpret_cast<void*>(strVal));
 }
 
 void* nova_array_pop(nova::runtime::Array* array) {
@@ -702,15 +725,42 @@ int64_t nova_value_array_shift(void* array_ptr) {
     return result;
 }
 
-void nova_value_array_unshift(void* array_ptr, int64_t value) {
+int64_t nova_value_array_unshift(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     nova::runtime::value_array_unshift(array, value);
     write_back_to_metadata(array_ptr, array);
+    return array ? array->length : 0;
 }
 
 int64_t nova_value_array_at(void* array_ptr, int64_t index) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
     return nova::runtime::value_array_at(array, index);
+}
+
+std::uint64_t nova_value_array_at_tagged(
+    void* array_ptr, int64_t index, int64_t element_kind) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    if (!array || index < 0 || index >= array->length) {
+        return nova::runtime::JS_VALUE_UNDEFINED;
+    }
+
+    const std::uint64_t raw = static_cast<std::uint64_t>(array->elements[index]);
+    if (array->header.value_encoding == 1) return raw;
+
+    switch (element_kind) {
+        case 1: // floating-point bits already use the JSValue number encoding
+            return raw;
+        case 2:
+            return nova_value_from_string(reinterpret_cast<const char*>(
+                static_cast<std::uintptr_t>(raw)));
+        case 3:
+            return nova_value_from_bool(static_cast<std::int64_t>(raw));
+        case 4:
+            return nova_value_from_object(reinterpret_cast<void*>(
+                static_cast<std::uintptr_t>(raw)));
+        default:
+            return nova_value_from_i64(static_cast<std::int64_t>(raw));
+    }
 }
 
 int64_t nova_value_array_length(void* array_ptr) {
@@ -730,6 +780,15 @@ int64_t value_array_length(void* array_ptr) {
 void* create_value_array(int64_t initial_capacity) {
     nova::runtime::ValueArray* array = nova::runtime::create_value_array(initial_capacity);
     return static_cast<void*>(array);
+}
+
+// Create a heap-backed array in the public metadata representation used by
+// generated code and runtime APIs.
+void* nova_value_array_create(int64_t length) {
+    if (length < 0) length = 0;
+    nova::runtime::ValueArray* array = nova::runtime::create_value_array(length);
+    array->length = length;
+    return nova::runtime::create_metadata_from_value_array(array);
 }
 
 int64_t value_array_get(void* array_ptr, int64_t index) {

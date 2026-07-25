@@ -947,34 +947,63 @@ char* nova_json_stringify_number(int64_t value) {
     return result;
 }
 
-// JSON.stringify(string) - ULTRA OPTIMIZED - converts a string to a JSON string with quotes (ES5)
+// JSON.stringify(string) - quotes and escapes a UTF-8 string (ES5)
 char* nova_json_stringify_string(const char* str) {
     if (!str) {
         return (char*)JSON_NULL;
     }
 
-    size_t len = strlen(str);
-
-    // For empty strings, return cached result
-    if (len == 0) {
+    size_t inputLength = strlen(str);
+    if (inputLength == 0) {
         static const char* EMPTY_STRING = "\"\"";
         return (char*)EMPTY_STRING;
     }
 
-    char* result = (char*)malloc(len + 3);
-
-    // Unrolled copy for small strings
-    result[0] = '"';
-    if (len <= 16) {
-        // Manual unrolling for cache efficiency
-        for (size_t i = 0; i < len; i++) {
-            result[i + 1] = str[i];
+    size_t escapedLength = 0;
+    for (size_t i = 0; i < inputLength; ++i) {
+        unsigned char character = static_cast<unsigned char>(str[i]);
+        switch (character) {
+            case '"': case '\\': case '\b': case '\f': case '\n': case '\r': case '\t':
+                escapedLength += 2;
+                break;
+            default:
+                escapedLength += character < 0x20 ? 6 : 1;
+                break;
         }
-    } else {
-        memcpy(result + 1, str, len);
     }
-    result[len + 1] = '"';
-    result[len + 2] = '\0';
+
+    char* result = static_cast<char*>(malloc(escapedLength + 3));
+    char* output = result;
+    *output++ = '"';
+    static constexpr char hex[] = "0123456789abcdef";
+
+    for (size_t i = 0; i < inputLength; ++i) {
+        unsigned char character = static_cast<unsigned char>(str[i]);
+        switch (character) {
+            case '"': *output++ = '\\'; *output++ = '"'; break;
+            case '\\': *output++ = '\\'; *output++ = '\\'; break;
+            case '\b': *output++ = '\\'; *output++ = 'b'; break;
+            case '\f': *output++ = '\\'; *output++ = 'f'; break;
+            case '\n': *output++ = '\\'; *output++ = 'n'; break;
+            case '\r': *output++ = '\\'; *output++ = 'r'; break;
+            case '\t': *output++ = '\\'; *output++ = 't'; break;
+            default:
+                if (character < 0x20) {
+                    *output++ = '\\';
+                    *output++ = 'u';
+                    *output++ = '0';
+                    *output++ = '0';
+                    *output++ = hex[(character >> 4) & 0x0f];
+                    *output++ = hex[character & 0x0f];
+                } else {
+                    *output++ = static_cast<char>(character);
+                }
+                break;
+        }
+    }
+
+    *output++ = '"';
+    *output = '\0';
 
     return result;
 }
@@ -1071,60 +1100,20 @@ char* nova_json_stringify_array(void* arr) {
     return buffer;
 }
 
-// JSON.stringify(object) - placeholder implementation
-// Returns "[object Object]" for any object (JavaScript behavior when JSON.stringify
-// encounters non-serializable values or would cause circular reference)
-// TODO: Implement proper object serialization with metadata system
+// Dynamic runtime objects still require a unified property metadata system.
+// Static object literals are serialized from HIR field metadata before this
+// fallback is reached.
 char* nova_json_stringify_object(void* obj) {
     if (!obj) {
         return (char*)JSON_NULL;
     }
 
-    // Return standard JavaScript representation
-    // This prevents crashes and matches JS behavior for toString()
+    // Safe fallback until dynamic objects share the compiler's static metadata.
     static const char* OBJECT_STR = "[object Object]";
     size_t len = strlen(OBJECT_STR);
     char* result = (char*)malloc(len + 1);
     strcpy(result, OBJECT_STR);
     return result;
-}
-
-// Object.keys() - placeholder implementation
-// Returns empty array (requires metadata system for proper implementation)
-// TODO: Implement with runtime type information
-extern "C" void* nova_object_keys(void* obj) {
-    if (!obj) {
-        return nova::runtime::create_value_array(0);
-    }
-
-    // Return empty array for now
-    // Proper implementation requires object metadata with property names
-    return nova::runtime::create_value_array(0);
-}
-
-// Object.values() - placeholder implementation
-// Returns empty array (requires metadata system for proper implementation)
-// TODO: Implement with runtime type information
-extern "C" void* nova_object_values(void* obj) {
-    if (!obj) {
-        return nova::runtime::create_value_array(0);
-    }
-
-    // Return empty array for now
-    return nova::runtime::create_value_array(0);
-}
-
-// Object.entries() - placeholder implementation
-// Returns empty array (requires metadata system for proper implementation)
-// TODO: Implement with runtime type information
-extern "C" void* nova_object_entries(void* obj) {
-    if (!obj) {
-        return nova::runtime::create_value_array(0);
-    }
-
-    // Return empty array for now
-    // Proper implementation would return array of [key, value] pairs
-    return nova::runtime::create_value_array(0);
 }
 
 // Simple JSON parser state

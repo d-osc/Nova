@@ -50,6 +50,11 @@ MIROperandPtr MIRBuilder::createNullConstant(MIRTypePtr type) {
         MIRConstOperand::ConstKind::Null, 0, type);
 }
 
+MIROperandPtr MIRBuilder::createUndefinedConstant(MIRTypePtr type) {
+    return std::make_shared<MIRConstOperand>(
+        MIRConstOperand::ConstKind::Undefined, 0, type);
+}
+
 MIROperandPtr MIRBuilder::createZeroInitConstant(MIRTypePtr type) {
     return std::make_shared<MIRConstOperand>(
         MIRConstOperand::ConstKind::ZeroInit, 0, type);

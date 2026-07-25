@@ -2,64 +2,168 @@
 
 namespace nova {
 
-// Type annotation parsing (simplified placeholders)
+namespace {
+Type::Kind primitiveKind(const std::string& name) {
+    if (name == "void") return Type::Kind::Void;
+    if (name == "any") return Type::Kind::Any;
+    if (name == "unknown") return Type::Kind::Unknown;
+    if (name == "never") return Type::Kind::Never;
+    if (name == "number") return Type::Kind::Number;
+    if (name == "string") return Type::Kind::String;
+    if (name == "boolean") return Type::Kind::Boolean;
+    if (name == "bigint") return Type::Kind::BigInt;
+    if (name == "symbol") return Type::Kind::Symbol;
+    if (name == "null") return Type::Kind::Null;
+    if (name == "undefined") return Type::Kind::Undefined;
+    if (name == "object") return Type::Kind::Object;
+    if (name == "Function") return Type::Kind::Function;
+    return Type::Kind::Object;
+}
+
+TypePtr share(std::unique_ptr<TypeAnnotation> type) {
+    return TypePtr(std::move(type));
+}
+} // namespace
+
 std::unique_ptr<TypeAnnotation> Parser::parseTypeAnnotation() {
-    // For now, just consume tokens until we hit a delimiter
-    // Full TypeScript type system would be implemented here
-    
-    std::string typeName;
-    Type::Kind kind = Type::Kind::Any;
-    
-    if (check(TokenType::Identifier)) {
-        Token typeToken = advance();
-        typeName = typeToken.value;
-        
-        // Map simple type names to Type::Kind
-        if (typeName == "void") kind = Type::Kind::Void;
-        else if (typeName == "any") kind = Type::Kind::Any;
-        else if (typeName == "unknown") kind = Type::Kind::Unknown;
-        else if (typeName == "never") kind = Type::Kind::Never;
-        else if (typeName == "number") kind = Type::Kind::Number;
-        else if (typeName == "string") kind = Type::Kind::String;
-        else if (typeName == "boolean") kind = Type::Kind::Boolean;
-        else if (typeName == "null") kind = Type::Kind::Null;
-        else if (typeName == "undefined") kind = Type::Kind::Undefined;
-        else if (typeName == "object") kind = Type::Kind::Object;
-        else kind = Type::Kind::Any;  // Default for unknown types
-    }
-    
-    auto type = std::make_unique<TypeAnnotation>(kind, typeName);
-    type->location = getCurrentLocation();
-    
-    return type;
+    return parseUnionType();
 }
 
 std::unique_ptr<TypeAnnotation> Parser::parsePrimaryType() {
-    return parseTypeAnnotation();
-}
+    const SourceLocation location = getCurrentLocation();
+    if (match(TokenType::LeftParen)) {
+        auto type = parseTypeAnnotation();
+        consume(TokenType::RightParen, "Expected ')' after type annotation");
+        return type;
+    }
+    if (check(TokenType::LeftBracket)) return parseTupleType();
+    if (check(TokenType::LeftBrace)) return parseObjectType();
 
-std::unique_ptr<TypeAnnotation> Parser::parseUnionType() {
-    return parseTypeAnnotation();
-}
+    std::string name;
+    if (check(TokenType::Identifier)) {
+        name = advance().value;
+    } else if (match(TokenType::KeywordVoid)) {
+        name = "void";
+    } else if (match(TokenType::NullLiteral)) {
+        name = "null";
+    } else if (match(TokenType::UndefinedLiteral)) {
+        name = "undefined";
+    } else if (check(TokenType::StringLiteral) || check(TokenType::NumberLiteral) ||
+               check(TokenType::TrueLiteral) || check(TokenType::FalseLiteral)) {
+        name = advance().value;
+        auto literal = std::make_unique<TypeAnnotation>(Type::Kind::Literal, name);
+        literal->location = location;
+        return literal;
+    } else {
+        reportError("Expected a TypeScript type annotation");
+        auto fallback = std::make_unique<TypeAnnotation>(Type::Kind::Any, "any");
+        fallback->location = location;
+        return fallback;
+    }
 
-std::unique_ptr<TypeAnnotation> Parser::parseIntersectionType() {
-    return parseTypeAnnotation();
+    auto type = std::make_unique<TypeAnnotation>(primitiveKind(name), name);
+    type->location = location;
+    return type;
 }
 
 std::unique_ptr<TypeAnnotation> Parser::parseArrayType() {
-    return parseTypeAnnotation();
+    auto type = parsePrimaryType();
+    while (check(TokenType::LeftBracket) && peek(1).type == TokenType::RightBracket) {
+        const SourceLocation location = type->location;
+        advance();
+        advance();
+        auto array = std::make_unique<TypeAnnotation>(Type::Kind::Array);
+        array->location = location;
+        array->elementType = share(std::move(type));
+        type = std::move(array);
+    }
+    return type;
+}
+
+std::unique_ptr<TypeAnnotation> Parser::parseIntersectionType() {
+    auto first = parseArrayType();
+    if (!match(TokenType::Ampersand)) return first;
+    auto intersection = std::make_unique<TypeAnnotation>(Type::Kind::Intersection);
+    intersection->location = first->location;
+    intersection->types.push_back(share(std::move(first)));
+    do {
+        intersection->types.push_back(share(parseArrayType()));
+    } while (match(TokenType::Ampersand));
+    return intersection;
+}
+
+std::unique_ptr<TypeAnnotation> Parser::parseUnionType() {
+    auto first = parseIntersectionType();
+    if (!match(TokenType::Pipe)) return first;
+    auto unionType = std::make_unique<TypeAnnotation>(Type::Kind::Union);
+    unionType->location = first->location;
+    unionType->types.push_back(share(std::move(first)));
+    do {
+        unionType->types.push_back(share(parseIntersectionType()));
+    } while (match(TokenType::Pipe));
+    return unionType;
 }
 
 std::unique_ptr<TypeAnnotation> Parser::parseTupleType() {
-    return parseTypeAnnotation();
+    const SourceLocation location = getCurrentLocation();
+    consume(TokenType::LeftBracket, "Expected '[' to start tuple type");
+    auto tuple = std::make_unique<TypeAnnotation>(Type::Kind::Tuple);
+    tuple->location = location;
+    if (!check(TokenType::RightBracket)) {
+        do {
+            tuple->types.push_back(share(parseTypeAnnotation()));
+        } while (match(TokenType::Comma));
+    }
+    consume(TokenType::RightBracket, "Expected ']' after tuple type");
+    return tuple;
 }
 
 std::unique_ptr<TypeAnnotation> Parser::parseFunctionType() {
-    return parseTypeAnnotation();
+    return parsePrimaryType();
 }
 
 std::unique_ptr<TypeAnnotation> Parser::parseObjectType() {
-    return parseTypeAnnotation();
+    const SourceLocation location = getCurrentLocation();
+    consume(TokenType::LeftBrace, "Expected '{' to start object type");
+    auto object = std::make_unique<TypeAnnotation>(Type::Kind::Object);
+    object->location = location;
+
+    while (!check(TokenType::RightBrace) && !isAtEnd()) {
+        Token member = consume(TokenType::Identifier, "Expected property name in object type");
+        const bool optional = match(TokenType::Question);
+
+        TypePtr memberType;
+        if (match(TokenType::LeftParen)) {
+            auto functionType = std::make_shared<TypeAnnotation>(Type::Kind::Function);
+            while (!check(TokenType::RightParen) && !isAtEnd()) {
+                consume(TokenType::Identifier, "Expected parameter name");
+                match(TokenType::Question);
+                if (match(TokenType::Colon)) {
+                    functionType->types.push_back(share(parseTypeAnnotation()));
+                } else {
+                    functionType->types.push_back(std::make_shared<TypeAnnotation>(Type::Kind::Any));
+                }
+                if (!check(TokenType::RightParen)) {
+                    consume(TokenType::Comma, "Expected ',' between parameters");
+                }
+            }
+            consume(TokenType::RightParen, "Expected ')' after parameters");
+            functionType->elementType = match(TokenType::Colon)
+                ? share(parseTypeAnnotation())
+                : std::make_shared<TypeAnnotation>(Type::Kind::Any);
+            memberType = functionType;
+        } else {
+            consume(TokenType::Colon, "Expected ':' after property name");
+            memberType = share(parseTypeAnnotation());
+        }
+
+        object->properties[member.value] = memberType;
+        if (optional) object->optionalProperties.insert(member.value);
+        if (!match(TokenType::Semicolon)) match(TokenType::Comma);
+    }
+
+    consume(TokenType::RightBrace, "Expected '}' after object type");
+    return object;
 }
 
 } // namespace nova

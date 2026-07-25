@@ -2,9 +2,8 @@
 
 **TypeScript/JavaScript to Native Code Compiler via LLVM**
 
-[![Status](https://img.shields.io/badge/status-stable-green)]()
-[![Tests](https://img.shields.io/badge/tests-511%20passing-brightgreen)]()
-[![Pass Rate](https://img.shields.io/badge/pass%20rate-100%25-brightgreen)]()
+[![Status](https://img.shields.io/badge/status-experimental-yellow)]()
+[![Tests](https://img.shields.io/badge/conformance-57%20verified-brightgreen)]()
 [![LLVM](https://img.shields.io/badge/LLVM-18.1.7-orange)]()
 
 Nova compiles TypeScript and JavaScript directly to native code through a multi-stage compilation pipeline:
@@ -19,7 +18,7 @@ TypeScript/JavaScript → AST → HIR → MIR → LLVM IR → Native Code
 - 📦 **npm-compatible** package manager built-in
 - 🔧 **Node.js API compatible** - 40+ built-in modules
 - 💾 **Low memory usage** - 30-50% less than Node.js
-- ✅ **100% test pass rate** - 511 tests passing
+- ✅ **Expectation-based test gate** - 57 verified conformance tests; legacy tests are being migrated
 
 ## Quick Install
 
@@ -58,7 +57,7 @@ nova pm install lodash
 - **Control Flow**: if/else, switch/case, ternary operator
 - **Loops**: for, while, do-while, for-of, for-in, break/continue with labels
 - **Error Handling**: try/catch/finally, throw, Error types
-- **Operators**: All arithmetic, logical, bitwise, comparison, assignment operators
+- **Operators**: Verified numeric arithmetic plus JavaScript truthiness, short-circuiting, and operand-return behavior for `&&`/`||`; broader coercion conformance is ongoing
 
 ### Built-in Types & Methods
 
@@ -67,8 +66,8 @@ nova pm install lodash
 | **Array** | push, pop, shift, unshift, slice, splice, concat, indexOf, includes, find, filter, map, reduce, forEach, sort, reverse, join, every, some, flat, flatMap, at, with, toReversed, toSorted, toSpliced, fill, copyWithin, findIndex, findLast, findLastIndex, lastIndexOf, reduceRight, Array.from, Array.of, Array.isArray |
 | **String** | length, charAt, charCodeAt, indexOf, lastIndexOf, includes, substring, slice, split, concat, repeat, trim, trimStart, trimEnd, toLowerCase, toUpperCase, padStart, padEnd, replace, replaceAll, at, match, localeCompare, String.fromCharCode, String.fromCodePoint |
 | **Number** | toString, toFixed, toExponential, toPrecision, valueOf, Number.isNaN, Number.isFinite, Number.isInteger, Number.isSafeInteger, Number.parseInt, Number.parseFloat, Number.MAX_VALUE, Number.MIN_VALUE, Number.EPSILON, etc. |
-| **Math** | abs, ceil, floor, round, trunc, sqrt, cbrt, pow, exp, log, log10, log2, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, sign, min, max, random, hypot, clz32, imul, fround, PI, E, etc. |
-| **Object** | keys, values, entries, assign, freeze, seal, is, hasOwn, isFrozen, isSealed |
+| **Math** | Standard constants and the core floating numeric path are verified; method-by-method conformance migration is ongoing |
+| **Object** | Verified static-literal subset: keys/values/entries, literal-array fromEntries, attribute-aware existing-field assign/defineProperty, hasOwn, computed string reads/writes, integrity state, reflection names/data descriptors, and Object.is SameValue/identity |
 | **JSON** | stringify, parse |
 | **Console** | log, error, warn, info, debug, trace, dir, table, time, timeEnd, count, clear, group, groupEnd |
 | **TypedArray** | Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array with full method support |
@@ -81,7 +80,9 @@ nova pm install lodash
 - **Async/Await**: async functions, await expressions
 - **Generators**: function*, yield, yield*
 - **Async Generators**: async function*, for-await-of
-- **Destructuring**: Array and object destructuring
+- **Destructuring**: Nested array/object declarations and assignments, lazy defaults, rest bindings, and destructured function/arrow parameters are conformance-verified
+- **Closures**: Shared primitive/object binding mutation, escaped object lifetime, returned and local function/arrow closures, transitive nested environments, declared-parameter `arguments` with lexical arrow capture, local and escaped arrow lexical `this`, and captured Promise-executor writes are conformance-verified
+- **Function invocation**: Named-function argument forwarding through `call`, literal-array `apply`, partial `bind` (including bind-time value capture), and primitive ordinary-function `thisArg` forwarding are conformance-verified
 - **Spread Operator**: `...array`, `...object`
 - **Rest Parameters**: `function(...args)`
 - **Default Parameters**: `function(x = 10)`
@@ -300,27 +301,30 @@ Nova/
 │   ├── mir/               # Mid-level IR
 │   └── runtime/           # Runtime library
 ├── include/               # Header files
-├── tests/                 # Test files (515 tests)
+├── tests/                 # Verified conformance and legacy test files
 ├── examples/              # Example programs
 ├── docs/                  # Documentation
 ├── grammar/               # Language grammar definitions
 ├── build.bat             # Windows build script
 ├── build.sh              # Unix build script
 ├── CMakeLists.txt        # CMake configuration
-└── run_all_tests.py      # Test runner
+└── tests/run_all_tests.py # Expectation-based test runner
 ```
 
 ## Testing
 
 ```bash
-# Run all tests
-python run_all_tests.py
+# Run verified conformance tests
+npm test
+
+# Or invoke the runner directly
+python tests/run_all_tests.py
 
 # Run specific test
-./build/Release/nova.exe tests/test_array_simple.ts
+python tests/run_all_tests.py tests/conformance/arrays.ts
 ```
 
-**Current Status: 511 tests passing (100%)**
+**Current Status:** 57 verified conformance tests pass. Legacy tests without explicit expected results are not counted as passing.
 
 ## Performance
 

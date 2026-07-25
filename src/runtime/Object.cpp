@@ -1,4 +1,6 @@
 #include "nova/runtime/Runtime.h"
+#include "nova/runtime/Value.h"
+#include <cmath>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -89,6 +91,27 @@ void object_delete(Object* obj, const char* key) {
 
 // Extern "C" wrapper for Object static methods (for easier linking)
 extern "C" {
+
+void* nova_dynamic_object_create() {
+    return nova::runtime::create_object();
+}
+
+void nova_dynamic_object_set_tagged(
+    void* object, const char* key, std::uint64_t value) {
+    nova::runtime::object_set(
+        static_cast<nova::runtime::Object*>(object), key,
+        reinterpret_cast<void*>(static_cast<std::uintptr_t>(value)));
+}
+
+std::uint64_t nova_dynamic_object_get_tagged(
+    void* object, const char* key) {
+    auto* dynamicObject = static_cast<nova::runtime::Object*>(object);
+    if (!nova::runtime::object_has(dynamicObject, key)) {
+        return nova::runtime::JS_VALUE_UNDEFINED;
+    }
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+        nova::runtime::object_get(dynamicObject, key)));
+}
 
 // Object.values(obj) - returns array of object's property values (ES2017)
 void* nova_object_values(void* obj_ptr) {
@@ -340,6 +363,22 @@ int64_t nova_object_is(int64_t value1, int64_t value2) {
     // 1. Object.is(NaN, NaN) returns true (=== returns false)
     // 2. Object.is(+0, -0) returns false (=== returns true)
     // For integer values, simple equality works correctly
+    return value1 == value2 ? 1 : 0;
+}
+
+// Object.is for JavaScript Number values (SameValue semantics).
+int64_t nova_object_is_number(double value1, double value2) {
+    if (std::isnan(value1) && std::isnan(value2)) {
+        return 1;
+    }
+    if (value1 == 0.0 && value2 == 0.0) {
+        return std::signbit(value1) == std::signbit(value2) ? 1 : 0;
+    }
+    return value1 == value2 ? 1 : 0;
+}
+
+// Object.is for pointer-backed objects, arrays, and functions compares identity.
+int64_t nova_object_is_identity(void* value1, void* value2) {
     return value1 == value2 ? 1 : 0;
 }
 

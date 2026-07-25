@@ -7,6 +7,80 @@
 namespace nova::hir {
 
 void HIRGenerator::visit(MemberExpr& node) {
+        if (auto* objectIdentifier = dynamic_cast<Identifier*>(node.object.get());
+            objectIdentifier &&
+            dynamicObjectVars_.count(objectIdentifier->name) > 0) {
+            std::string propertyName;
+            if (auto* propertyIdentifier =
+                    dynamic_cast<Identifier*>(node.property.get())) {
+                propertyName = propertyIdentifier->name;
+            } else if (auto* propertyString =
+                           dynamic_cast<StringLiteral*>(node.property.get())) {
+                propertyName = propertyString->value;
+            }
+            if (!propertyName.empty()) {
+                node.object->accept(*this);
+                HIRValue* objectValue = lastValue_;
+                auto pointerType = std::make_shared<HIRType>(
+                    HIRType::Kind::Pointer);
+                auto stringType = std::make_shared<HIRType>(
+                    HIRType::Kind::String);
+                auto jsValueType = std::make_shared<HIRType>(
+                    HIRType::Kind::JSValue);
+                auto existing = module_->getFunction(
+                    "nova_dynamic_object_get_tagged");
+                HIRFunction* getter = existing ? existing.get() : nullptr;
+                if (!getter) {
+                    auto* type = new HIRFunctionType(
+                        {pointerType, stringType}, jsValueType);
+                    auto created = module_->createFunction(
+                        "nova_dynamic_object_get_tagged", type);
+                    created->linkage = HIRFunction::Linkage::External;
+                    getter = created.get();
+                }
+                lastValue_ = builder_->createCall(getter, {
+                    objectValue,
+                    builder_->createStringConstant(propertyName)
+                }, "dynamic.object.property");
+                lastValue_->type = jsValueType;
+                return;
+            }
+        }
+
+        if (auto* objectIdentifier = dynamic_cast<Identifier*>(node.object.get())) {
+            if (auto* propertyIdentifier = dynamic_cast<Identifier*>(node.property.get())) {
+                const auto& namespaceName = objectIdentifier->name;
+                const auto& propertyName = propertyIdentifier->name;
+                if (auto space = moduleNamespaceNumberConstants_.find(namespaceName);
+                    space != moduleNamespaceNumberConstants_.end()) {
+                    if (auto value = space->second.find(propertyName);
+                        value != space->second.end()) {
+                        lastValue_ = value->second == static_cast<int64_t>(value->second)
+                            ? builder_->createIntConstant(
+                                  static_cast<int64_t>(value->second))
+                            : builder_->createFloatConstant(value->second);
+                        return;
+                    }
+                }
+                if (auto space = moduleNamespaceStringConstants_.find(namespaceName);
+                    space != moduleNamespaceStringConstants_.end()) {
+                    if (auto value = space->second.find(propertyName);
+                        value != space->second.end()) {
+                        lastValue_ = builder_->createStringConstant(value->second);
+                        return;
+                    }
+                }
+                if (auto space = moduleNamespaceBooleanConstants_.find(namespaceName);
+                    space != moduleNamespaceBooleanConstants_.end()) {
+                    if (auto value = space->second.find(propertyName);
+                        value != space->second.end()) {
+                        lastValue_ = builder_->createBoolConstant(value->second);
+                        return;
+                    }
+                }
+            }
+        }
+
         // Handle globalThis property access (ES2020)
         if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
             if (objIdent->name == "globalThis") {
@@ -77,35 +151,35 @@ void HIRGenerator::visit(MemberExpr& node) {
                 if (objIdent->name == "Math") {
                     if (propIdent->name == "PI") {
                         // Math.PI ≈ 3.14159... -> return 3 for integer
-                        lastValue_ = builder_->createIntConstant(3);
+                        lastValue_ = builder_->createFloatConstant(3.14159265358979323846);
                         return;
                     } else if (propIdent->name == "E") {
                         // Math.E ≈ 2.71828... -> return 2 for integer (or 3 if you prefer rounding)
-                        lastValue_ = builder_->createIntConstant(3);
+                        lastValue_ = builder_->createFloatConstant(2.71828182845904523536);
                         return;
                     } else if (propIdent->name == "LN2") {
                         // Math.LN2 ≈ 0.693147... -> return 0 for integer (truncated)
-                        lastValue_ = builder_->createIntConstant(0);
+                        lastValue_ = builder_->createFloatConstant(0.69314718055994530942);
                         return;
                     } else if (propIdent->name == "LN10") {
                         // Math.LN10 ≈ 2.302585... -> return 2 for integer (truncated)
-                        lastValue_ = builder_->createIntConstant(2);
+                        lastValue_ = builder_->createFloatConstant(2.30258509299404568402);
                         return;
                     } else if (propIdent->name == "LOG2E") {
                         // Math.LOG2E ≈ 1.442695... -> return 1 for integer (truncated)
-                        lastValue_ = builder_->createIntConstant(1);
+                        lastValue_ = builder_->createFloatConstant(1.44269504088896340736);
                         return;
                     } else if (propIdent->name == "LOG10E") {
                         // Math.LOG10E ≈ 0.434294... -> return 0 for integer (truncated)
-                        lastValue_ = builder_->createIntConstant(0);
+                        lastValue_ = builder_->createFloatConstant(0.43429448190325182765);
                         return;
                     } else if (propIdent->name == "SQRT1_2") {
                         // Math.SQRT1_2 ≈ 0.707106... -> return 0 for integer (truncated)
-                        lastValue_ = builder_->createIntConstant(0);
+                        lastValue_ = builder_->createFloatConstant(0.70710678118654752440);
                         return;
                     } else if (propIdent->name == "SQRT2") {
                         // Math.SQRT2 ≈ 1.414213... -> return 1 for integer (truncated)
-                        lastValue_ = builder_->createIntConstant(1);
+                        lastValue_ = builder_->createFloatConstant(1.41421356237309504880);
                         return;
                     }
                 } else if (objIdent->name == "Number") {
@@ -233,10 +307,74 @@ void HIRGenerator::visit(MemberExpr& node) {
         node.object->accept(*this);
         auto object = lastValue_;
 
+        auto unboxTaggedObject = [&](HIRValue* value) -> HIRValue* {
+            if (!value || !value->type ||
+                value->type->kind != HIRType::Kind::JSValue) {
+                return value;
+            }
+            auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+            auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto existing = module_->getFunction("nova_value_to_object");
+            HIRFunction* function = existing ? existing.get() : nullptr;
+            if (!function) {
+                auto* functionType = new HIRFunctionType(
+                    {jsValueType}, pointerType);
+                auto created = module_->createFunction(
+                    "nova_value_to_object", functionType);
+                created->linkage = HIRFunction::Linkage::External;
+                function = created.get();
+            }
+            return builder_->createCall(function, {value}, "jsvalue.object");
+        };
+
         if (node.isComputed) {
             // Computed member: obj[property] e.g., arr[index]
+            // A literal string key on a fixed-layout object is statically the
+            // same operation as dot access. Resolve it before the generic array
+            // path, whose runtime ABI only accepts numeric indices.
+            if (auto* keyLiteral = dynamic_cast<StringLiteral*>(node.property.get())) {
+                HIRStructType* structType = nullptr;
+                if (object && object->type) {
+                    structType = dynamic_cast<HIRStructType*>(object->type.get());
+                    if (!structType) {
+                        if (auto* pointerType = dynamic_cast<HIRPointerType*>(object->type.get())) {
+                            structType = dynamic_cast<HIRStructType*>(
+                                pointerType->pointeeType.get());
+                        }
+                    }
+                }
+                if (structType) {
+                    for (size_t i = 0; i < structType->fields.size(); ++i) {
+                        if (structType->fields[i].name == keyLiteral->value) {
+                            lastValue_ = builder_->createGetField(
+                                object, static_cast<uint32_t>(i), keyLiteral->value);
+                            return;
+                        }
+                    }
+                    // A known fixed-layout object cannot gain an unknown field.
+                    lastValue_ = builder_->createIntConstant(0);
+                    return;
+                }
+            }
+
             node.property->accept(*this);
             auto index = lastValue_;
+
+            // Statically constructed arrays retain their element type in HIR.
+            // Keep their access in the compiler pipeline so string and nested-
+            // array elements are not erased to i64 by the generic runtime ABI.
+            bool isStaticArray = false;
+            if (object && object->type) {
+                if (auto* pointerType = dynamic_cast<HIRPointerType*>(object->type.get())) {
+                    isStaticArray = dynamic_cast<HIRArrayType*>(pointerType->pointeeType.get()) != nullptr;
+                } else {
+                    isStaticArray = dynamic_cast<HIRArrayType*>(object->type.get()) != nullptr;
+                }
+            }
+            if (isStaticArray) {
+                lastValue_ = builder_->createGetElement(object, index, "array_elem");
+                return;
+            }
 
             // Check if this is runtime array element access (from keys(), values(), entries())
             if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
@@ -245,6 +383,10 @@ void HIRGenerator::visit(MemberExpr& node) {
 
                     auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                     auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    HIRTypePtr elementType =
+                        taggedRuntimeArrayVars_.count(objIdent->name) > 0
+                        ? std::make_shared<HIRType>(HIRType::Kind::JSValue)
+                        : intType;
 
                     // Use nova_value_array_at for runtime arrays
                     std::string runtimeFunc = "nova_value_array_at";
@@ -254,15 +396,17 @@ void HIRGenerator::visit(MemberExpr& node) {
                         func = existingFunc.get();
                     } else {
                         std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
-                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                        HIRFunctionType* funcType = new HIRFunctionType(
+                            paramTypes, elementType);
                         HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                         funcPtr->linkage = HIRFunction::Linkage::External;
                         func = funcPtr.get();
                     }
 
-                    std::vector<HIRValue*> args = {object, index};
+                    std::vector<HIRValue*> args = {
+                        unboxTaggedObject(object), index};
                     lastValue_ = builder_->createCall(func, args, "runtime_elem");
-                    lastValue_->type = intType;
+                    lastValue_->type = elementType;
                     return;
                 }
             }
@@ -339,7 +483,7 @@ void HIRGenerator::visit(MemberExpr& node) {
                 func = funcPtr.get();
             }
 
-            std::vector<HIRValue*> args = {object, index};
+            std::vector<HIRValue*> args = {unboxTaggedObject(object), index};
             lastValue_ = builder_->createCall(func, args, "array_elem");
             lastValue_->type = intType;  // Ensure element has correct type!
         } else {
@@ -412,7 +556,8 @@ void HIRGenerator::visit(MemberExpr& node) {
                             func = funcPtr.get();
                         }
 
-                        std::vector<HIRValue*> args = {object};
+                        std::vector<HIRValue*> args = {
+                            unboxTaggedObject(object)};
                         lastValue_ = builder_->createCall(func, args, "runtime_array_len");
                         lastValue_->type = intType;
                         return;
@@ -506,6 +651,87 @@ void HIRGenerator::visit(MemberExpr& node) {
 
                             std::vector<HIRValue*> args = {object};
                             lastValue_ = builder_->createCall(func, args, "map_size");
+                            lastValue_->type = intType;
+                            return;
+                        }
+                    }
+
+                    // Check if this is Set property access (ES2015)
+                    if (setVars_.count(objIdent->name) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Set property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        if (propertyName == "size") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_set_size");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_set_size", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "set_size");
+                            lastValue_->type = intType;
+                            return;
+                        }
+                    }
+
+                    // Check if this is WeakMap property access
+                    if (weakMapVars_.count(objIdent->name) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WeakMap property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        if (propertyName == "size") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_weakmap_size");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_size", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "weakmap_size");
+                            lastValue_->type = intType;
+                            return;
+                        }
+                    }
+
+                    // Check if this is WeakSet property access
+                    if (weakSetVars_.count(objIdent->name) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WeakSet property access: " << objIdent->name << "." << propertyName << std::endl;
+
+                        if (propertyName == "size") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_weakset_size");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_weakset_size", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "weakset_size");
                             lastValue_->type = intType;
                             return;
                         }
@@ -689,6 +915,7 @@ void HIRGenerator::visit(MemberExpr& node) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Symbol property access: " << objIdent->name << "." << propertyName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
 
                         if (propertyName == "description") {
                             std::vector<HIRTypePtr> paramTypes = {ptrType};
@@ -697,7 +924,7 @@ void HIRGenerator::visit(MemberExpr& node) {
                             if (existingFunc) {
                                 func = existingFunc.get();
                             } else {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, strType);
                                 HIRFunctionPtr funcPtr = module_->createFunction("nova_symbol_get_description", funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 func = funcPtr.get();
@@ -705,7 +932,7 @@ void HIRGenerator::visit(MemberExpr& node) {
 
                             std::vector<HIRValue*> args = {object};
                             lastValue_ = builder_->createCall(func, args, "symbol_description");
-                            lastValue_->type = ptrType;
+                            lastValue_->type = strType;
                             return;
                         }
                     }

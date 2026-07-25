@@ -13,6 +13,7 @@
 
 #include "nova/Frontend/Lexer.h"
 #include "nova/Frontend/Parser.h"
+#include "nova/Frontend/TypeChecker.h"
 #include "nova/HIR/HIRGen.h"
 #include "nova/MIR/MIRGen.h"
 #include "nova/CodeGen/LLVMCodeGen.h"
@@ -1074,8 +1075,13 @@ int main(int argc, char** argv) {
 
         if (command == "check") {
             if (verbose) std::cout << "⏳ Phase 3: Type Checking..." << std::endl;
-            // TypeChecker checker;
-            // checker.check(ast);
+            TypeChecker checker;
+            if (!checker.check(*ast)) {
+                for (const auto& diagnostic : checker.diagnostics()) {
+                    std::cerr << diagnostic << std::endl;
+                }
+                return 1;
+            }
             std::cout << "✅ Type checking completed successfully" << std::endl;
             return 0;
         }

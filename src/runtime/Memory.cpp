@@ -23,6 +23,7 @@ void* allocate(size_t size, TypeId type_id) {
     header->size = total_size;
     header->type_id = static_cast<uint32>(type_id);
     header->is_marked = false;
+    header->value_encoding = 0;
     header->next = nullptr;
     
     // Update statistics

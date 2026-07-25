@@ -2,6 +2,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cmath>
+#include <cctype>
 
 namespace nova {
 namespace runtime {
@@ -335,6 +336,40 @@ int64_t nova_global_isFinite(double value) {
     // Returns 1 (true) if finite, 0 (false) otherwise
     // isfinite returns true for all values except NaN and infinity
     return std::isfinite(value) ? 1 : 0;
+}
+
+// Number predicates do not coerce non-number inputs. The compiler performs
+// that type guard and calls these helpers only for numeric HIR values.
+int64_t nova_number_isNaN(double value) {
+    return std::isnan(value) ? 1 : 0;
+}
+
+int64_t nova_number_isFinite(double value) {
+    return std::isfinite(value) ? 1 : 0;
+}
+
+int64_t nova_number_isInteger(double value) {
+    return std::isfinite(value) && std::trunc(value) == value ? 1 : 0;
+}
+
+int64_t nova_number_isSafeInteger(double value) {
+    constexpr double maxSafeInteger = 9007199254740991.0;
+    return std::isfinite(value) && std::trunc(value) == value &&
+        std::fabs(value) <= maxSafeInteger ? 1 : 0;
+}
+
+int64_t nova_abstract_equal_number_string(double number, const char* text) {
+    if (!text) return 0;
+    const char* begin = text;
+    while (*begin && std::isspace(static_cast<unsigned char>(*begin))) ++begin;
+    if (!*begin) return number == 0.0 ? 1 : 0;
+
+    char* end = nullptr;
+    const double converted = std::strtod(begin, &end);
+    if (end == begin) return 0;
+    while (*end && std::isspace(static_cast<unsigned char>(*end))) ++end;
+    if (*end != '\0' || std::isnan(converted)) return 0;
+    return number == converted ? 1 : 0;
 }
 
 // Global parseInt(string, radix) - parses string to integer (global version)

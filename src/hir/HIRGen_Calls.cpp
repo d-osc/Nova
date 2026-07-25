@@ -4,13 +4,395 @@
 
 #include "nova/HIR/HIRGen_Internal.h"
 #include <fstream>
+#include <functional>
 #define NOVA_DEBUG 0
 
 namespace nova::hir {
 
+namespace {
+
+HIRStructType* getStaticObjectStructType(HIRValue* value) {
+    if (!value || !value->type) {
+        return nullptr;
+    }
+
+    if (auto* structType = dynamic_cast<HIRStructType*>(value->type.get())) {
+        return structType;
+    }
+
+    if (auto* pointerType = dynamic_cast<HIRPointerType*>(value->type.get())) {
+        return dynamic_cast<HIRStructType*>(pointerType->pointeeType.get());
+    }
+
+    return nullptr;
+}
+
+HIRArrayType* getStaticArrayType(HIRValue* value) {
+    if (!value || !value->type) {
+        return nullptr;
+    }
+
+    if (auto* arrayType = dynamic_cast<HIRArrayType*>(value->type.get())) {
+        return arrayType;
+    }
+
+    if (auto* pointerType = dynamic_cast<HIRPointerType*>(value->type.get())) {
+        return dynamic_cast<HIRArrayType*>(pointerType->pointeeType.get());
+    }
+
+    return nullptr;
+}
+
+std::string escapeJSONKey(const std::string& value) {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (unsigned char character : value) {
+        switch (character) {
+            case '"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (character < 0x20) {
+                    escaped += "\\u00";
+                    escaped += hex[(character >> 4) & 0x0f];
+                    escaped += hex[character & 0x0f];
+                } else {
+                    escaped += static_cast<char>(character);
+                }
+                break;
+        }
+    }
+    return escaped;
+}
+
+bool isPromiseProducingExpression(
+        Expr* expression,
+        const std::unordered_set<std::string>& promiseVariables) {
+    if (!expression) return false;
+    if (auto* identifier = dynamic_cast<Identifier*>(expression)) {
+        return promiseVariables.count(identifier->name) != 0;
+    }
+    if (auto* construct = dynamic_cast<NewExpr*>(expression)) {
+        auto* callee = dynamic_cast<Identifier*>(construct->callee.get());
+        return callee && callee->name == "Promise";
+    }
+    auto* call = dynamic_cast<CallExpr*>(expression);
+    if (!call) return false;
+    auto* member = dynamic_cast<MemberExpr*>(call->callee.get());
+    if (!member || member->isComputed) return false;
+    auto* property = dynamic_cast<Identifier*>(member->property.get());
+    if (!property) return false;
+    if (auto* object = dynamic_cast<Identifier*>(member->object.get())) {
+        if (object->name == "Promise") {
+            return property->name == "resolve" || property->name == "reject" ||
+                   property->name == "all" || property->name == "race" ||
+                   property->name == "allSettled" || property->name == "any" ||
+                   property->name == "try";
+        }
+    }
+    return (property->name == "then" || property->name == "catch" ||
+            property->name == "finally") &&
+           isPromiseProducingExpression(member->object.get(), promiseVariables);
+}
+
+} // namespace
+
 void HIRGenerator::visit(CallExpr& node) {
         if (!node.callee) {
             return;
+        }
+
+        auto recordReturnedClosure = [&](const std::string& functionName) {
+            auto returned = module_->closureReturnedBy.find(functionName);
+            if (returned != module_->closureReturnedBy.end()) {
+                lastFunctionName_ = returned->second;
+            }
+        };
+
+        auto hasDynamicThis = [&](const std::string& functionName,
+                                  HIRFunction* function) {
+            if (dynamicThisFunctions_.count(functionName) > 0) {
+                return true;
+            }
+            // A recursive call is emitted while the ordinary function still
+            // has its tentative receiver. Keep that receiver in the final ABI
+            // so the already-emitted recursive call cannot become misaligned.
+            if (function && function == currentFunction_ &&
+                !function->parameters.empty() &&
+                function->parameters.front()->name == "__this") {
+                currentOrdinaryFunctionUsesThis_ = true;
+                return true;
+            }
+            return false;
+        };
+
+        // Resolve Function.prototype call/apply/bind for statically named
+        // functions before the generic member-expression machinery turns the
+        // function identifier into a non-callable placeholder.
+        if (auto* member = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            auto* targetIdentifier =
+                dynamic_cast<Identifier*>(member->object.get());
+            auto* methodIdentifier =
+                dynamic_cast<Identifier*>(member->property.get());
+            if (targetIdentifier && methodIdentifier && !member->isComputed) {
+                auto target = module_->getFunction(targetIdentifier->name);
+                const std::string& method = methodIdentifier->name;
+                if (target && (method == "call" || method == "apply" ||
+                               method == "bind")) {
+                    std::vector<HIRValue*> forwarded;
+                    HIRValue* receiver = toJSValue(nullptr);
+                    if (!node.arguments.empty()) {
+                        node.arguments[0]->accept(*this);
+                        receiver = toJSValue(lastValue_);
+                    }
+                    if (method == "call" || method == "bind") {
+                        for (size_t i = 1; i < node.arguments.size(); ++i) {
+                            node.arguments[i]->accept(*this);
+                            forwarded.push_back(lastValue_);
+                        }
+                    } else if (node.arguments.size() > 1) {
+                        if (auto* literal = dynamic_cast<ArrayExpr*>(
+                                node.arguments[1].get())) {
+                            for (auto& element : literal->elements) {
+                                if (!element) {
+                                    forwarded.push_back(toJSValue(nullptr));
+                                    continue;
+                                }
+                                element->accept(*this);
+                                forwarded.push_back(lastValue_);
+                            }
+                        } else if (dynamic_cast<Identifier*>(
+                                       node.arguments[1].get())) {
+                            node.arguments[1]->accept(*this);
+                            HIRValue* arrayValue = lastValue_;
+                            HIRArrayType* arrayType = nullptr;
+                            if (arrayValue && arrayValue->type) {
+                                if (auto* pointer = dynamic_cast<HIRPointerType*>(
+                                        arrayValue->type.get())) {
+                                    arrayType = dynamic_cast<HIRArrayType*>(
+                                        pointer->pointeeType.get());
+                                } else {
+                                    arrayType = dynamic_cast<HIRArrayType*>(
+                                        arrayValue->type.get());
+                                }
+                            }
+                            if (arrayType &&
+                                module_->functionRestParams.count(
+                                    targetIdentifier->name) == 0) {
+                                size_t expected =
+                                    target->functionType->paramTypes.size();
+                                if (hasDynamicThis(targetIdentifier->name,
+                                                   target.get()) && expected > 0) {
+                                    --expected;
+                                }
+                                if (!target->parameters.empty() &&
+                                    target->parameters.back()->name == "__env" &&
+                                    expected > 0) {
+                                    --expected;
+                                }
+                                for (size_t i = 0; i < expected; ++i) {
+                                    forwarded.push_back(
+                                        builder_->createGetElement(
+                                            arrayValue,
+                                            builder_->createIntConstant(
+                                                static_cast<int64_t>(i)),
+                                            "function.apply.argument"));
+                                }
+                            } else {
+                                target.reset();
+                            }
+                        } else if (!dynamic_cast<NullLiteral*>(
+                                       node.arguments[1].get()) &&
+                                   !dynamic_cast<UndefinedLiteral*>(
+                                       node.arguments[1].get())) {
+                            // Non-literal iterables require the dynamic callable
+                            // ABI; leave them to the later runtime path.
+                            target.reset();
+                        }
+                    }
+
+                    if (target) {
+                        if (method == "bind") {
+                            pendingBoundFunction_ = targetIdentifier->name;
+                            pendingBoundArguments_ = forwarded;
+                            pendingBoundThis_ = receiver;
+                            lastFunctionName_ = targetIdentifier->name;
+                            lastValue_ = builder_->createStringConstant(
+                                targetIdentifier->name);
+                            return;
+                        }
+
+                        if (hasDynamicThis(targetIdentifier->name,
+                                           target.get())) {
+                            forwarded.insert(forwarded.begin(), receiver);
+                        }
+
+                        const size_t count = std::min(
+                            forwarded.size(),
+                            target->functionType->paramTypes.size());
+                        for (size_t i = 0; i < count; ++i) {
+                            if (target->functionType->paramTypes[i] &&
+                                target->functionType->paramTypes[i]->kind ==
+                                    HIRType::Kind::JSValue &&
+                                forwarded[i] && forwarded[i]->type &&
+                                forwarded[i]->type->kind !=
+                                    HIRType::Kind::JSValue) {
+                                forwarded[i] = toJSValue(forwarded[i]);
+                            }
+                        }
+                        lastValue_ = builder_->createCall(
+                            target.get(), forwarded,
+                            method == "call" ? "function_call_result"
+                                             : "function_apply_result");
+                        lastWasPromise_ = target->isAsync;
+                        recordReturnedClosure(targetIdentifier->name);
+                        return;
+                    }
+                }
+            }
+        }
+
+        if (forcePromiseExecutorABI_) {
+            if (auto* identifier = dynamic_cast<Identifier*>(node.callee.get())) {
+                const bool resolves = !promiseExecutorResolveName_.empty() &&
+                    identifier->name == promiseExecutorResolveName_;
+                const bool rejects = !promiseExecutorRejectName_.empty() &&
+                    identifier->name == promiseExecutorRejectName_;
+                if (resolves || rejects) {
+                    auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                    HIRValue* payload = nullptr;
+                    if (!node.arguments.empty()) {
+                        node.arguments[0]->accept(*this);
+                        payload = toJSValue(lastValue_);
+                    } else {
+                        payload = toJSValue(nullptr);
+                    }
+
+                    HIRValue* callable = lookupVariable(identifier->name);
+                    if (auto* instruction = dynamic_cast<HIRInstruction*>(callable);
+                        instruction && instruction->opcode ==
+                            HIRInstruction::Opcode::Alloca) {
+                        callable = builder_->createLoad(
+                            callable, identifier->name + ".callable");
+                    }
+
+                    const std::string runtimeName = "nova_callable_call1";
+                    auto existing = module_->getFunction(runtimeName);
+                    HIRFunction* function = existing ? existing.get() : nullptr;
+                    if (!function) {
+                        auto* functionType = new HIRFunctionType(
+                            {jsValueType, jsValueType}, jsValueType);
+                        auto created = module_->createFunction(
+                            runtimeName, functionType);
+                        created->linkage = HIRFunction::Linkage::External;
+                        function = created.get();
+                    }
+                    lastValue_ = builder_->createCall(
+                        function, {callable, payload}, "promise.executor.settle");
+                    return;
+                }
+            }
+        }
+
+        if (auto* member = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            // Promise-producing expressions are valid receivers directly, e.g.
+            // Promise.resolve(1).then(...).catch(...). The older path below only
+            // recognized identifiers recorded in promiseVars_.
+            auto* chainedProperty = member->isComputed ? nullptr
+                : dynamic_cast<Identifier*>(member->property.get());
+            if (!dynamic_cast<Identifier*>(member->object.get()) &&
+                chainedProperty &&
+                (chainedProperty->name == "then" ||
+                 chainedProperty->name == "catch" ||
+                 chainedProperty->name == "finally") &&
+                isPromiseProducingExpression(member->object.get(), promiseVars_)) {
+                member->object->accept(*this);
+                HIRValue* objectValue = lastValue_;
+                auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                const std::string& methodName = chainedProperty->name;
+                const bool hasRejectionHandler =
+                    methodName == "then" && node.arguments.size() > 1;
+                std::string runtimeName = methodName == "then"
+                    ? (hasRejectionHandler ? "nova_promise_then_both"
+                                           : "nova_promise_then")
+                    : methodName == "catch" ? "nova_promise_catch"
+                                             : "nova_promise_finally";
+                std::vector<HIRTypePtr> parameterTypes = hasRejectionHandler
+                    ? std::vector<HIRTypePtr>{pointerType, pointerType, pointerType}
+                    : std::vector<HIRTypePtr>{pointerType, pointerType};
+                auto existing = module_->getFunction(runtimeName);
+                HIRFunction* function = existing ? existing.get() : nullptr;
+                if (!function) {
+                    auto* functionType = new HIRFunctionType(
+                        parameterTypes, pointerType);
+                    auto created = module_->createFunction(runtimeName, functionType);
+                    created->linkage = HIRFunction::Linkage::External;
+                    function = created.get();
+                }
+
+                std::vector<HIRValue*> arguments = {objectValue};
+                const size_t callbackCount = hasRejectionHandler ? 2 : 1;
+                for (size_t index = 0; index < callbackCount; ++index) {
+                    if (index >= node.arguments.size() ||
+                        dynamic_cast<NullLiteral*>(node.arguments[index].get()) ||
+                        dynamic_cast<UndefinedLiteral*>(node.arguments[index].get())) {
+                        arguments.push_back(
+                            builder_->createNullConstant(pointerType.get()));
+                        continue;
+                    }
+                    lastFunctionName_.clear();
+                    const bool savedTaggedABI = forceTaggedFunctionABI_;
+                    forceTaggedFunctionABI_ = methodName != "finally";
+                    node.arguments[index]->accept(*this);
+                    forceTaggedFunctionABI_ = savedTaggedABI;
+                    arguments.push_back(!lastFunctionName_.empty()
+                        ? builder_->createStringConstant(lastFunctionName_)
+                        : lastValue_);
+                    lastFunctionName_.clear();
+                }
+                lastValue_ = builder_->createCall(
+                    function, arguments, "promise_chained_method");
+                lastValue_->type = pointerType;
+                lastWasPromise_ = true;
+                return;
+            }
+            auto* object = dynamic_cast<Identifier*>(member->object.get());
+            auto* property = dynamic_cast<Identifier*>(member->property.get());
+            if (object && property) {
+                auto namespaceIt = moduleNamespaceFunctions_.find(object->name);
+                if (namespaceIt != moduleNamespaceFunctions_.end()) {
+                    auto functionIt = namespaceIt->second.find(property->name);
+                    if (functionIt != namespaceIt->second.end()) {
+                        auto function = module_->getFunction(functionIt->second);
+                        if (function) {
+                            std::vector<HIRValue*> arguments;
+                            for (auto& argument : node.arguments) {
+                                argument->accept(*this);
+                                arguments.push_back(lastValue_);
+                            }
+                            const size_t count = std::min(
+                                arguments.size(),
+                                function->functionType->paramTypes.size());
+                            for (size_t index = 0; index < count; ++index) {
+                                if (function->functionType->paramTypes[index]->kind ==
+                                        HIRType::Kind::JSValue &&
+                                    arguments[index]->type->kind !=
+                                        HIRType::Kind::JSValue) {
+                                    arguments[index] = toJSValue(arguments[index]);
+                                }
+                            }
+                            lastValue_ = builder_->createCall(
+                                function.get(), arguments, "module_namespace_call");
+                            return;
+                        }
+                    }
+                }
+            }
         }
 
         // Handle super() constructor calls
@@ -114,6 +496,7 @@ void HIRGenerator::visit(CallExpr& node) {
                                 args.push_back(lastValue_);
                             }
                             lastValue_ = builder_->createCall(func.get(), args, "super_method_call");
+                            recordReturnedClosure(mangledName);
                             return;
                         } else {
                             std::cerr << "WARNING: super method " << mangledName << " not found!" << std::endl;
@@ -1766,6 +2149,7 @@ void HIRGenerator::visit(CallExpr& node) {
                                 bool isString = arg->type && arg->type->kind == HIRType::Kind::String;
                                 bool isPointer = arg->type && arg->type->kind == HIRType::Kind::Pointer;
                                 bool isAny = arg->type && arg->type->kind == HIRType::Kind::Any;
+                                bool isJSValue = arg->type && arg->type->kind == HIRType::Kind::JSValue;
                                 bool isBool = arg->type && arg->type->kind == HIRType::Kind::Bool;
                                 bool isDouble = arg->type && arg->type->kind == HIRType::Kind::F64;
                                 bool isI64 = arg->type && arg->type->kind == HIRType::Kind::I64;
@@ -1816,6 +2200,8 @@ void HIRGenerator::visit(CallExpr& node) {
                                     } else if (isAny) {
                                         // Any type uses runtime type detection
                                         runtimeFuncName = "nova_console_log_any";
+                                    } else if (isJSValue) {
+                                        runtimeFuncName = "nova_console_log_value";
                                     } else if (isBool) {
                                         runtimeFuncName = "nova_console_log_bool";
                                     } else if (isDouble) {
@@ -1859,6 +2245,8 @@ void HIRGenerator::visit(CallExpr& node) {
                                     paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Bool));
                                 } else if (isDouble) {
                                     paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::F64));
+                                } else if (isJSValue) {
+                                    paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::JSValue));
                                 } else {
                                     paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                                 }
@@ -2912,6 +3300,99 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Evaluate the argument
                         node.arguments[0]->accept(*this);
                         auto* value = lastValue_;
+
+                        // Static objects and homogeneous arrays retain enough type
+                        // metadata to serialize recursively without interpreting a
+                        // compiler-owned struct as a different runtime object layout.
+                        auto* topStructType = getStaticObjectStructType(value);
+                        auto* topArrayType = getStaticArrayType(value);
+                        if (topStructType || (topArrayType && topArrayType->size > 0)) {
+                            auto getStringifyFunction = [this](
+                                const std::string& name,
+                                const std::vector<HIRTypePtr>& params) -> HIRFunction* {
+                                if (auto existing = module_->getFunction(name)) {
+                                    return existing.get();
+                                }
+
+                                auto returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                                HIRFunctionType* functionType = new HIRFunctionType(params, returnType);
+                                HIRFunctionPtr function = module_->createFunction(name, functionType);
+                                function->linkage = HIRFunction::Linkage::External;
+                                return function.get();
+                            };
+
+                            auto callRuntimeStringify = [&](HIRValue* field) -> HIRValue* {
+                                std::string functionName = "nova_json_stringify_number";
+                                HIRTypePtr parameterType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                                if (field && field->type) {
+                                    if (field->type->kind == HIRType::Kind::String) {
+                                        functionName = "nova_json_stringify_string";
+                                        parameterType = std::make_shared<HIRType>(HIRType::Kind::String);
+                                    } else if (field->type->kind == HIRType::Kind::Bool) {
+                                        functionName = "nova_json_stringify_bool";
+                                    } else if (field->type->kind == HIRType::Kind::F64 ||
+                                               field->type->kind == HIRType::Kind::F32) {
+                                        functionName = "nova_json_stringify_float";
+                                        parameterType = std::make_shared<HIRType>(HIRType::Kind::F64);
+                                    } else if (field->type->kind == HIRType::Kind::Pointer) {
+                                        parameterType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                                        if (getStaticArrayType(field)) {
+                                            functionName = "nova_json_stringify_array";
+                                        } else {
+                                            functionName = "nova_json_stringify_object";
+                                        }
+                                    }
+                                }
+
+                                HIRFunction* function = getStringifyFunction(
+                                    functionName, {parameterType});
+                                return builder_->createCall(function, {field}, "stringify_field");
+                            };
+
+                            std::function<HIRValue*(HIRValue*)> stringifyStatic;
+                            stringifyStatic = [&](HIRValue* current) -> HIRValue* {
+                                if (auto* structType = getStaticObjectStructType(current)) {
+                                    HIRValue* json = builder_->createStringConstant("{");
+                                    for (size_t i = 0; i < structType->fields.size(); ++i) {
+                                        std::string keyPrefix = (i == 0 ? "\"" : ",\"") +
+                                            escapeJSONKey(structType->fields[i].name) + "\":";
+                                        json = builder_->createAdd(
+                                            json, builder_->createStringConstant(keyPrefix), "json_key");
+
+                                        HIRValue* field = builder_->createGetField(
+                                            current, static_cast<uint32_t>(i), structType->fields[i].name);
+                                        json = builder_->createAdd(
+                                            json, stringifyStatic(field), "json_value");
+                                    }
+                                    return builder_->createAdd(
+                                        json, builder_->createStringConstant("}"), "json_object");
+                                }
+
+                                if (auto* arrayType = getStaticArrayType(current);
+                                    arrayType && arrayType->size > 0) {
+                                    HIRValue* json = builder_->createStringConstant("[");
+                                    for (uint64_t i = 0; i < arrayType->size; ++i) {
+                                        if (i > 0) {
+                                            json = builder_->createAdd(
+                                                json, builder_->createStringConstant(","), "json_comma");
+                                        }
+                                        HIRValue* element = builder_->createGetElement(
+                                            current, builder_->createIntConstant(static_cast<int64_t>(i)),
+                                            "json_element");
+                                        json = builder_->createAdd(
+                                            json, stringifyStatic(element), "json_element_value");
+                                    }
+                                    return builder_->createAdd(
+                                        json, builder_->createStringConstant("]"), "json_array");
+                                }
+
+                                return callRuntimeStringify(current);
+                            };
+
+                            lastValue_ = stringifyStatic(value);
+                            return;
+                        }
 
                         // Determine argument type: string, boolean, array, or number
                         bool isString = value->type && value->type->kind == HIRType::Kind::String;
@@ -3977,55 +4458,44 @@ void HIRGenerator::visit(CallExpr& node) {
             if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                 if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                     if (objIdent->name == "Number") {
-                        if (propIdent->name == "isNaN") {
-                            // Number.isNaN() - for integer type, always returns false (0)
+                        if (propIdent->name == "isNaN" ||
+                            propIdent->name == "isInteger" ||
+                            propIdent->name == "isFinite" ||
+                            propIdent->name == "isSafeInteger") {
                             if (node.arguments.size() != 1) {
-                                std::cerr << "ERROR: Number.isNaN() expects exactly 1 argument" << std::endl;
+                                std::cerr << "ERROR: Number." << propIdent->name
+                                          << "() expects exactly 1 argument" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
-                            // Evaluate argument (though we don't use it for integers)
+
                             node.arguments[0]->accept(*this);
-                            // All integers are not NaN
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        } else if (propIdent->name == "isInteger") {
-                            // Number.isInteger() - for integer type, always returns true (1)
-                            if (node.arguments.size() != 1) {
-                                std::cerr << "ERROR: Number.isInteger() expects exactly 1 argument" << std::endl;
+                            auto* argument = lastValue_;
+                            const bool numeric = argument && argument->type &&
+                                argument->type->isNumeric();
+                            if (!numeric) {
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
-                            // Evaluate argument (though we don't use it for integers)
-                            node.arguments[0]->accept(*this);
-                            // All our values are integers
-                            lastValue_ = builder_->createIntConstant(1);
-                            return;
-                        } else if (propIdent->name == "isFinite") {
-                            // Number.isFinite() - for integer type, always returns true (1)
-                            if (node.arguments.size() != 1) {
-                                std::cerr << "ERROR: Number.isFinite() expects exactly 1 argument" << std::endl;
-                                lastValue_ = builder_->createIntConstant(0);
-                                return;
+
+                            const std::string runtimeFuncName =
+                                "nova_number_" + propIdent->name;
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* runtimeFunc = existingFunc
+                                ? existingFunc.get() : nullptr;
+                            if (!runtimeFunc) {
+                                auto floatType = std::make_shared<HIRType>(HIRType::Kind::F64);
+                                auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                                HIRFunctionType* funcType = new HIRFunctionType(
+                                    {floatType}, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(
+                                    runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
                             }
-                            // Evaluate argument (though we don't use it for integers)
-                            node.arguments[0]->accept(*this);
-                            // All integers are finite
-                            lastValue_ = builder_->createIntConstant(1);
-                            return;
-                        } else if (propIdent->name == "isSafeInteger") {
-                            // Number.isSafeInteger() - for integer type, always returns true (1)
-                            // In JavaScript, safe integers are -(2^53 - 1) to 2^53 - 1
-                            // For our i64 integer type system, all values are "safe"
-                            if (node.arguments.size() != 1) {
-                                std::cerr << "ERROR: Number.isSafeInteger() expects exactly 1 argument" << std::endl;
-                                lastValue_ = builder_->createIntConstant(0);
-                                return;
-                            }
-                            // Evaluate argument (though we don't use it for integers)
-                            node.arguments[0]->accept(*this);
-                            // All our i64 integers are safe integers
-                            lastValue_ = builder_->createIntConstant(1);
+
+                            lastValue_ = builder_->createCall(
+                                runtimeFunc, {argument}, propIdent->name + "_result");
                             return;
                         } else if (propIdent->name == "parseInt") {
                             // Number.parseInt(string, radix) - parses a string and returns an integer
@@ -4289,6 +4759,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         }
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
 
                         HIRFunction* runtimeFunc = nullptr;
@@ -4296,7 +4767,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (existingFunc) {
                             runtimeFunc = existingFunc.get();
                         } else {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, strType);
                             HIRFunctionPtr funcPtr = module_->createFunction("nova_symbol_keyFor", funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
@@ -4318,6 +4789,35 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Evaluate the argument (object)
                         node.arguments[0]->accept(*this);
                         auto* obj = lastValue_;
+
+                        // Object literals are represented as static structs, not as
+                        // runtime Object instances. Build their values array from the
+                        // known fields instead of interpreting the first property as
+                        // the runtime object's properties-map pointer.
+                        if (auto* structType = getStaticObjectStructType(obj)) {
+                            std::vector<HIRValue*> values;
+                            values.reserve(structType->fields.size());
+                            auto* sourceIdentifier =
+                                dynamic_cast<Identifier*>(node.arguments[0].get());
+                            for (size_t i = 0; i < structType->fields.size(); ++i) {
+                                if (sourceIdentifier) {
+                                    auto objectAttributes =
+                                        propertyEnumerable_.find(sourceIdentifier->name);
+                                    if (objectAttributes != propertyEnumerable_.end()) {
+                                        auto attribute = objectAttributes->second.find(
+                                            structType->fields[i].name);
+                                        if (attribute != objectAttributes->second.end() &&
+                                            !attribute->second) {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                values.push_back(builder_->createGetField(
+                                    obj, static_cast<uint32_t>(i), structType->fields[i].name));
+                            }
+                            lastValue_ = builder_->createArrayConstruct(values, "object_values_result");
+                            return;
+                        }
 
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_values";
@@ -4364,6 +4864,32 @@ void HIRGenerator::visit(CallExpr& node) {
                         node.arguments[0]->accept(*this);
                         auto* obj = lastValue_;
 
+                        // Preserve JavaScript property insertion order for static
+                        // object literals by materializing keys from struct metadata.
+                        if (auto* structType = getStaticObjectStructType(obj)) {
+                            std::vector<HIRValue*> keys;
+                            keys.reserve(structType->fields.size());
+                            auto* sourceIdentifier =
+                                dynamic_cast<Identifier*>(node.arguments[0].get());
+                            for (const auto& field : structType->fields) {
+                                if (sourceIdentifier) {
+                                    auto objectAttributes =
+                                        propertyEnumerable_.find(sourceIdentifier->name);
+                                    if (objectAttributes != propertyEnumerable_.end()) {
+                                        auto attribute =
+                                            objectAttributes->second.find(field.name);
+                                        if (attribute != objectAttributes->second.end() &&
+                                            !attribute->second) {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                keys.push_back(builder_->createStringConstant(field.name));
+                            }
+                            lastValue_ = builder_->createArrayConstruct(keys, "object_keys_result");
+                            return;
+                        }
+
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_keys";
                         std::vector<HIRTypePtr> paramTypes;
@@ -4409,6 +4935,38 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Evaluate the argument (object)
                         node.arguments[0]->accept(*this);
                         auto* obj = lastValue_;
+
+                        // Static object literals carry their field names and values in
+                        // HIR. Materialize each [key, value] pair while that metadata is
+                        // available; dynamic runtime objects continue through the
+                        // fallback below.
+                        if (auto* structType = getStaticObjectStructType(obj)) {
+                            std::vector<HIRValue*> entries;
+                            entries.reserve(structType->fields.size());
+                            auto* sourceIdentifier =
+                                dynamic_cast<Identifier*>(node.arguments[0].get());
+                            for (size_t i = 0; i < structType->fields.size(); ++i) {
+                                if (sourceIdentifier) {
+                                    auto objectAttributes =
+                                        propertyEnumerable_.find(sourceIdentifier->name);
+                                    if (objectAttributes != propertyEnumerable_.end()) {
+                                        auto attribute = objectAttributes->second.find(
+                                            structType->fields[i].name);
+                                        if (attribute != objectAttributes->second.end() &&
+                                            !attribute->second) {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                auto* key = builder_->createStringConstant(structType->fields[i].name);
+                                auto* value = builder_->createGetField(
+                                    obj, static_cast<uint32_t>(i), structType->fields[i].name);
+                                std::vector<HIRValue*> pair = {key, value};
+                                entries.push_back(builder_->createArrayConstruct(pair, "object_entry"));
+                            }
+                            lastValue_ = builder_->createArrayConstruct(entries, "object_entries_result");
+                            return;
+                        }
 
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_entries";
@@ -4459,6 +5017,78 @@ void HIRGenerator::visit(CallExpr& node) {
                         node.arguments[1]->accept(*this);
                         auto* source = lastValue_;
 
+                        // Static object literals have fixed layouts. Copy every
+                        // overlapping source field directly into the target struct;
+                        // adding a brand-new field still requires unified dynamic
+                        // object metadata and falls outside this fast path.
+                        auto* targetStruct = getStaticObjectStructType(target);
+                        auto* sourceStruct = getStaticObjectStructType(source);
+                        if (targetStruct && sourceStruct) {
+                            auto* targetIdentifier =
+                                dynamic_cast<Identifier*>(node.arguments[0].get());
+                            auto* sourceIdentifier =
+                                dynamic_cast<Identifier*>(node.arguments[1].get());
+                            if (targetIdentifier &&
+                                frozenObjectVars_.count(targetIdentifier->name) > 0) {
+                                currentObjectName_.clear();
+                                lastIntegrityObjectName_ = targetIdentifier->name;
+                                lastValue_ = target;
+                                return;
+                            }
+
+                            for (size_t sourceIndex = 0;
+                                 sourceIndex < sourceStruct->fields.size(); ++sourceIndex) {
+                                const auto& sourceField = sourceStruct->fields[sourceIndex];
+                                if (sourceIdentifier) {
+                                    auto sourceAttributes =
+                                        propertyEnumerable_.find(sourceIdentifier->name);
+                                    if (sourceAttributes != propertyEnumerable_.end()) {
+                                        auto attribute = sourceAttributes->second.find(
+                                            sourceField.name);
+                                        if (attribute != sourceAttributes->second.end() &&
+                                            !attribute->second) {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                for (size_t targetIndex = 0;
+                                     targetIndex < targetStruct->fields.size(); ++targetIndex) {
+                                    if (targetStruct->fields[targetIndex].name == sourceField.name) {
+                                        bool canWrite = true;
+                                        if (targetIdentifier) {
+                                            auto targetAttributes =
+                                                propertyWritable_.find(targetIdentifier->name);
+                                            if (targetAttributes != propertyWritable_.end()) {
+                                                auto attribute = targetAttributes->second.find(
+                                                    sourceField.name);
+                                                if (attribute != targetAttributes->second.end()) {
+                                                    canWrite = attribute->second;
+                                                }
+                                            }
+                                        }
+                                        if (!canWrite || !sourceField.type ||
+                                            !targetStruct->fields[targetIndex].type ||
+                                            sourceField.type->kind !=
+                                                targetStruct->fields[targetIndex].type->kind) {
+                                            break;
+                                        }
+                                        HIRValue* sourceValue = builder_->createGetField(
+                                            source, static_cast<uint32_t>(sourceIndex), sourceField.name);
+                                        builder_->createSetField(
+                                            target, static_cast<uint32_t>(targetIndex), sourceValue,
+                                            "object_assign_field");
+                                        break;
+                                    }
+                                }
+                            }
+                            currentObjectName_.clear();
+                            if (targetIdentifier) {
+                                lastIntegrityObjectName_ = targetIdentifier->name;
+                            }
+                            lastValue_ = target;
+                            return;
+                        }
+
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_assign";
                         std::vector<HIRTypePtr> paramTypes;
@@ -4506,6 +5136,24 @@ void HIRGenerator::visit(CallExpr& node) {
                         node.arguments[1]->accept(*this);
                         auto* key = lastValue_;
 
+                        // Static object field names are known at compile time. A
+                        // literal key can be answered without passing the static
+                        // struct to the incompatible runtime Object map layout.
+                        if (auto* structType = getStaticObjectStructType(obj)) {
+                            if (auto* keyLiteral =
+                                    dynamic_cast<StringLiteral*>(node.arguments[1].get())) {
+                                bool found = false;
+                                for (const auto& field : structType->fields) {
+                                    if (field.name == keyLiteral->value) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                lastValue_ = builder_->createBoolConstant(found);
+                                return;
+                            }
+                        }
+
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_hasOwn";
                         std::vector<HIRTypePtr> paramTypes;
@@ -4550,6 +5198,16 @@ void HIRGenerator::visit(CallExpr& node) {
                         node.arguments[0]->accept(*this);
                         auto* obj = lastValue_;
 
+                        if (auto* identifier = dynamic_cast<Identifier*>(node.arguments[0].get());
+                            identifier && getStaticObjectStructType(obj)) {
+                            frozenObjectVars_.insert(identifier->name);
+                            sealedObjectVars_.insert(identifier->name);
+                            nonExtensibleObjectVars_.insert(identifier->name);
+                            lastIntegrityObjectName_ = identifier->name;
+                            lastValue_ = obj;
+                            return;
+                        }
+
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_freeze";
                         std::vector<HIRTypePtr> paramTypes;
@@ -4592,6 +5250,13 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Evaluate the argument (object)
                         node.arguments[0]->accept(*this);
                         auto* obj = lastValue_;
+
+                        if (auto* identifier = dynamic_cast<Identifier*>(node.arguments[0].get());
+                            identifier && getStaticObjectStructType(obj)) {
+                            lastValue_ = builder_->createBoolConstant(
+                                frozenObjectVars_.count(identifier->name) > 0);
+                            return;
+                        }
 
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_isFrozen";
@@ -4636,6 +5301,15 @@ void HIRGenerator::visit(CallExpr& node) {
                         node.arguments[0]->accept(*this);
                         auto* obj = lastValue_;
 
+                        if (auto* identifier = dynamic_cast<Identifier*>(node.arguments[0].get());
+                            identifier && getStaticObjectStructType(obj)) {
+                            sealedObjectVars_.insert(identifier->name);
+                            nonExtensibleObjectVars_.insert(identifier->name);
+                            lastIntegrityObjectName_ = identifier->name;
+                            lastValue_ = obj;
+                            return;
+                        }
+
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_seal";
                         std::vector<HIRTypePtr> paramTypes;
@@ -4678,6 +5352,14 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Evaluate the argument (object)
                         node.arguments[0]->accept(*this);
                         auto* obj = lastValue_;
+
+                        if (auto* identifier = dynamic_cast<Identifier*>(node.arguments[0].get());
+                            identifier && getStaticObjectStructType(obj)) {
+                            bool isSealed = sealedObjectVars_.count(identifier->name) > 0 ||
+                                            frozenObjectVars_.count(identifier->name) > 0;
+                            lastValue_ = builder_->createBoolConstant(isSealed);
+                            return;
+                        }
 
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_isSealed";
@@ -4723,6 +5405,95 @@ void HIRGenerator::visit(CallExpr& node) {
                         auto* value1 = lastValue_;
                         node.arguments[1]->accept(*this);
                         auto* value2 = lastValue_;
+
+                        // The generic runtime ABI accepts two i64 values, which is
+                        // not safe for strings or other pointer-backed HIR values.
+                        // Lower the primitive cases whose Object.is semantics are
+                        // identical to an equality comparison while their types are
+                        // still available. Floating-point values deliberately keep
+                        // using the fallback because NaN and signed zero need the
+                        // full SameValue algorithm.
+                        const bool number1 = value1 && value1->type && value1->type->isNumeric();
+                        const bool number2 = value2 && value2->type && value2->type->isNumeric();
+                        if (number1 || number2) {
+                            if (!number1 || !number2) {
+                                lastValue_ = builder_->createBoolConstant(false);
+                                return;
+                            }
+
+                            if (!value1->type->isFloat() && !value2->type->isFloat()) {
+                                lastValue_ = builder_->createEq(
+                                    value1, value2, "object_is_integer");
+                                return;
+                            }
+
+                            const std::string runtimeFuncName = "nova_object_is_number";
+                            std::vector<HIRTypePtr> paramTypes = {
+                                std::make_shared<HIRType>(HIRType::Kind::F64),
+                                std::make_shared<HIRType>(HIRType::Kind::F64)
+                            };
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* runtimeFunc = existingFunc ? existingFunc.get() : nullptr;
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                            }
+                            lastValue_ = builder_->createCall(
+                                runtimeFunc, {value1, value2}, "object_is_number_result");
+                            return;
+                        }
+
+                        const auto primitiveCategory = [](HIRValue* value) {
+                            if (!value || !value->type) return 0;
+                            if (value->type->kind == HIRType::Kind::String) return 1;
+                            if (value->type->kind == HIRType::Kind::Bool) return 2;
+                            return 0;
+                        };
+                        const int category1 = primitiveCategory(value1);
+                        const int category2 = primitiveCategory(value2);
+                        if (category1 != 0 || category2 != 0) {
+                            lastValue_ = category1 == category2
+                                ? static_cast<HIRValue*>(builder_->createEq(
+                                      value1, value2, "object_is_primitive"))
+                                : static_cast<HIRValue*>(builder_->createBoolConstant(false));
+                            return;
+                        }
+
+                        const auto hasIdentity = [](HIRValue* value) {
+                            if (!value || !value->type) return false;
+                            return getStaticObjectStructType(value) ||
+                                   getStaticArrayType(value) ||
+                                   value->type->isPointer() ||
+                                   value->type->kind == HIRType::Kind::Function ||
+                                   value->type->kind == HIRType::Kind::Closure;
+                        };
+                        const bool identity1 = hasIdentity(value1);
+                        const bool identity2 = hasIdentity(value2);
+                        if (identity1 || identity2) {
+                            if (!identity1 || !identity2) {
+                                lastValue_ = builder_->createBoolConstant(false);
+                                return;
+                            }
+
+                            const std::string runtimeFuncName = "nova_object_is_identity";
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType};
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto existingFunc = module_->getFunction(runtimeFuncName);
+                            HIRFunction* runtimeFunc = existingFunc ? existingFunc.get() : nullptr;
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                            }
+                            lastValue_ = builder_->createCall(
+                                runtimeFunc, {value1, value2}, "object_is_identity_result");
+                            return;
+                        }
 
                         // Setup function signature
                         std::string runtimeFuncName = "nova_object_is";
@@ -4791,7 +5562,69 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.fromEntries(iterable) - creates object from key-value pairs (ES2019)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.fromEntries" << std::endl;
 
+                        // A literal array of [string, value] pairs has a completely
+                        // known object shape. Build the same fixed-layout struct used
+                        // by object literals instead of calling the currently dynamic
+                        // runtime placeholder.
+                        auto* entriesLiteral = node.arguments.size() == 1
+                            ? dynamic_cast<ArrayExpr*>(node.arguments[0].get())
+                            : nullptr;
+                        bool canLowerStatically = entriesLiteral != nullptr;
+                        std::vector<ArrayExpr*> entryLiterals;
+                        std::vector<std::string> entryKeys;
+                        if (entriesLiteral) {
+                            entryLiterals.reserve(entriesLiteral->elements.size());
+                            entryKeys.reserve(entriesLiteral->elements.size());
+                            for (const auto& element : entriesLiteral->elements) {
+                                auto* entry = dynamic_cast<ArrayExpr*>(element.get());
+                                auto* key = entry && entry->elements.size() >= 2
+                                    ? dynamic_cast<StringLiteral*>(entry->elements[0].get())
+                                    : nullptr;
+                                if (!entry || !key) {
+                                    canLowerStatically = false;
+                                    break;
+                                }
+                                entryLiterals.push_back(entry);
+                                entryKeys.push_back(key->value);
+                            }
+                        }
+
+                        if (canLowerStatically) {
+                            static uint64_t fromEntriesCounter = 0;
+                            const std::string objectId = "__from_entries_" +
+                                std::to_string(fromEntriesCounter++);
+                            std::vector<HIRStructType::Field> fields;
+                            std::vector<HIRValue*> fieldValues;
+                            std::vector<std::string> fieldNames;
+                            std::unordered_map<std::string, size_t> fieldIndices;
+
+                            for (size_t i = 0; i < entryLiterals.size(); ++i) {
+                                entryLiterals[i]->elements[1]->accept(*this);
+                                HIRValue* value = lastValue_;
+                                auto existing = fieldIndices.find(entryKeys[i]);
+                                if (existing == fieldIndices.end()) {
+                                    const size_t fieldIndex = fields.size();
+                                    fieldIndices[entryKeys[i]] = fieldIndex;
+                                    fields.push_back({entryKeys[i], value->type, true});
+                                    fieldValues.push_back(value);
+                                    fieldNames.push_back(entryKeys[i]);
+                                } else {
+                                    const size_t fieldIndex = existing->second;
+                                    fields[fieldIndex].type = value->type;
+                                    fieldValues[fieldIndex] = value;
+                                }
+                            }
+
+                            auto* structType = new HIRStructType(objectId, fields);
+                            objectFieldNames_[objectId] = fieldNames;
+                            lastValue_ = builder_->createStructConstruct(
+                                structType, fieldValues, objectId);
+                            currentObjectName_ = objectId;
+                            return;
+                        }
+
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
 
                         HIRValue* iterableArg = nullptr;
                         if (node.arguments.size() >= 1) {
@@ -4832,6 +5665,20 @@ void HIRGenerator::visit(CallExpr& node) {
                             objArg = builder_->createIntConstant(0);
                         }
 
+                        // Static object literals are compiler structs and cannot be
+                        // passed to the runtime Object layout. Their own string-named
+                        // fields are already known here, so materialize the result.
+                        if (auto* structType = getStaticObjectStructType(objArg)) {
+                            std::vector<HIRValue*> names;
+                            names.reserve(structType->fields.size());
+                            for (const auto& field : structType->fields) {
+                                names.push_back(builder_->createStringConstant(field.name));
+                            }
+                            lastValue_ = builder_->createArrayConstruct(
+                                names, "object_getOwnPropertyNames");
+                            return;
+                        }
+
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
                         auto existingFunc = module_->getFunction("nova_object_getOwnPropertyNames");
                         HIRFunction* func = nullptr;
@@ -4862,6 +5709,14 @@ void HIRGenerator::visit(CallExpr& node) {
                             objArg = lastValue_;
                         } else {
                             objArg = builder_->createIntConstant(0);
+                        }
+
+                        // Symbol-keyed static fields are not representable yet, so a
+                        // static object literal has no own property symbols.
+                        if (getStaticObjectStructType(objArg)) {
+                            lastValue_ = builder_->createArrayConstruct(
+                                {}, "object_getOwnPropertySymbols");
+                            return;
                         }
 
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
@@ -4953,7 +5808,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.isExtensible" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
 
                         HIRValue* objArg = nullptr;
                         if (node.arguments.size() >= 1) {
@@ -4961,6 +5816,19 @@ void HIRGenerator::visit(CallExpr& node) {
                             objArg = lastValue_;
                         } else {
                             objArg = builder_->createIntConstant(0);
+                        }
+
+                        if (!node.arguments.empty()) {
+                            if (auto* identifier =
+                                    dynamic_cast<Identifier*>(node.arguments[0].get());
+                                identifier && getStaticObjectStructType(objArg)) {
+                                bool isExtensible =
+                                    nonExtensibleObjectVars_.count(identifier->name) == 0 &&
+                                    sealedObjectVars_.count(identifier->name) == 0 &&
+                                    frozenObjectVars_.count(identifier->name) == 0;
+                                lastValue_ = builder_->createBoolConstant(isExtensible);
+                                return;
+                            }
                         }
 
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
@@ -4992,6 +5860,17 @@ void HIRGenerator::visit(CallExpr& node) {
                             objArg = lastValue_;
                         } else {
                             objArg = builder_->createIntConstant(0);
+                        }
+
+                        if (!node.arguments.empty()) {
+                            if (auto* identifier =
+                                    dynamic_cast<Identifier*>(node.arguments[0].get());
+                                identifier && getStaticObjectStructType(objArg)) {
+                                nonExtensibleObjectVars_.insert(identifier->name);
+                                lastIntegrityObjectName_ = identifier->name;
+                                lastValue_ = objArg;
+                                return;
+                            }
                         }
 
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
@@ -5028,6 +5907,136 @@ void HIRGenerator::visit(CallExpr& node) {
                             propArg = lastValue_;
                             node.arguments[2]->accept(*this);
                             descArg = lastValue_;
+                        }
+
+                        auto* targetStruct = getStaticObjectStructType(objArg);
+                        auto* descriptorStruct = getStaticObjectStructType(descArg);
+                        auto* propertyLiteral = node.arguments.size() >= 2
+                            ? dynamic_cast<StringLiteral*>(node.arguments[1].get())
+                            : nullptr;
+                        auto* descriptorLiteral = node.arguments.size() >= 3
+                            ? dynamic_cast<ObjectExpr*>(node.arguments[2].get())
+                            : nullptr;
+                        auto* targetIdentifier = !node.arguments.empty()
+                            ? dynamic_cast<Identifier*>(node.arguments[0].get())
+                            : nullptr;
+
+                        if (targetStruct && descriptorStruct && propertyLiteral &&
+                            descriptorLiteral && targetIdentifier) {
+                            size_t targetFieldIndex = targetStruct->fields.size();
+                            for (size_t i = 0; i < targetStruct->fields.size(); ++i) {
+                                if (targetStruct->fields[i].name == propertyLiteral->value) {
+                                    targetFieldIndex = i;
+                                    break;
+                                }
+                            }
+
+                            // Fixed-layout objects cannot add a field. Existing data
+                            // fields can be redefined without crossing the runtime ABI.
+                            if (targetFieldIndex != targetStruct->fields.size()) {
+                                bool hasValue = false;
+                                HIRValue* descriptorValue = nullptr;
+                                bool hasWritable = false;
+                                bool requestedWritable = false;
+                                bool hasEnumerable = false;
+                                bool requestedEnumerable = false;
+                                bool hasConfigurable = false;
+                                bool requestedConfigurable = false;
+
+                                for (const auto& property : descriptorLiteral->properties) {
+                                    std::string propertyName;
+                                    if (auto* identifier =
+                                            dynamic_cast<Identifier*>(property.key.get())) {
+                                        propertyName = identifier->name;
+                                    } else if (auto* stringKey =
+                                            dynamic_cast<StringLiteral*>(property.key.get())) {
+                                        propertyName = stringKey->value;
+                                    }
+
+                                    if (propertyName == "value") {
+                                        for (size_t i = 0;
+                                             i < descriptorStruct->fields.size(); ++i) {
+                                            if (descriptorStruct->fields[i].name == "value") {
+                                                descriptorValue = builder_->createGetField(
+                                                    descArg, static_cast<uint32_t>(i), "value");
+                                                hasValue = true;
+                                                break;
+                                            }
+                                        }
+                                    } else if (propertyName == "writable") {
+                                        if (auto* boolean =
+                                                dynamic_cast<BooleanLiteral*>(property.value.get())) {
+                                            hasWritable = true;
+                                            requestedWritable = boolean->value;
+                                        }
+                                    } else if (propertyName == "enumerable") {
+                                        if (auto* boolean =
+                                                dynamic_cast<BooleanLiteral*>(property.value.get())) {
+                                            hasEnumerable = true;
+                                            requestedEnumerable = boolean->value;
+                                        }
+                                    } else if (propertyName == "configurable") {
+                                        if (auto* boolean =
+                                                dynamic_cast<BooleanLiteral*>(property.value.get())) {
+                                            hasConfigurable = true;
+                                            requestedConfigurable = boolean->value;
+                                        }
+                                    }
+                                }
+
+                                const std::string& objectName = targetIdentifier->name;
+                                const std::string& propertyName = propertyLiteral->value;
+                                bool currentWritable =
+                                    frozenObjectVars_.count(objectName) == 0;
+                                bool currentEnumerable = true;
+                                bool currentConfigurable =
+                                    frozenObjectVars_.count(objectName) == 0 &&
+                                    sealedObjectVars_.count(objectName) == 0;
+                                if (propertyWritable_[objectName].count(propertyName) > 0) {
+                                    currentWritable =
+                                        propertyWritable_[objectName][propertyName];
+                                }
+                                if (propertyEnumerable_[objectName].count(propertyName) > 0) {
+                                    currentEnumerable =
+                                        propertyEnumerable_[objectName][propertyName];
+                                }
+                                if (propertyConfigurable_[objectName].count(propertyName) > 0) {
+                                    currentConfigurable =
+                                        propertyConfigurable_[objectName][propertyName];
+                                }
+
+                                if (hasValue && currentWritable && descriptorValue &&
+                                    descriptorValue->type &&
+                                    targetStruct->fields[targetFieldIndex].type &&
+                                    descriptorValue->type->kind ==
+                                        targetStruct->fields[targetFieldIndex].type->kind) {
+                                    builder_->createSetField(
+                                        objArg, static_cast<uint32_t>(targetFieldIndex),
+                                        descriptorValue, propertyName);
+                                }
+
+                                if (currentConfigurable) {
+                                    if (hasWritable) currentWritable = requestedWritable;
+                                    if (hasEnumerable) currentEnumerable = requestedEnumerable;
+                                    if (hasConfigurable) {
+                                        currentConfigurable = requestedConfigurable;
+                                    }
+                                } else if (hasWritable && !requestedWritable) {
+                                    // A non-configurable writable data property may
+                                    // still transition from writable to read-only.
+                                    currentWritable = false;
+                                }
+
+                                propertyWritable_[objectName][propertyName] = currentWritable;
+                                propertyEnumerable_[objectName][propertyName] = currentEnumerable;
+                                propertyConfigurable_[objectName][propertyName] =
+                                    currentConfigurable;
+                            }
+
+                            currentObjectName_.clear();
+                            lastIntegrityObjectName_ = targetIdentifier->name;
+                            lastValue_ = objArg;
+                            return;
                         }
 
                         std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, ptrType};
@@ -5096,6 +6105,96 @@ void HIRGenerator::visit(CallExpr& node) {
                             propArg = lastValue_;
                         }
 
+                        auto* structType = getStaticObjectStructType(objArg);
+                        auto* keyLiteral = node.arguments.size() >= 2
+                            ? dynamic_cast<StringLiteral*>(node.arguments[1].get())
+                            : nullptr;
+                        if (structType && keyLiteral) {
+                            size_t fieldIndex = structType->fields.size();
+                            for (size_t i = 0; i < structType->fields.size(); ++i) {
+                                if (structType->fields[i].name == keyLiteral->value) {
+                                    fieldIndex = i;
+                                    break;
+                                }
+                            }
+
+                            if (fieldIndex == structType->fields.size()) {
+                                // undefined for a missing own property.
+                                auto undefinedType = std::make_shared<HIRType>(
+                                    HIRType::Kind::Unknown);
+                                lastValue_ = builder_->createUndefinedConstant(
+                                    undefinedType.get());
+                                return;
+                            }
+
+                            bool writable = true;
+                            bool configurable = true;
+                            if (auto* identifier =
+                                    dynamic_cast<Identifier*>(node.arguments[0].get())) {
+                                writable = frozenObjectVars_.count(identifier->name) == 0;
+                                configurable =
+                                    frozenObjectVars_.count(identifier->name) == 0 &&
+                                    sealedObjectVars_.count(identifier->name) == 0;
+                                auto writableObject = propertyWritable_.find(identifier->name);
+                                if (writableObject != propertyWritable_.end()) {
+                                    auto attribute = writableObject->second.find(keyLiteral->value);
+                                    if (attribute != writableObject->second.end()) {
+                                        writable = attribute->second;
+                                    }
+                                }
+                                auto configurableObject =
+                                    propertyConfigurable_.find(identifier->name);
+                                if (configurableObject != propertyConfigurable_.end()) {
+                                    auto attribute =
+                                        configurableObject->second.find(keyLiteral->value);
+                                    if (attribute != configurableObject->second.end()) {
+                                        configurable = attribute->second;
+                                    }
+                                }
+                            }
+
+                            bool enumerable = true;
+                            if (auto* identifier =
+                                    dynamic_cast<Identifier*>(node.arguments[0].get())) {
+                                auto enumerableObject = propertyEnumerable_.find(identifier->name);
+                                if (enumerableObject != propertyEnumerable_.end()) {
+                                    auto attribute =
+                                        enumerableObject->second.find(keyLiteral->value);
+                                    if (attribute != enumerableObject->second.end()) {
+                                        enumerable = attribute->second;
+                                    }
+                                }
+                            }
+
+                            static uint64_t descriptorCounter = 0;
+                            const std::string descriptorId = "__property_descriptor_" +
+                                std::to_string(descriptorCounter++);
+                            HIRValue* value = builder_->createGetField(
+                                objArg, static_cast<uint32_t>(fieldIndex), keyLiteral->value);
+                            HIRValue* writableValue = builder_->createBoolConstant(writable);
+                            HIRValue* enumerableValue = builder_->createBoolConstant(enumerable);
+                            HIRValue* configurableValue =
+                                builder_->createBoolConstant(configurable);
+                            std::vector<HIRStructType::Field> descriptorFields = {
+                                {"value", value->type, true},
+                                {"writable", writableValue->type, true},
+                                {"enumerable", enumerableValue->type, true},
+                                {"configurable", configurableValue->type, true}
+                            };
+                            std::vector<HIRValue*> descriptorValues = {
+                                value, writableValue, enumerableValue, configurableValue
+                            };
+                            auto* descriptorType = new HIRStructType(
+                                descriptorId, descriptorFields);
+                            objectFieldNames_[descriptorId] = {
+                                "value", "writable", "enumerable", "configurable"
+                            };
+                            lastValue_ = builder_->createStructConstruct(
+                                descriptorType, descriptorValues, descriptorId);
+                            currentObjectName_ = descriptorId;
+                            return;
+                        }
+
                         std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType};
                         auto existingFunc = module_->getFunction("nova_object_getOwnPropertyDescriptor");
                         HIRFunction* func = nullptr;
@@ -5123,6 +6222,104 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (node.arguments.size() >= 1) {
                             node.arguments[0]->accept(*this);
                             objArg = lastValue_;
+                        }
+
+                        if (auto* structType = getStaticObjectStructType(objArg)) {
+                            bool writable = true;
+                            bool configurable = true;
+                            if (!node.arguments.empty()) {
+                                if (auto* identifier =
+                                        dynamic_cast<Identifier*>(node.arguments[0].get())) {
+                                    writable = frozenObjectVars_.count(identifier->name) == 0;
+                                    configurable =
+                                        frozenObjectVars_.count(identifier->name) == 0 &&
+                                        sealedObjectVars_.count(identifier->name) == 0;
+                                }
+                            }
+
+                            static uint64_t descriptorCounter = 0;
+                            static uint64_t descriptorCollectionCounter = 0;
+                            std::vector<HIRStructType::Field> collectionFields;
+                            std::vector<HIRValue*> collectionValues;
+                            std::vector<std::string> collectionFieldNames;
+                            collectionFields.reserve(structType->fields.size());
+                            collectionValues.reserve(structType->fields.size());
+                            collectionFieldNames.reserve(structType->fields.size());
+
+                            for (size_t i = 0; i < structType->fields.size(); ++i) {
+                                const auto& sourceField = structType->fields[i];
+                                HIRValue* value = builder_->createGetField(
+                                    objArg, static_cast<uint32_t>(i), sourceField.name);
+                                bool fieldWritable = writable;
+                                bool fieldEnumerable = true;
+                                bool fieldConfigurable = configurable;
+                                if (!node.arguments.empty()) {
+                                    if (auto* identifier = dynamic_cast<Identifier*>(
+                                            node.arguments[0].get())) {
+                                        auto writableObject =
+                                            propertyWritable_.find(identifier->name);
+                                        if (writableObject != propertyWritable_.end() &&
+                                            writableObject->second.count(sourceField.name) > 0) {
+                                            fieldWritable =
+                                                writableObject->second[sourceField.name];
+                                        }
+                                        auto enumerableObject =
+                                            propertyEnumerable_.find(identifier->name);
+                                        if (enumerableObject != propertyEnumerable_.end() &&
+                                            enumerableObject->second.count(sourceField.name) > 0) {
+                                            fieldEnumerable =
+                                                enumerableObject->second[sourceField.name];
+                                        }
+                                        auto configurableObject =
+                                            propertyConfigurable_.find(identifier->name);
+                                        if (configurableObject != propertyConfigurable_.end() &&
+                                            configurableObject->second.count(sourceField.name) > 0) {
+                                            fieldConfigurable =
+                                                configurableObject->second[sourceField.name];
+                                        }
+                                    }
+                                }
+                                HIRValue* writableValue =
+                                    builder_->createBoolConstant(fieldWritable);
+                                HIRValue* enumerableValue =
+                                    builder_->createBoolConstant(fieldEnumerable);
+                                HIRValue* configurableValue =
+                                    builder_->createBoolConstant(fieldConfigurable);
+                                const std::string descriptorId =
+                                    "__property_descriptor_all_" +
+                                    std::to_string(descriptorCounter++);
+                                std::vector<HIRStructType::Field> descriptorFields = {
+                                    {"value", value->type, true},
+                                    {"writable", writableValue->type, true},
+                                    {"enumerable", enumerableValue->type, true},
+                                    {"configurable", configurableValue->type, true}
+                                };
+                                std::vector<HIRValue*> descriptorValues = {
+                                    value, writableValue, enumerableValue, configurableValue
+                                };
+                                auto* descriptorType = new HIRStructType(
+                                    descriptorId, descriptorFields);
+                                HIRValue* descriptor = builder_->createStructConstruct(
+                                    descriptorType, descriptorValues, descriptorId);
+                                objectFieldNames_[descriptorId] = {
+                                    "value", "writable", "enumerable", "configurable"
+                                };
+                                collectionFields.push_back(
+                                    {sourceField.name, descriptor->type, true});
+                                collectionValues.push_back(descriptor);
+                                collectionFieldNames.push_back(sourceField.name);
+                            }
+
+                            const std::string collectionId =
+                                "__property_descriptors_" +
+                                std::to_string(descriptorCollectionCounter++);
+                            auto* collectionType = new HIRStructType(
+                                collectionId, collectionFields);
+                            objectFieldNames_[collectionId] = collectionFieldNames;
+                            lastValue_ = builder_->createStructConstruct(
+                                collectionType, collectionValues, collectionId);
+                            currentObjectName_ = collectionId;
+                            return;
                         }
 
                         std::vector<HIRTypePtr> paramTypes = {ptrType};
@@ -5181,7 +6378,21 @@ void HIRGenerator::visit(CallExpr& node) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.resolve" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+
+                        HIRValue* resolvedValue = nullptr;
+                        if (!node.arguments.empty()) {
+                            lastWasPromise_ = false;
+                            node.arguments[0]->accept(*this);
+                            resolvedValue = lastValue_;
+                            if (lastWasPromise_) {
+                                // ECMAScript PromiseResolve returns the input when it
+                                // is already a native Promise of this constructor.
+                                lastValue_ = resolvedValue;
+                                lastWasPromise_ = true;
+                                return;
+                            }
+                        }
 
                         std::vector<HIRTypePtr> paramTypes = {intType};
                         auto existingFunc = module_->getFunction("nova_promise_resolve");
@@ -5196,11 +6407,10 @@ void HIRGenerator::visit(CallExpr& node) {
                         }
 
                         std::vector<HIRValue*> args;
-                        if (node.arguments.size() > 0) {
-                            node.arguments[0]->accept(*this);
-                            args.push_back(lastValue_);
+                        if (resolvedValue) {
+                            args.push_back(toJSValue(resolvedValue));
                         } else {
-                            args.push_back(builder_->createIntConstant(0));
+                            args.push_back(toJSValue(nullptr));
                         }
 
                         lastValue_ = builder_->createCall(func, args, "promise_resolve");
@@ -5214,7 +6424,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Promise.reject" << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
 
                         std::vector<HIRTypePtr> paramTypes = {intType};
                         auto existingFunc = module_->getFunction("nova_promise_reject");
@@ -5231,9 +6441,9 @@ void HIRGenerator::visit(CallExpr& node) {
                         std::vector<HIRValue*> args;
                         if (node.arguments.size() > 0) {
                             node.arguments[0]->accept(*this);
-                            args.push_back(lastValue_);
+                            args.push_back(toJSValue(lastValue_));
                         } else {
-                            args.push_back(builder_->createIntConstant(0));
+                            args.push_back(toJSValue(nullptr));
                         }
 
                         lastValue_ = builder_->createCall(func, args, "promise_reject");
@@ -6833,6 +8043,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             auto func = module_->getFunction(mangledName);
                             if (func) {
                                 lastValue_ = builder_->createCall(func.get(), args, "static_method_call");
+                                recordReturnedClosure(mangledName);
                                 return;
                             } else {
                                 std::cerr << "ERROR HIRGen: Static method not found: " << mangledName << std::endl;
@@ -6847,6 +8058,295 @@ void HIRGenerator::visit(CallExpr& node) {
 
         // Check if this is a string method call: str.substring(...)
         if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
+            // Extract object identifier and method name FIRST, before visiting the object.
+            // This is critical: Map/Set/WeakMap/WeakSet checks must run BEFORE
+            // memberExpr->object->accept(*this) to avoid corrupting lastValue_ with
+            // failed field lookups.
+            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                if (auto* propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                    std::string methodName = propExpr->name;
+                    if (mapVars_.count(objIdent->name) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Map method call: " << methodName << std::endl;
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        memberExpr->object->accept(*this);
+                        HIRValue* mapObj = lastValue_;
+                        if (methodName == "set") {
+                            HIRValue* keyArg = nullptr;
+                            HIRValue* valueArg = nullptr;
+                            bool keyIsString = false;
+                            bool valueIsString = false;
+                            if (node.arguments.size() >= 1) {
+                                if (dynamic_cast<StringLiteral*>(node.arguments[0].get())) keyIsString = true;
+                                node.arguments[0]->accept(*this);
+                                keyArg = lastValue_;
+                            } else { keyArg = builder_->createIntConstant(0); }
+                            if (node.arguments.size() >= 2) {
+                                if (dynamic_cast<StringLiteral*>(node.arguments[1].get())) valueIsString = true;
+                                node.arguments[1]->accept(*this);
+                                valueArg = lastValue_;
+                            } else { valueArg = builder_->createIntConstant(0); }
+                            std::string runtimeFunc;
+                            std::vector<HIRTypePtr> paramTypes;
+                            if (keyIsString && valueIsString) { runtimeFunc = "nova_map_set_str_str"; paramTypes = {ptrType, ptrType, ptrType}; }
+                            else if (keyIsString) { runtimeFunc = "nova_map_set_str_num"; paramTypes = {ptrType, ptrType, intType}; }
+                            else if (valueIsString) { runtimeFunc = "nova_map_set_num_str"; paramTypes = {ptrType, intType, ptrType}; }
+                            else { runtimeFunc = "nova_map_set_num_num"; paramTypes = {ptrType, intType, intType}; }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction(runtimeFunc);
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType); HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj, keyArg, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "map_set");
+                            return;
+                        } else if (methodName == "get") {
+                            HIRValue* keyArg = nullptr;
+                            bool keyIsString = false;
+                            if (node.arguments.size() >= 1) {
+                                if (dynamic_cast<StringLiteral*>(node.arguments[0].get())) keyIsString = true;
+                                node.arguments[0]->accept(*this);
+                                keyArg = lastValue_;
+                            } else { keyArg = builder_->createIntConstant(0); }
+                            std::string runtimeFunc = keyIsString ? "nova_map_get_str_num" : "nova_map_get_num";
+                            std::vector<HIRTypePtr> paramTypes = keyIsString ? std::vector<HIRTypePtr>{ptrType, ptrType} : std::vector<HIRTypePtr>{ptrType, intType};
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction(runtimeFunc);
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType); HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj, keyArg};
+                            lastValue_ = builder_->createCall(func, args, "map_get");
+                            return;
+                        } else if (methodName == "has") {
+                            HIRValue* keyArg = nullptr;
+                            bool keyIsString = false;
+                            if (node.arguments.size() >= 1) {
+                                if (dynamic_cast<StringLiteral*>(node.arguments[0].get())) keyIsString = true;
+                                node.arguments[0]->accept(*this);
+                                keyArg = lastValue_;
+                            } else { keyArg = builder_->createIntConstant(0); }
+                            std::string runtimeFunc = keyIsString ? "nova_map_has_str" : "nova_map_has_num";
+                            std::vector<HIRTypePtr> paramTypes = keyIsString ? std::vector<HIRTypePtr>{ptrType, ptrType} : std::vector<HIRTypePtr>{ptrType, intType};
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction(runtimeFunc);
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType); HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj, keyArg};
+                            lastValue_ = builder_->createCall(func, args, "map_has");
+                            return;
+                        } else if (methodName == "delete") {
+                            HIRValue* keyArg = nullptr;
+                            bool keyIsString = false;
+                            if (node.arguments.size() >= 1) {
+                                if (dynamic_cast<StringLiteral*>(node.arguments[0].get())) keyIsString = true;
+                                node.arguments[0]->accept(*this);
+                                keyArg = lastValue_;
+                            } else { keyArg = builder_->createIntConstant(0); }
+                            std::string runtimeFunc = keyIsString ? "nova_map_delete_str" : "nova_map_delete_num";
+                            std::vector<HIRTypePtr> paramTypes = keyIsString ? std::vector<HIRTypePtr>{ptrType, ptrType} : std::vector<HIRTypePtr>{ptrType, intType};
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction(runtimeFunc);
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType); HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj, keyArg};
+                            lastValue_ = builder_->createCall(func, args, "map_delete");
+                            return;
+                        } else if (methodName == "clear") {
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_map_clear");
+                            if (existingFunc) func = existingFunc.get();
+                            else { std::vector<HIRTypePtr> paramTypes = {ptrType}; HIRFunctionType* funcType = new HIRFunctionType(paramTypes, std::make_shared<HIRType>(HIRType::Kind::Void)); HIRFunctionPtr funcPtr = module_->createFunction("nova_map_clear", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj};
+                            builder_->createCall(func, args, "map_clear");
+                            lastValue_ = mapObj;
+                            return;
+                        } else if (methodName == "size") {
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_map_size");
+                            if (existingFunc) func = existingFunc.get();
+                            else { std::vector<HIRTypePtr> paramTypes = {ptrType}; HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_map_size", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj};
+                            lastValue_ = builder_->createCall(func, args, "map_size");
+                            return;
+                        } else if (methodName == "keys") {
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_map_keys");
+                            if (existingFunc) func = existingFunc.get();
+                            else { std::vector<HIRTypePtr> paramTypes = {ptrType}; HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType); HIRFunctionPtr funcPtr = module_->createFunction("nova_map_keys", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj};
+                            lastValue_ = builder_->createCall(func, args, "map_keys");
+                            return;
+                        } else if (methodName == "values") {
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_map_values");
+                            if (existingFunc) func = existingFunc.get();
+                            else { std::vector<HIRTypePtr> paramTypes = {ptrType}; HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType); HIRFunctionPtr funcPtr = module_->createFunction("nova_map_values", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj};
+                            lastValue_ = builder_->createCall(func, args, "map_values");
+                            return;
+                        } else if (methodName == "entries") {
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_map_entries");
+                            if (existingFunc) func = existingFunc.get();
+                            else { std::vector<HIRTypePtr> paramTypes = {ptrType}; HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType); HIRFunctionPtr funcPtr = module_->createFunction("nova_map_entries", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {mapObj};
+                            lastValue_ = builder_->createCall(func, args, "map_entries");
+                            return;
+                        }
+                    }
+                    if (setVars_.count(objIdent->name) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Set method call: " << methodName << std::endl;
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        memberExpr->object->accept(*this);
+                        HIRValue* setObj = lastValue_;
+                        if (methodName == "add") {
+                            HIRValue* valueArg = nullptr;
+                            if (node.arguments.size() >= 1) {
+                                node.arguments[0]->accept(*this);
+                                valueArg = lastValue_;
+                            } else { valueArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_set_add");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, ptrType); HIRFunctionPtr funcPtr = module_->createFunction("nova_set_add", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {setObj, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "set_add");
+                            return;
+                        } else if (methodName == "has") {
+                            HIRValue* valueArg = nullptr;
+                            if (node.arguments.size() >= 1) {
+                                node.arguments[0]->accept(*this);
+                                valueArg = lastValue_;
+                            } else { valueArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_set_has");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_set_has", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {setObj, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "set_has");
+                            return;
+                        } else if (methodName == "delete") {
+                            HIRValue* valueArg = nullptr;
+                            if (node.arguments.size() >= 1) {
+                                node.arguments[0]->accept(*this);
+                                valueArg = lastValue_;
+                            } else { valueArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_set_delete");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_set_delete", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {setObj, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "set_delete");
+                            return;
+                        } else if (methodName == "clear") {
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_set_clear");
+                            if (existingFunc) func = existingFunc.get();
+                            else { std::vector<HIRTypePtr> paramTypes = {ptrType}; HIRFunctionType* funcType = new HIRFunctionType(paramTypes, std::make_shared<HIRType>(HIRType::Kind::Void)); HIRFunctionPtr funcPtr = module_->createFunction("nova_set_clear", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {setObj};
+                            builder_->createCall(func, args, "set_clear");
+                            lastValue_ = setObj;
+                            return;
+                        } else if (methodName == "size") {
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_set_size");
+                            if (existingFunc) func = existingFunc.get();
+                            else { std::vector<HIRTypePtr> paramTypes = {ptrType}; HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_set_size", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {setObj};
+                            lastValue_ = builder_->createCall(func, args, "set_size");
+                            return;
+                        }
+                    }
+                    if (weakMapVars_.count(objIdent->name) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected WeakMap method call: " << methodName << std::endl;
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        memberExpr->object->accept(*this);
+                        HIRValue* weakMapObj = lastValue_;
+                        if (methodName == "set") {
+                            HIRValue* keyArg = nullptr;
+                            HIRValue* valueArg = nullptr;
+                            if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); keyArg = lastValue_; } else { keyArg = builder_->createIntConstant(0); }
+                            if (node.arguments.size() >= 2) { node.arguments[1]->accept(*this); valueArg = lastValue_; } else { valueArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_weakmap_set_obj_num");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType, intType}, ptrType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_set_obj_num", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {weakMapObj, keyArg, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "weakmap_set");
+                            return;
+                        } else if (methodName == "get") {
+                            HIRValue* keyArg = nullptr;
+                            if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); keyArg = lastValue_; } else { keyArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_weakmap_get_num");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_get_num", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {weakMapObj, keyArg};
+                            lastValue_ = builder_->createCall(func, args, "weakmap_get");
+                            return;
+                        } else if (methodName == "has") {
+                            HIRValue* keyArg = nullptr;
+                            if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); keyArg = lastValue_; } else { keyArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_weakmap_has");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_has", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {weakMapObj, keyArg};
+                            lastValue_ = builder_->createCall(func, args, "weakmap_has");
+                            return;
+                        } else if (methodName == "delete") {
+                            HIRValue* keyArg = nullptr;
+                            if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); keyArg = lastValue_; } else { keyArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_weakmap_delete");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_delete", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {weakMapObj, keyArg};
+                            lastValue_ = builder_->createCall(func, args, "weakmap_delete");
+                            return;
+                        }
+                    }
+                    if (weakSetVars_.count(objIdent->name) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected WeakSet method call: " << methodName << std::endl;
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        memberExpr->object->accept(*this);
+                        HIRValue* weakSetObj = lastValue_;
+                        if (methodName == "add") {
+                            HIRValue* valueArg = nullptr;
+                            if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); valueArg = lastValue_; } else { valueArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_weakset_add");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, ptrType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakset_add", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {weakSetObj, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "weakset_add");
+                            return;
+                        } else if (methodName == "has") {
+                            HIRValue* valueArg = nullptr;
+                            if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); valueArg = lastValue_; } else { valueArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_weakset_has");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakset_has", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {weakSetObj, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "weakset_has");
+                            return;
+                        } else if (methodName == "delete") {
+                            HIRValue* valueArg = nullptr;
+                            if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); valueArg = lastValue_; } else { valueArg = builder_->createIntConstant(0); }
+                            HIRFunction* func = nullptr;
+                            auto existingFunc = module_->getFunction("nova_weakset_delete");
+                            if (existingFunc) func = existingFunc.get();
+                            else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakset_delete", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            std::vector<HIRValue*> args = {weakSetObj, valueArg};
+                            lastValue_ = builder_->createCall(func, args, "weakset_delete");
+                            return;
+                        }
+                    }
+                }
+            }
             // Get the object and method name
             memberExpr->object->accept(*this);
             HIRValue* object = lastValue_;
@@ -10863,9 +12363,13 @@ void HIRGenerator::visit(CallExpr& node) {
                         HIRTypePtr returnType = ptrType;  // Most Promise methods return Promise
 
                         if (methodName == "then") {
-                            // then(onFulfilled) - returns new Promise
-                            runtimeFuncName = "nova_promise_then";
-                            paramTypes = {ptrType, ptrType};
+                            // then(onFulfilled, onRejected?) - returns new Promise
+                            const bool hasRejectionHandler = node.arguments.size() > 1;
+                            runtimeFuncName = hasRejectionHandler
+                                ? "nova_promise_then_both" : "nova_promise_then";
+                            paramTypes = hasRejectionHandler
+                                ? std::vector<HIRTypePtr>{ptrType, ptrType, ptrType}
+                                : std::vector<HIRTypePtr>{ptrType, ptrType};
                             returnType = ptrType;
                         } else if (methodName == "catch") {
                             // catch(onRejected) - returns new Promise
@@ -10897,26 +12401,38 @@ void HIRGenerator::visit(CallExpr& node) {
 
                             std::vector<HIRValue*> args = {objectVal};
 
-                            // Handle callback argument
-                            if (node.arguments.size() > 0) {
+                            const size_t callbackCount =
+                                methodName == "then" && node.arguments.size() > 1 ? 2 : 1;
+                            for (size_t callbackIndex = 0;
+                                 callbackIndex < callbackCount; ++callbackIndex) {
+                                if (callbackIndex >= node.arguments.size() ||
+                                    dynamic_cast<NullLiteral*>(
+                                        node.arguments[callbackIndex].get()) ||
+                                    dynamic_cast<UndefinedLiteral*>(
+                                        node.arguments[callbackIndex].get())) {
+                                    args.push_back(builder_->createNullConstant(ptrType.get()));
+                                    continue;
+                                }
+
                                 std::string savedFuncName = lastFunctionName_;
                                 lastFunctionName_ = "";
 
-                                node.arguments[0]->accept(*this);
+                                // Fulfillment/rejection handlers consume and return
+                                // tagged JSValue payloads. finally() has no payload and
+                                // its return value is ignored by the runtime.
+                                const bool savedTaggedABI = forceTaggedFunctionABI_;
+                                forceTaggedFunctionABI_ = methodName != "finally";
+                                node.arguments[callbackIndex]->accept(*this);
+                                forceTaggedFunctionABI_ = savedTaggedABI;
 
                                 if (!lastFunctionName_.empty()) {
-                                    // Arrow function or function expression - pass name as string
                                     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Promise callback function: " << lastFunctionName_ << std::endl;
-                                    HIRValue* funcNameValue = builder_->createStringConstant(lastFunctionName_);
-                                    args.push_back(funcNameValue);
+                                    args.push_back(
+                                        builder_->createStringConstant(lastFunctionName_));
                                     lastFunctionName_ = "";
                                 } else {
                                     args.push_back(lastValue_);
                                 }
-                            } else {
-                                // No callback provided, pass null (as integer 0)
-                                auto nullVal = builder_->createIntConstant(0);
-                                args.push_back(nullVal);
                             }
 
                             lastValue_ = builder_->createCall(func, args, "promise_method");
@@ -11135,13 +12651,21 @@ void HIRGenerator::visit(CallExpr& node) {
 
                 // Check if object is an array type
                 bool isArrayMethod = false;
+                HIRTypePtr arrayElementType;
                 if (object && object->type) {
                     if (object->type->kind == hir::HIRType::Kind::Array) {
                         isArrayMethod = true;
+                        if (auto* arrayType = dynamic_cast<hir::HIRArrayType*>(object->type.get())) {
+                            arrayElementType = arrayType->elementType;
+                        }
                     } else if (object->type->kind == hir::HIRType::Kind::Pointer) {
                         auto* ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get());
                         if (ptrType && ptrType->pointeeType && ptrType->pointeeType->kind == hir::HIRType::Kind::Array) {
                             isArrayMethod = true;
+                            if (auto* arrayType = dynamic_cast<hir::HIRArrayType*>(
+                                    ptrType->pointeeType.get())) {
+                                arrayElementType = arrayType->elementType;
+                            }
                         }
                     }
                 }
@@ -11154,31 +12678,45 @@ void HIRGenerator::visit(CallExpr& node) {
                     std::vector<HIRTypePtr> paramTypes;
                     HIRTypePtr returnType;
                     bool hasReturnValue = false;
+                    const bool usesJSValue = arrayElementType &&
+                        arrayElementType->kind == HIRType::Kind::JSValue;
+                    auto valueType = std::make_shared<HIRType>(
+                        usesJSValue ? HIRType::Kind::JSValue : HIRType::Kind::I64);
+                    std::unordered_set<size_t> boxedArgumentIndexes;
+                    auto makeArrayReturnType = [&]() -> HIRTypePtr {
+                        HIRTypePtr element = arrayElementType
+                            ? arrayElementType
+                            : std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto arrayType = std::make_shared<HIRArrayType>(element, 0);
+                        return std::make_shared<HIRPointerType>(arrayType, true);
+                    };
 
                     // Setup function signature based on method name
                     // Using value-based array functions for primitive type arrays
                     if (methodName == "push") {
                         runtimeFuncName = "nova_value_array_push";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        paramTypes.push_back(valueType);
+                        if (usesJSValue) boxedArgumentIndexes.insert(0);
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);             // returns int64 (new length)
                         hasReturnValue = true;
                     } else if (methodName == "pop") {
                         runtimeFuncName = "nova_value_array_pop";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64
+                        returnType = valueType;
                         hasReturnValue = true;
                     } else if (methodName == "shift") {
                         runtimeFuncName = "nova_value_array_shift";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64
+                        returnType = valueType;
                         hasReturnValue = true;
                     } else if (methodName == "unshift") {
                         runtimeFuncName = "nova_value_array_unshift";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::Void);
-                        hasReturnValue = false;
+                        paramTypes.push_back(valueType);
+                        if (usesJSValue) boxedArgumentIndexes.insert(0);
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        hasReturnValue = true;
                     } else if (methodName == "at") {
                         // array.at(index)
                         // Returns element at index (supports negative indices)
@@ -11186,7 +12724,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         runtimeFuncName = "nova_value_array_at";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 index
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 element
+                        returnType = valueType;
                         hasReturnValue = true;
                     } else if (methodName == "with") {
                         // array.with(index, value) - ES2023
@@ -11208,9 +12746,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         runtimeFuncName = "nova_value_array_toReversed";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         // Return proper array type: pointer to array of i64
-                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
-                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
-                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        returnType = makeArrayReturnType();
                         hasReturnValue = true;
                     } else if (methodName == "toSorted") {
                         // array.toSorted() - ES2023
@@ -11311,13 +12847,15 @@ void HIRGenerator::visit(CallExpr& node) {
                     } else if (methodName == "includes") {
                         runtimeFuncName = "nova_value_array_includes";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        paramTypes.push_back(valueType);
+                        if (usesJSValue) boxedArgumentIndexes.insert(0);
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 (0 or 1)
                         hasReturnValue = true;
                     } else if (methodName == "indexOf") {
                         runtimeFuncName = "nova_value_array_indexOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        paramTypes.push_back(valueType);
+                        if (usesJSValue) boxedArgumentIndexes.insert(0);
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 index
                         hasReturnValue = true;
                     } else if (methodName == "lastIndexOf") {
@@ -11326,16 +12864,15 @@ void HIRGenerator::visit(CallExpr& node) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: lastIndexOf" << std::endl;
                         runtimeFuncName = "nova_value_array_lastIndexOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // int64 value
+                        paramTypes.push_back(valueType);
+                        if (usesJSValue) boxedArgumentIndexes.insert(0);
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);              // returns int64 index
                         hasReturnValue = true;
                     } else if (methodName == "reverse") {
                         runtimeFuncName = "nova_value_array_reverse";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
                         // Return proper array type: pointer to array of i64
-                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
-                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0);
-                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        returnType = makeArrayReturnType();
                         hasReturnValue = true;
                     } else if (methodName == "fill") {
                         runtimeFuncName = "nova_value_array_fill";
@@ -11357,9 +12894,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray* (first array)
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray* (second array)
                         // Return proper array type: pointer to array of i64
-                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
-                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
-                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        returnType = makeArrayReturnType();
                         hasReturnValue = true;
                     } else if (methodName == "slice") {
                         runtimeFuncName = "nova_value_array_slice";
@@ -11367,9 +12902,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // start index
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));    // end index
                         // Return proper array type: pointer to array of i64
-                        auto elementType = std::make_shared<HIRType>(HIRType::Kind::I64);
-                        auto arrayType = std::make_shared<HIRArrayType>(elementType, 0); // Size unknown at compile time
-                        returnType = std::make_shared<HIRPointerType>(arrayType, true);
+                        returnType = makeArrayReturnType();
                         hasReturnValue = true;
                     } else if (methodName == "find") {
                         // array.find(callback)
@@ -11493,6 +13026,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     // Generate arguments
                     std::vector<HIRValue*> args;
                     args.push_back(object);  // First argument is the array itself
+                    size_t argumentIndex = 0;
                     for (auto& arg : node.arguments) {
                         // Clear lastFunctionName_ before processing argument
                         std::string savedFuncName = lastFunctionName_;
@@ -11509,8 +13043,10 @@ void HIRGenerator::visit(CallExpr& node) {
                             args.push_back(funcNameValue);
                             lastFunctionName_ = "";  // Reset
                         } else {
-                            args.push_back(lastValue_);
+                            args.push_back(boxedArgumentIndexes.count(argumentIndex)
+                                ? toJSValue(lastValue_) : lastValue_);
                         }
+                        ++argumentIndex;
                     }
 
                     // Check if function already exists
@@ -11657,6 +13193,7 @@ void HIRGenerator::visit(CallExpr& node) {
                                                           << methodFuncName << " with " << args.size()
                                                           << " args (including 'this')" << std::endl;
                                 lastValue_ = builder_->createCall(func.get(), args, "obj_method_call");
+                                recordReturnedClosure(methodFuncName);
                                 return;
                             } else {
                                 std::cerr << "ERROR HIRGen: Object method function not found: "
@@ -11722,6 +13259,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     if (func) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Found method function, creating call" << std::endl;
                         lastValue_ = builder_->createCall(func.get(), args, "method_call");
+                        recordReturnedClosure(mangledName);
                         return;
                     } else {
                         // This should not happen if resolveMethodToClass works correctly
@@ -11744,12 +13282,61 @@ void HIRGenerator::visit(CallExpr& node) {
             args.push_back(lastValue_);
         }
 
+        auto boxTaggedArguments = [&](HIRFunction* function) {
+            if (!function || !function->functionType) return;
+            const size_t parameterCount = std::min(
+                args.size(), function->functionType->paramTypes.size());
+            for (size_t i = 0; i < parameterCount; ++i) {
+                if (function->functionType->paramTypes[i] &&
+                    function->functionType->paramTypes[i]->kind == HIRType::Kind::JSValue &&
+                    args[i] && args[i]->type &&
+                    args[i]->type->kind != HIRType::Kind::JSValue) {
+                    args[i] = toJSValue(args[i]);
+                }
+            }
+        };
+
+        auto packageRestArguments = [&](const std::string& functionName) {
+            auto rest = module_->functionRestParams.find(functionName);
+            if (rest == module_->functionRestParams.end()) return;
+
+            const size_t fixedCount = rest->second.second;
+            std::vector<HIRValue*> restValues;
+            if (args.size() > fixedCount) {
+                restValues.insert(
+                    restValues.end(), args.begin() + fixedCount, args.end());
+                args.resize(fixedCount);
+            }
+            for (auto*& restValue : restValues) {
+                restValue = toJSValue(restValue);
+            }
+            args.push_back(builder_->createArrayConstruct(
+                restValues, rest->second.first + ".rest"));
+        };
+
+        auto adaptPatternArguments = [&](const std::string& functionName,
+                                         HIRFunction* function) {
+            auto found = functionParameterPatterns_.find(functionName);
+            if (found == functionParameterPatterns_.end() || !function) return;
+            std::vector<HIRValue*> adapted;
+            adapted.reserve(args.size());
+            const size_t sourceCount = std::min(
+                args.size(), found->second.size());
+            for (size_t i = 0; i < sourceCount; ++i) {
+                if (found->second[i]) {
+                    appendPatternArguments(
+                        found->second[i].get(), args[i], adapted);
+                } else {
+                    adapted.push_back(args[i]);
+                }
+            }
+            adapted.insert(
+                adapted.end(), args.begin() + sourceCount, args.end());
+            args = std::move(adapted);
+        };
+
         // Lookup function
         if (auto* id = dynamic_cast<Identifier*>(node.callee.get())) {
-            std::ofstream logfile3("identifier_call_log.txt", std::ios::app);
-            logfile3 << "[ID-CALL] Function call to identifier: " << id->name << std::endl;
-            logfile3.close();
-
             // Check if we need to apply default parameters
             auto defaultValuesIt = functionDefaultValues_.find(id->name);
             if (defaultValuesIt != functionDefaultValues_.end()) {
@@ -11785,6 +13372,14 @@ void HIRGenerator::visit(CallExpr& node) {
             if (funcRefIt != functionReferences_.end()) {
                 std::string funcName = funcRefIt->second;
 
+                if (auto bound = boundFunctionArguments_.find(id->name);
+                    bound != boundFunctionArguments_.end()) {
+                    args.insert(args.begin(), bound->second.begin(),
+                                bound->second.end());
+                }
+
+                packageRestArguments(funcName);
+
                 // Check if this function is a closure - if so, we need to call through the variable
                 // instead of directly calling the function, so the closure environment can be passed
                 bool isClosure = (closureEnvironments_.count(funcName) > 0 || module_->closureEnvironments.count(funcName) > 0);
@@ -11796,6 +13391,16 @@ void HIRGenerator::visit(CallExpr& node) {
 
                     auto func = module_->getFunction(funcName);
                     if (func) {
+                        adaptPatternArguments(funcName, func.get());
+                        if (hasDynamicThis(funcName, func.get())) {
+                            HIRValue* receiver = toJSValue(nullptr);
+                            if (auto boundThis = boundFunctionThis_.find(id->name);
+                                boundThis != boundFunctionThis_.end()) {
+                                receiver = boundThis->second;
+                            }
+                            args.insert(args.begin(), receiver);
+                        }
+                        boxTaggedArguments(func.get());
                         // CRITICAL: Load the closure pointer from the variable
                         // lastValue_ currently points to the closure variable (from identifier visitor)
                         // We need to load it to get the actual closure/environment pointer
@@ -11812,6 +13417,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         closureArgs.push_back(closurePtr);  // Environment last
 
                         lastValue_ = builder_->createCall(func.get(), closureArgs, "closure_call");
+                        lastWasPromise_ = func->isAsync;
                         return;
                     } else {
                         std::cerr << "ERROR HIRGen: Closure function '" << funcName << "' not found" << std::endl;
@@ -11824,7 +13430,18 @@ void HIRGenerator::visit(CallExpr& node) {
                               << "' to function '" << funcName << "'" << std::endl;
                     auto func = module_->getFunction(funcName);
                     if (func) {
+                        adaptPatternArguments(funcName, func.get());
+                        if (hasDynamicThis(funcName, func.get())) {
+                            HIRValue* receiver = toJSValue(nullptr);
+                            if (auto boundThis = boundFunctionThis_.find(id->name);
+                                boundThis != boundFunctionThis_.end()) {
+                                receiver = boundThis->second;
+                            }
+                            args.insert(args.begin(), receiver);
+                        }
+                        boxTaggedArguments(func.get());
                         lastValue_ = builder_->createCall(func.get(), args, "indirect_call");
+                        lastWasPromise_ = func->isAsync;
                         return;
                     } else {
                         std::cerr << "ERROR HIRGen: Function '" << funcName << "' not found" << std::endl;
@@ -11958,22 +13575,15 @@ void HIRGenerator::visit(CallExpr& node) {
             // Direct function call
             auto func = module_->getFunction(id->name);
             if (func) {
-                std::ofstream logfile("call_debug.txt", std::ios::app);
-                logfile << "[CALL] Calling function: " << id->name << std::endl;
-                logfile << "[CALL] capturedVariables_ has entry: " << (capturedVariables_.count(id->name) > 0 ? "YES" : "NO") << std::endl;
-                if (capturedVariables_.count(id->name)) {
-                    logfile << "[CALL] Captured variables count: " << capturedVariables_[id->name].size() << std::endl;
+                packageRestArguments(id->name);
+                adaptPatternArguments(id->name, func.get());
+                if (hasDynamicThis(id->name, func.get())) {
+                    args.insert(args.begin(), toJSValue(nullptr));
                 }
-                logfile.close();
+                boxTaggedArguments(func.get());
 
                 // Check if this function needs a closure environment
                 if (capturedVariables_.count(id->name) && !capturedVariables_[id->name].empty()) {
-                    std::ofstream logfile2("call_site_log.txt", std::ios::app);
-                    logfile2 << "[CALL-SITE] Function '" << id->name
-                            << "' needs environment with " << capturedVariables_[id->name].size()
-                            << " captured variables" << std::endl;
-                    logfile2.close();
-
                     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function '" << id->name
                                               << "' needs environment with " << capturedVariables_[id->name].size()
                                               << " captured variables" << std::endl;
@@ -12006,7 +13616,68 @@ void HIRGenerator::visit(CallExpr& node) {
                                 // Look up the variable in the current scope (call site)
                                 HIRValue* currentValue = lookupVariable(varName);
                                 if (currentValue) {
+                                    // A transitive capture may already be a cell
+                                    // in this function's parent environment.
+                                    if (auto* inheritedCell =
+                                            getCapturedVariableStorage(varName)) {
+                                        currentValue = inheritedCell;
+                                    }
+
+                                    auto* instruction =
+                                        dynamic_cast<HIRInstruction*>(currentValue);
+                                    const bool isCell =
+                                        heapClosureCells_.count(currentValue) != 0 ||
+                                        (instruction && instruction->opcode ==
+                                             HIRInstruction::Opcode::GetField &&
+                                         instruction->name.find(".cell") !=
+                                             std::string::npos);
+                                    if (!isCell) {
+                                        HIRValue* initialValue = currentValue;
+                                        if (instruction && instruction->opcode ==
+                                                HIRInstruction::Opcode::Alloca) {
+                                            initialValue = builder_->createLoad(
+                                                currentValue,
+                                                varName + ".closure.initial");
+                                        }
+
+                                        auto sizeType = std::make_shared<HIRType>(
+                                            HIRType::Kind::I64);
+                                        auto opaqueType = std::make_shared<HIRType>(
+                                            HIRType::Kind::Any);
+                                        auto opaquePointer =
+                                            std::make_shared<HIRPointerType>(
+                                                opaqueType, true);
+                                        auto allocator = module_->getFunction(
+                                            "nova_alloc_closure_env");
+                                        HIRFunction* allocatorFunction =
+                                            allocator ? allocator.get() : nullptr;
+                                        if (!allocatorFunction) {
+                                            auto allocatorType =
+                                                new HIRFunctionType(
+                                                    {sizeType}, opaquePointer);
+                                            auto created = module_->createFunction(
+                                                "nova_alloc_closure_env",
+                                                allocatorType);
+                                            created->linkage =
+                                                HIRFunction::Linkage::External;
+                                            allocatorFunction = created.get();
+                                        }
+                                        auto* cell = builder_->createCall(
+                                            allocatorFunction,
+                                            {builder_->createIntConstant(8)},
+                                            varName + ".closure.cell");
+                                        cell->type =
+                                            std::make_shared<HIRPointerType>(
+                                                initialValue->type, true);
+                                        builder_->createStore(initialValue, cell);
+                                        heapClosureCells_.insert(cell);
+                                        symbolTable_[varName] = cell;
+                                        currentValue = cell;
+                                    }
                                     auto* fieldPtr = builder_->createGetField(envAlloca, static_cast<uint32_t>(i), varName);
+                                    // Store the outer binding cell, not a snapshot
+                                    // of its value. All calls of the closure must
+                                    // observe and mutate the same JavaScript binding.
                                     builder_->createStore(currentValue, fieldPtr);
                                     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Stored captured variable '"
                                                               << varName << "' at field " << i << std::endl;
@@ -12025,6 +13696,7 @@ void HIRGenerator::visit(CallExpr& node) {
 
                 auto callResult = builder_->createCall(func.get(), args);
                 lastValue_ = callResult;
+                lastWasPromise_ = func->isAsync && !func->isGenerator;
 
                 // CRITICAL: Check if this function returns a closure
                 // If so, set lastFunctionName_ so variable declarations can track it
@@ -12036,6 +13708,40 @@ void HIRGenerator::visit(CallExpr& node) {
                                   << "' returns closure '" << lastFunctionName_
                                   << "' - setting lastFunctionName_" << std::endl;
                     }
+                }
+                return;
+            }
+
+            // Dynamic callable fallback. Promise resolver functions are
+            // represented as tagged callable objects, so aliases and escaped
+            // resolver values must be invoked through their runtime context.
+            HIRValue* callable = lookupVariable(id->name);
+            if (callable) {
+                if (auto* instruction = dynamic_cast<HIRInstruction*>(callable);
+                    instruction && instruction->opcode ==
+                        HIRInstruction::Opcode::Alloca) {
+                    callable = builder_->createLoad(
+                        callable, id->name + ".dynamic_callable");
+                }
+                if (callable && callable->type &&
+                    callable->type->kind == HIRType::Kind::JSValue) {
+                    auto jsValueType = std::make_shared<HIRType>(
+                        HIRType::Kind::JSValue);
+                    auto existing = module_->getFunction("nova_callable_call1");
+                    HIRFunction* callFunction = existing ? existing.get() : nullptr;
+                    if (!callFunction) {
+                        auto* functionType = new HIRFunctionType(
+                            {jsValueType, jsValueType}, jsValueType);
+                        auto created = module_->createFunction(
+                            "nova_callable_call1", functionType);
+                        created->linkage = HIRFunction::Linkage::External;
+                        callFunction = created.get();
+                    }
+                    HIRValue* argument = args.empty()
+                        ? toJSValue(nullptr) : toJSValue(args.front());
+                    lastValue_ = builder_->createCall(
+                        callFunction, {callable, argument}, "dynamic_callable");
+                    return;
                 }
             }
         }

@@ -1,132 +1,242 @@
 #!/usr/bin/env python3
-"""
-Nova Compiler - Automated Test Runner
-Runs all test files and reports results
+"""Run Nova tests that declare explicit expectations.
+
+Test files opt in with directives near the top of the file:
+
+    // NOVA_TEST_MODE: run
+    // NOVA_EXPECT_EXIT: 0
+    // NOVA_EXPECT_STDOUT_CONTAINS: "optional text"
+    // NOVA_EXPECT_STDERR_CONTAINS: "optional text"
+
+String expectations are JSON strings so escapes such as ``\n`` are supported.
+Files without ``NOVA_EXPECT_EXIT`` are reported as skipped, never as passed.
 """
 
-import subprocess
+from __future__ import annotations
+
+import argparse
+import json
 import os
+import re
+import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-# Colors for output
-GREEN = '\033[92m'
-RED = '\033[91m'
-YELLOW = '\033[93m'
-BLUE = '\033[94m'
-RESET = '\033[0m'
 
-def run_test(test_file):
-    """Run a single test file and return (exit_code, success)"""
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SUITE = REPO_ROOT / "tests" / "conformance"
+DIRECTIVE_RE = re.compile(
+    r"^\s*//\s*NOVA_(TEST_MODE|EXPECT_EXIT|EXPECT_STDOUT_CONTAINS|"
+    r"EXPECT_STDERR_CONTAINS):\s*(.*?)\s*$"
+)
+
+
+@dataclass(frozen=True)
+class Expectations:
+    mode: str
+    exit_code: int
+    stdout_contains: tuple[str, ...]
+    stderr_contains: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TestResult:
+    path: Path
+    status: str
+    detail: str = ""
+    stdout: str = ""
+    stderr: str = ""
+
+
+def parse_json_string(value: str, path: Path, key: str) -> str:
     try:
-        result = subprocess.run(
-            ['build\\Release\\nova.exe', 'run', str(test_file)],
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid {key} JSON string: {exc}") from exc
+    if not isinstance(parsed, str):
+        raise ValueError(f"{path}: {key} must be a JSON string")
+    return parsed
+
+
+def load_expectations(path: Path) -> Expectations | None:
+    values: dict[str, list[str]] = {}
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, start=1):
+            match = DIRECTIVE_RE.match(line)
+            if match:
+                values.setdefault(match.group(1), []).append(match.group(2))
+            elif line_number > 40:
+                break
+
+    if "EXPECT_EXIT" not in values:
+        return None
+    if len(values["EXPECT_EXIT"]) != 1:
+        raise ValueError(f"{path}: NOVA_EXPECT_EXIT must appear exactly once")
+
+    try:
+        exit_code = int(values["EXPECT_EXIT"][0], 10)
+    except ValueError as exc:
+        raise ValueError(f"{path}: NOVA_EXPECT_EXIT must be an integer") from exc
+
+    mode_values = values.get("TEST_MODE", ["run"])
+    if len(mode_values) != 1 or mode_values[0] not in {"run", "compile", "check"}:
+        raise ValueError(f"{path}: NOVA_TEST_MODE must be 'run', 'compile', or 'check'")
+
+    stdout_contains = tuple(
+        parse_json_string(value, path, "NOVA_EXPECT_STDOUT_CONTAINS")
+        for value in values.get("EXPECT_STDOUT_CONTAINS", [])
+    )
+    stderr_contains = tuple(
+        parse_json_string(value, path, "NOVA_EXPECT_STDERR_CONTAINS")
+        for value in values.get("EXPECT_STDERR_CONTAINS", [])
+    )
+    return Expectations(mode_values[0], exit_code, stdout_contains, stderr_contains)
+
+
+def find_nova(explicit_path: str | None) -> Path:
+    if explicit_path:
+        candidate = Path(explicit_path).expanduser().resolve()
+        if candidate.is_file():
+            return candidate
+        raise FileNotFoundError(f"Nova executable not found: {candidate}")
+
+    executable = "nova.exe" if os.name == "nt" else "nova"
+    candidates = (
+        REPO_ROOT / "build" / "Release" / executable,
+        REPO_ROOT / "build" / executable,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("Nova executable not found; pass --nova PATH")
+
+
+def discover_tests(paths: list[str]) -> list[Path]:
+    requested = [Path(path).resolve() for path in paths] if paths else [DEFAULT_SUITE]
+    discovered: set[Path] = set()
+    for path in requested:
+        if path.is_file() and path.suffix in {".ts", ".js"}:
+            discovered.add(path)
+        elif path.is_dir():
+            discovered.update(path.rglob("*.ts"))
+            discovered.update(path.rglob("*.js"))
+        else:
+            raise FileNotFoundError(f"Test path not found: {path}")
+    return sorted(discovered)
+
+
+def run_test(nova: Path, path: Path, timeout: float) -> TestResult:
+    try:
+        expected = load_expectations(path)
+    except ValueError as exc:
+        return TestResult(path, "FAIL", str(exc))
+    if expected is None:
+        return TestResult(path, "SKIP", "no NOVA_EXPECT_EXIT directive")
+
+    command = [str(nova), expected.mode, str(path)]
+    if expected.mode == "run":
+        # A compiler rebuild must exercise newly generated code. Nova's native
+        # binary cache is keyed by source content, not by compiler version, so
+        # cached executables could otherwise hide compiler regressions.
+        command.append("--no-cache")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
             capture_output=True,
             text=True,
-            timeout=5
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
         )
+    except subprocess.TimeoutExpired as exc:
+        return TestResult(
+            path,
+            "FAIL",
+            f"timed out after {timeout:g}s",
+            exc.stdout or "",
+            exc.stderr or "",
+        )
+    except OSError as exc:
+        return TestResult(path, "FAIL", f"could not start Nova: {exc}")
 
-        # Extract exit code from debug output
-        stderr_output = result.stderr if result.stderr else ""
-        for line in stderr_output.split('\n'):
-            if 'Program executed with exit code:' in line:
-                exit_code = line.split('exit code:')[1].strip()
-                return (exit_code, True)
+    failures: list[str] = []
+    if completed.returncode != expected.exit_code:
+        failures.append(f"exit {completed.returncode}, expected {expected.exit_code}")
+    for text in expected.stdout_contains:
+        if text not in completed.stdout:
+            failures.append(f"stdout does not contain {text!r}")
+    for text in expected.stderr_contains:
+        if text not in completed.stderr:
+            failures.append(f"stderr does not contain {text!r}")
 
-        # If no exit code found but process succeeded
-        return (str(result.returncode), True)
+    return TestResult(
+        path,
+        "FAIL" if failures else "PASS",
+        "; ".join(failures),
+        completed.stdout,
+        completed.stderr,
+    )
 
-    except subprocess.TimeoutExpired:
-        return ('TIMEOUT', False)
-    except Exception as e:
-        return (f'ERROR: {str(e)}', False)
 
-def main():
-    """Main test runner"""
-    tests_dir = Path('tests')
+def print_failure(result: TestResult) -> None:
+    print(f"  reason: {result.detail}")
+    if result.stdout:
+        print("  stdout:")
+        print("\n".join(f"    {line}" for line in result.stdout.rstrip().splitlines()))
+    if result.stderr:
+        print("  stderr:")
+        print("\n".join(f"    {line}" for line in result.stderr.rstrip().splitlines()))
 
-    if not tests_dir.exists():
-        print(f"{RED}Tests directory not found!{RESET}")
-        return 1
 
-    # Get all test files
-    test_files_to_run = sorted(tests_dir.glob('test_*.ts'))
-    skipped_tests = []
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("paths", nargs="*", help="test files or directories")
+    parser.add_argument("--nova", help="path to the Nova executable")
+    parser.add_argument("--timeout", type=float, default=20.0, help="seconds per test")
+    return parser.parse_args()
 
-    print(f"{BLUE}{'='*70}{RESET}")
-    print(f"{BLUE}Nova Compiler - Test Suite Runner{RESET}")
-    print(f"{BLUE}{'='*70}{RESET}\n")
 
-    # Run tests by category
-    categories = {
-        'Array': [],
-        'String': [],
-        'Math': [],
-        'Number': [],
-        'Class': [],
-        'Arrow': [],
-        'Other': []
-    }
+def main() -> int:
+    # Windows consoles commonly default to cp1252, while Nova diagnostics are
+    # UTF-8 and may contain symbols such as check marks. Never let reporting a
+    # compiler failure crash the test runner with UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
-    results = {}
+    args = parse_args()
+    try:
+        nova = find_nova(args.nova)
+        tests = discover_tests(args.paths)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
-    for test_file in test_files_to_run:
-        test_name = test_file.name
-        exit_code, success = run_test(str(test_file))
-        results[test_name] = (exit_code, success)
+    if not tests:
+        print("ERROR: no tests found", file=sys.stderr)
+        return 2
 
-        # Categorize
-        if 'array' in test_name:
-            categories['Array'].append((test_name, exit_code, success))
-        elif 'string' in test_name:
-            categories['String'].append((test_name, exit_code, success))
-        elif 'math' in test_name:
-            categories['Math'].append((test_name, exit_code, success))
-        elif 'number' in test_name:
-            categories['Number'].append((test_name, exit_code, success))
-        elif 'class' in test_name:
-            categories['Class'].append((test_name, exit_code, success))
-        elif 'arrow' in test_name:
-            categories['Arrow'].append((test_name, exit_code, success))
-        else:
-            categories['Other'].append((test_name, exit_code, success))
+    results = [run_test(nova, path, args.timeout) for path in tests]
+    for result in results:
+        relative = result.path.relative_to(REPO_ROOT)
+        suffix = f" - {result.detail}" if result.status == "SKIP" else ""
+        print(f"{result.status:4} {relative}{suffix}")
+        if result.status == "FAIL":
+            print_failure(result)
 
-    # Print results by category
-    total_tests = 0
-    passed_tests = 0
+    passed = sum(result.status == "PASS" for result in results)
+    failed = sum(result.status == "FAIL" for result in results)
+    skipped = sum(result.status == "SKIP" for result in results)
+    print(f"\nVerified: {passed + failed}, passed: {passed}, failed: {failed}, skipped: {skipped}")
 
-    for category, tests in categories.items():
-        if not tests:
-            continue
+    if passed + failed == 0:
+        print("ERROR: the suite contains no tests with explicit expectations", file=sys.stderr)
+        return 2
+    return 1 if failed else 0
 
-        print(f"\n{BLUE}=== {category} Methods ==={RESET}")
-        for test_name, exit_code, success in tests:
-            total_tests += 1
-            if success:
-                passed_tests += 1
-                print(f"  {GREEN}PASS{RESET} {test_name:50} -> exit {exit_code}")
-            else:
-                print(f"  {RED}FAIL{RESET} {test_name:50} -> {exit_code}")
 
-    # Print skipped tests
-    if skipped_tests:
-        print(f"\n{YELLOW}=== Skipped Tests (Callback Support Needed) ==={RESET}")
-        for test_name in skipped_tests:
-            print(f"  {YELLOW}SKIP{RESET} {test_name}")
-
-    # Summary
-    print(f"\n{BLUE}{'='*70}{RESET}")
-    print(f"{BLUE}Summary:{RESET}")
-    print(f"  Total Tests Run: {total_tests}")
-    print(f"  {GREEN}Passed: {passed_tests}{RESET}")
-    print(f"  {RED}Failed: {total_tests - passed_tests}{RESET}")
-    print(f"  {YELLOW}Skipped: {len(skipped_tests)}{RESET}")
-
-    pass_rate = (passed_tests / total_tests * 100) if total_tests > 0 else 0
-    print(f"  Pass Rate: {pass_rate:.1f}%")
-    print(f"{BLUE}{'='*70}{RESET}\n")
-
-    return 0 if passed_tests == total_tests else 1
-
-if __name__ == '__main__':
-    sys.exit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())

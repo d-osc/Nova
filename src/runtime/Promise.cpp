@@ -10,6 +10,10 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
+#include <unordered_set>
+#include <memory>
+
+#include "nova/runtime/Value.h"
 
 extern "C" {
 
@@ -41,7 +45,8 @@ struct PromiseCallback {
     };
 
     Type type;
-    void* callback;      // Function pointer
+    void* callback;      // Fulfillment/catch/finally function pointer
+    void* rejectedCallback; // Optional rejection function for then(resolve, reject)
     void* nextPromise;   // Promise to chain result to
 };
 
@@ -53,11 +58,70 @@ struct NovaPromise {
     int64_t value;           // Fulfilled value (for simplicity, using int64_t)
     int64_t error;           // Rejection reason
     std::vector<PromiseCallback> callbacks;
+    std::vector<std::function<void(PromiseState, int64_t)>> observers;
     std::mutex mutex;
     std::condition_variable cv;
     bool hasValue;
     bool hasError;
+    void* resolveCallable;
+    void* rejectCallable;
 };
+
+enum class PromiseCallableKind {
+    Resolve,
+    Reject
+};
+
+struct PromiseCallable {
+    PromiseCallableKind kind;
+    NovaPromise* promise;
+};
+
+static std::unordered_set<PromiseCallable*> callableRegistry;
+static std::mutex callableRegistryMutex;
+
+static PromiseCallable* callableFromValue(int64_t value) {
+    auto* candidate = static_cast<PromiseCallable*>(
+        nova_value_to_object(static_cast<std::uint64_t>(value)));
+    if (!candidate) return nullptr;
+    std::lock_guard<std::mutex> lock(callableRegistryMutex);
+    return callableRegistry.count(candidate) != 0 ? candidate : nullptr;
+}
+
+static PromiseCallable* createPromiseCallable(
+        NovaPromise* promise, PromiseCallableKind kind) {
+    auto* callable = new PromiseCallable{kind, promise};
+    std::lock_guard<std::mutex> lock(callableRegistryMutex);
+    callableRegistry.insert(callable);
+    return callable;
+}
+
+static thread_local NovaPromise* currentExecutorPromise = nullptr;
+static std::unordered_set<NovaPromise*> promiseRegistry;
+static std::mutex promiseRegistryMutex;
+
+static void registerPromise(NovaPromise* promise) {
+    std::lock_guard<std::mutex> lock(promiseRegistryMutex);
+    promiseRegistry.insert(promise);
+}
+
+static bool isRegisteredPromise(NovaPromise* promise) {
+    std::lock_guard<std::mutex> lock(promiseRegistryMutex);
+    return promiseRegistry.count(promise) != 0;
+}
+
+static NovaPromise* promiseFromValue(int64_t value) {
+    using namespace nova::runtime;
+    const auto bits = static_cast<JSValue>(value);
+    NovaPromise* candidate = nullptr;
+    if (js_value_has_tag(bits, JS_VALUE_OBJECT_TAG)) {
+        candidate = reinterpret_cast<NovaPromise*>(static_cast<std::uintptr_t>(
+            bits & JS_VALUE_PAYLOAD_MASK));
+    } else {
+        candidate = reinterpret_cast<NovaPromise*>(static_cast<std::uintptr_t>(bits));
+    }
+    return candidate && isRegisteredPromise(candidate) ? candidate : nullptr;
+}
 
 // ============================================================================
 // Microtask Queue (for proper Promise scheduling)
@@ -104,28 +168,81 @@ void* nova_promise_create() {
     promise->error = 0;
     promise->hasValue = false;
     promise->hasError = false;
+    promise->resolveCallable = nullptr;
+    promise->rejectCallable = nullptr;
+    registerPromise(promise);
+    return promise;
+}
+
+void nova_promise_executor_resolve(int64_t value) {
+    if (currentExecutorPromise) {
+        nova_promise_fulfill(currentExecutorPromise, value);
+    }
+}
+
+void nova_promise_executor_reject(int64_t reason) {
+    if (currentExecutorPromise) {
+        nova_promise_reject_internal(currentExecutorPromise, reason);
+    }
+}
+
+int64_t nova_callable_call1(int64_t callableValue, int64_t argument) {
+    PromiseCallable* callable = callableFromValue(callableValue);
+    if (!callable || !callable->promise) {
+        return static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED);
+    }
+    if (callable->kind == PromiseCallableKind::Resolve) {
+        nova_promise_fulfill(callable->promise, argument);
+    } else {
+        nova_promise_reject_internal(callable->promise, argument);
+    }
+    return static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED);
+}
+
+void* nova_promise_construct(void* executor, void* environment) {
+    NovaPromise* promise = static_cast<NovaPromise*>(nova_promise_create());
+    if (!executor) {
+        nova_promise_reject_internal(
+            promise, static_cast<int64_t>(0x7ff9000000000000ULL));
+        return promise;
+    }
+
+    PromiseCallable* resolve = createPromiseCallable(
+        promise, PromiseCallableKind::Resolve);
+    PromiseCallable* reject = createPromiseCallable(
+        promise, PromiseCallableKind::Reject);
+    promise->resolveCallable = resolve;
+    promise->rejectCallable = reject;
+
+    using Executor = void (*)(int64_t, int64_t, void*);
+    NovaPromise* previousExecutorPromise = currentExecutorPromise;
+    currentExecutorPromise = promise;
+    try {
+        reinterpret_cast<Executor>(executor)(
+            static_cast<int64_t>(nova_value_from_object(resolve)),
+            static_cast<int64_t>(nova_value_from_object(reject)),
+            environment);
+    } catch (...) {
+        nova_promise_reject_internal(promise, -1);
+    }
+    currentExecutorPromise = previousExecutorPromise;
     return promise;
 }
 
 // Promise.resolve(value) - Create an already-fulfilled promise
 void* nova_promise_resolve(int64_t value) {
-    NovaPromise* promise = new NovaPromise();
-    promise->state = PromiseState::FULFILLED;
-    promise->value = value;
-    promise->error = 0;
-    promise->hasValue = true;
-    promise->hasError = false;
+    if (NovaPromise* existing = promiseFromValue(value)) {
+        return existing;
+    }
+    NovaPromise* promise = static_cast<NovaPromise*>(nova_promise_create());
+    nova_promise_fulfill(promise, value);
     return promise;
 }
 
 // Promise.reject(reason) - Create an already-rejected promise
 void* nova_promise_reject(int64_t reason) {
-    NovaPromise* promise = new NovaPromise();
-    promise->state = PromiseState::REJECTED;
-    promise->value = 0;
-    promise->error = reason;
-    promise->hasValue = false;
-    promise->hasError = true;
+    NovaPromise* promise = static_cast<NovaPromise*>(nova_promise_create());
+    nova_promise_reject_internal(promise, reason);
     return promise;
 }
 
@@ -139,14 +256,32 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
     typedef int64_t (*CatchCallback)(int64_t);
     typedef void (*FinallyCallback)();
 
-    for (auto& cb : promise->callbacks) {
+    std::vector<PromiseCallback> callbacks;
+    std::vector<std::function<void(PromiseState, int64_t)>> observers;
+    PromiseState state;
+    int64_t value;
+    int64_t error;
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+        callbacks.swap(promise->callbacks);
+        observers.swap(promise->observers);
+        state = promise->state;
+        value = promise->value;
+        error = promise->error;
+    }
+
+    for (auto& observer : observers) {
+        observer(state, state == PromiseState::FULFILLED ? value : error);
+    }
+
+    for (auto& cb : callbacks) {
         NovaPromise* nextPromise = static_cast<NovaPromise*>(cb.nextPromise);
 
         switch (cb.type) {
             case PromiseCallback::Type::THEN:
-                if (promise->state == PromiseState::FULFILLED && cb.callback) {
+                if (state == PromiseState::FULFILLED && cb.callback) {
                     try {
-                        int64_t result = reinterpret_cast<ThenCallback>(cb.callback)(promise->value);
+                        int64_t result = reinterpret_cast<ThenCallback>(cb.callback)(value);
                         if (nextPromise) {
                             nova_promise_fulfill(nextPromise, result);
                         }
@@ -155,16 +290,32 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
                             nova_promise_reject_internal(nextPromise, -1);
                         }
                     }
-                } else if (promise->state == PromiseState::REJECTED && nextPromise) {
-                    // Pass rejection to next promise
-                    nova_promise_reject_internal(nextPromise, promise->error);
+                } else if (state == PromiseState::REJECTED &&
+                           cb.rejectedCallback) {
+                    try {
+                        int64_t result = reinterpret_cast<CatchCallback>(
+                            cb.rejectedCallback)(error);
+                        if (nextPromise) {
+                            nova_promise_fulfill(nextPromise, result);
+                        }
+                    } catch (...) {
+                        if (nextPromise) {
+                            nova_promise_reject_internal(nextPromise, -1);
+                        }
+                    }
+                } else if (nextPromise) {
+                    if (state == PromiseState::FULFILLED) {
+                        nova_promise_fulfill(nextPromise, value);
+                    } else {
+                        nova_promise_reject_internal(nextPromise, error);
+                    }
                 }
                 break;
 
             case PromiseCallback::Type::CATCH:
-                if (promise->state == PromiseState::REJECTED && cb.callback) {
+                if (state == PromiseState::REJECTED && cb.callback) {
                     try {
-                        int64_t result = reinterpret_cast<CatchCallback>(cb.callback)(promise->error);
+                        int64_t result = reinterpret_cast<CatchCallback>(cb.callback)(error);
                         if (nextPromise) {
                             nova_promise_fulfill(nextPromise, result);
                         }
@@ -173,9 +324,11 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
                             nova_promise_reject_internal(nextPromise, -1);
                         }
                     }
-                } else if (promise->state == PromiseState::FULFILLED && nextPromise) {
+                } else if (state == PromiseState::FULFILLED && nextPromise) {
                     // Pass fulfillment to next promise
-                    nova_promise_fulfill(nextPromise, promise->value);
+                    nova_promise_fulfill(nextPromise, value);
+                } else if (state == PromiseState::REJECTED && nextPromise) {
+                    nova_promise_reject_internal(nextPromise, error);
                 }
                 break;
 
@@ -185,42 +338,89 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
                 }
                 // Pass through the original state
                 if (nextPromise) {
-                    if (promise->state == PromiseState::FULFILLED) {
-                        nova_promise_fulfill(nextPromise, promise->value);
+                    if (state == PromiseState::FULFILLED) {
+                        nova_promise_fulfill(nextPromise, value);
                     } else {
-                        nova_promise_reject_internal(nextPromise, promise->error);
+                        nova_promise_reject_internal(nextPromise, error);
                     }
                 }
                 break;
         }
     }
-
-    promise->callbacks.clear();
 }
 
-// Resolve a promise (fulfill it)
-void nova_promise_fulfill(void* promisePtr, int64_t value) {
-    if (!promisePtr) return;
-    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+static void observePromise(
+        NovaPromise* promise,
+        std::function<void(PromiseState, int64_t)> observer) {
+    PromiseState state;
+    int64_t payload;
+    {
+        std::lock_guard<std::mutex> lock(promise->mutex);
+        if (promise->state == PromiseState::PENDING) {
+            promise->observers.push_back(std::move(observer));
+            return;
+        }
+        state = promise->state;
+        payload = state == PromiseState::FULFILLED
+            ? promise->value : promise->error;
+    }
+    nova_promise_queue_microtask(
+        [observer = std::move(observer), state, payload]() mutable {
+            observer(state, payload);
+        });
+}
 
+static void fulfillPlain(NovaPromise* promise, int64_t value) {
     {
         std::lock_guard<std::mutex> lock(promise->mutex);
         if (promise->state != PromiseState::PENDING) {
-            return; // Already settled
+            return;
         }
-
         promise->state = PromiseState::FULFILLED;
         promise->value = value;
         promise->hasValue = true;
     }
-
     promise->cv.notify_all();
-
-    // Process callbacks asynchronously (microtask)
     nova_promise_queue_microtask([promise]() {
         nova_promise_process_callbacks(promise);
     });
-    nova_promise_process_microtasks();
+}
+
+// Apply the Promise Resolution Procedure. Nova Promise objects are adopted;
+// ordinary tagged values are fulfilled as-is.
+void nova_promise_fulfill(void* promisePtr, int64_t value) {
+    if (!promisePtr) return;
+    NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+
+    NovaPromise* adopted = promiseFromValue(value);
+    if (!adopted) {
+        fulfillPlain(promise, value);
+        return;
+    }
+    if (adopted == promise) {
+        nova_promise_reject_internal(promise, -1);
+        return;
+    }
+
+    PromiseState adoptedState;
+    int64_t adoptedValue = 0;
+    int64_t adoptedError = 0;
+    {
+        std::lock_guard<std::mutex> lock(adopted->mutex);
+        adoptedState = adopted->state;
+        adoptedValue = adopted->value;
+        adoptedError = adopted->error;
+        if (adoptedState == PromiseState::PENDING) {
+            adopted->callbacks.push_back({PromiseCallback::Type::THEN,
+                nullptr, nullptr, promise});
+            return;
+        }
+    }
+    if (adoptedState == PromiseState::FULFILLED) {
+        fulfillPlain(promise, adoptedValue);
+    } else {
+        nova_promise_reject_internal(promise, adoptedError);
+    }
 }
 
 // Reject a promise (internal)
@@ -245,7 +445,6 @@ void nova_promise_reject_internal(void* promisePtr, int64_t reason) {
     nova_promise_queue_microtask([promise]() {
         nova_promise_process_callbacks(promise);
     });
-    nova_promise_process_microtasks();
 }
 
 // External reject function
@@ -273,6 +472,7 @@ void* nova_promise_then(void* promisePtr, void* onFulfilled) {
             PromiseCallback cb;
             cb.type = PromiseCallback::Type::THEN;
             cb.callback = onFulfilled;
+            cb.rejectedCallback = nullptr;
             cb.nextPromise = nextPromise;
             promise->callbacks.push_back(cb);
         } else if (promise->state == PromiseState::FULFILLED) {
@@ -291,7 +491,6 @@ void* nova_promise_then(void* promisePtr, void* onFulfilled) {
                     nova_promise_fulfill(nextPromise, value);
                 }
             });
-            nova_promise_process_microtasks();
         } else {
             // Rejected, pass through
             nova_promise_reject_internal(nextPromise, promise->error);
@@ -315,6 +514,7 @@ void* nova_promise_catch(void* promisePtr, void* onRejected) {
             PromiseCallback cb;
             cb.type = PromiseCallback::Type::CATCH;
             cb.callback = onRejected;
+            cb.rejectedCallback = nullptr;
             cb.nextPromise = nextPromise;
             promise->callbacks.push_back(cb);
         } else if (promise->state == PromiseState::REJECTED) {
@@ -332,7 +532,6 @@ void* nova_promise_catch(void* promisePtr, void* onRejected) {
                     nova_promise_reject_internal(nextPromise, error);
                 }
             });
-            nova_promise_process_microtasks();
         } else {
             // Fulfilled, pass through
             nova_promise_fulfill(nextPromise, promise->value);
@@ -356,6 +555,7 @@ void* nova_promise_finally(void* promisePtr, void* onFinally) {
             PromiseCallback cb;
             cb.type = PromiseCallback::Type::FINALLY;
             cb.callback = onFinally;
+            cb.rejectedCallback = nullptr;
             cb.nextPromise = nextPromise;
             promise->callbacks.push_back(cb);
         } else {
@@ -374,7 +574,6 @@ void* nova_promise_finally(void* promisePtr, void* onFinally) {
                     nova_promise_reject_internal(nextPromise, error);
                 }
             });
-            nova_promise_process_microtasks();
         }
     }
 
@@ -388,28 +587,58 @@ void* nova_promise_finally(void* promisePtr, void* onFinally) {
 // Helper struct to extract Nova array metadata
 struct PromiseArrayMeta { char pad[24]; int64_t length; int64_t capacity; int64_t* elements; };
 
+void* nova_value_array_create(int64_t length);
+void value_array_set(void* arrayPtr, int64_t index, int64_t value);
+
 // Promise.all(promises) - Wait for all promises
 // Accepts a NovaArray pointer (single argument from compiler)
 void* nova_promise_all(void* arrayPtr) {
-    if (!arrayPtr) return nova_promise_resolve(0);
+    if (!arrayPtr) return nova_promise_reject(-1);
     PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
     int64_t count = meta->length;
+    void* values = nova_value_array_create(count);
     if (count == 0) {
-        return nova_promise_resolve(0);
+        return nova_promise_resolve(static_cast<int64_t>(
+            nova_value_from_object(values)));
     }
 
     NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
+    struct AllContext {
+        std::mutex mutex;
+        int64_t remaining;
+        bool settled = false;
+        NovaPromise* result;
+        void* values;
+    };
+    auto context = std::make_shared<AllContext>();
+    context->remaining = count;
+    context->result = result;
+    context->values = values;
 
-    for (int64_t i = 0; i < count; i++) {
-        NovaPromise* p = reinterpret_cast<NovaPromise*>(meta->elements[i]);
-        if (p && p->state == PromiseState::REJECTED) {
-            nova_promise_reject_internal(result, p->error);
-            return result;
+    for (int64_t index = 0; index < count; ++index) {
+        const int64_t element = meta->elements[index];
+        auto settleElement = [context, index](
+                PromiseState state, int64_t payload) {
+            std::lock_guard<std::mutex> lock(context->mutex);
+            if (context->settled) return;
+            if (state == PromiseState::REJECTED) {
+                context->settled = true;
+                nova_promise_reject_internal(context->result, payload);
+                return;
+            }
+            value_array_set(context->values, index, payload);
+            if (--context->remaining == 0) {
+                context->settled = true;
+                nova_promise_fulfill(context->result, static_cast<int64_t>(
+                    nova_value_from_object(context->values)));
+            }
+        };
+        if (NovaPromise* promise = promiseFromValue(element)) {
+            observePromise(promise, std::move(settleElement));
+        } else {
+            settleElement(PromiseState::FULFILLED, element);
         }
     }
-
-    // All fulfilled (or still pending - simplified)
-    nova_promise_fulfill(result, count);
     return result;
 }
 
@@ -423,17 +652,22 @@ void* nova_promise_race(void* arrayPtr) {
     }
 
     NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
-
-    for (int64_t i = 0; i < count; i++) {
-        NovaPromise* p = reinterpret_cast<NovaPromise*>(meta->elements[i]);
-        if (p) {
-            if (p->state == PromiseState::FULFILLED) {
-                nova_promise_fulfill(result, p->value);
-                return result;
-            } else if (p->state == PromiseState::REJECTED) {
-                nova_promise_reject_internal(result, p->error);
-                return result;
+    for (int64_t index = 0; index < count; ++index) {
+        const int64_t element = meta->elements[index];
+        auto settle = [result](PromiseState state, int64_t payload) {
+            if (state == PromiseState::FULFILLED) {
+                nova_promise_fulfill(result, payload);
+            } else {
+                nova_promise_reject_internal(result, payload);
             }
+        };
+        if (NovaPromise* promise = promiseFromValue(element)) {
+            observePromise(promise, std::move(settle));
+        } else {
+            nova_promise_queue_microtask(
+                [settle = std::move(settle), element]() mutable {
+                    settle(PromiseState::FULFILLED, element);
+                });
         }
     }
 
@@ -458,17 +692,37 @@ void* nova_promise_any(void* arrayPtr) {
     }
 
     NovaPromise* result = static_cast<NovaPromise*>(nova_promise_create());
-
-    for (int64_t i = 0; i < count; i++) {
-        NovaPromise* p = reinterpret_cast<NovaPromise*>(meta->elements[i]);
-        if (p && p->state == PromiseState::FULFILLED) {
-            nova_promise_fulfill(result, p->value);
-            return result;
+    struct AnyContext {
+        std::mutex mutex;
+        int64_t remaining;
+        bool settled = false;
+        NovaPromise* result;
+    };
+    auto context = std::make_shared<AnyContext>();
+    context->remaining = count;
+    context->result = result;
+    for (int64_t index = 0; index < count; ++index) {
+        const int64_t element = meta->elements[index];
+        auto settle = [context](PromiseState state, int64_t payload) {
+            std::lock_guard<std::mutex> lock(context->mutex);
+            if (context->settled) return;
+            if (state == PromiseState::FULFILLED) {
+                context->settled = true;
+                nova_promise_fulfill(context->result, payload);
+            } else if (--context->remaining == 0) {
+                context->settled = true;
+                nova_promise_reject_internal(context->result, -1);
+            }
+        };
+        if (NovaPromise* promise = promiseFromValue(element)) {
+            observePromise(promise, std::move(settle));
+        } else {
+            nova_promise_queue_microtask(
+                [settle = std::move(settle), element]() mutable {
+                    settle(PromiseState::FULFILLED, element);
+                });
         }
     }
-
-    // All rejected
-    nova_promise_reject_internal(result, -1);
     return result;
 }
 
@@ -586,16 +840,9 @@ void* nova_promise_then_both(void* promisePtr, void* onFulfilled, void* onReject
             PromiseCallback thenCb;
             thenCb.type = PromiseCallback::Type::THEN;
             thenCb.callback = onFulfilled;
+            thenCb.rejectedCallback = onRejected;
             thenCb.nextPromise = nextPromise;
             promise->callbacks.push_back(thenCb);
-
-            if (onRejected) {
-                PromiseCallback catchCb;
-                catchCb.type = PromiseCallback::Type::CATCH;
-                catchCb.callback = onRejected;
-                catchCb.nextPromise = nextPromise;
-                promise->callbacks.push_back(catchCb);
-            }
         } else if (promise->state == PromiseState::FULFILLED) {
             int64_t value = promise->value;
             nova_promise_queue_microtask([onFulfilled, value, nextPromise]() {
@@ -611,7 +858,6 @@ void* nova_promise_then_both(void* promisePtr, void* onFulfilled, void* onReject
                     nova_promise_fulfill(nextPromise, value);
                 }
             });
-            nova_promise_process_microtasks();
         } else {
             int64_t error = promise->error;
             if (onRejected) {
@@ -624,7 +870,6 @@ void* nova_promise_then_both(void* promisePtr, void* onFulfilled, void* onReject
                         nova_promise_reject_internal(nextPromise, -1);
                     }
                 });
-                nova_promise_process_microtasks();
             } else {
                 nova_promise_reject_internal(nextPromise, error);
             }
@@ -700,6 +945,23 @@ void* nova_promise_try_with_args(void* fn, int64_t* args, int argCount) {
 void nova_promise_free(void* promisePtr) {
     if (!promisePtr) return;
     NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
+    {
+        std::lock_guard<std::mutex> lock(promiseRegistryMutex);
+        promiseRegistry.erase(promise);
+    }
+    {
+        std::lock_guard<std::mutex> lock(callableRegistryMutex);
+        if (promise->resolveCallable) {
+            callableRegistry.erase(
+                static_cast<PromiseCallable*>(promise->resolveCallable));
+        }
+        if (promise->rejectCallable) {
+            callableRegistry.erase(
+                static_cast<PromiseCallable*>(promise->rejectCallable));
+        }
+    }
+    delete static_cast<PromiseCallable*>(promise->resolveCallable);
+    delete static_cast<PromiseCallable*>(promise->rejectCallable);
     delete promise;
 }
 
@@ -730,11 +992,7 @@ const char* nova_promise_toString(void* promisePtr) {
 
 // Check if value is a Promise
 int64_t nova_promise_isPromise(void* value) {
-    if (!value) return 0;
-    NovaPromise* p = static_cast<NovaPromise*>(value);
-    return (p->state == PromiseState::PENDING ||
-            p->state == PromiseState::FULFILLED ||
-            p->state == PromiseState::REJECTED) ? 1 : 0;
+    return value && isRegisteredPromise(static_cast<NovaPromise*>(value)) ? 1 : 0;
 }
 
 // Run microtask checkpoint

@@ -49,6 +49,7 @@ std::string HIRType::toString() const {
         case Kind::Char: return "char";
         case Kind::String: return "string";
         case Kind::Any: return "any";
+        case Kind::JSValue: return "jsvalue";
         case Kind::Unknown: return "unknown";
         default: return "type";
     }

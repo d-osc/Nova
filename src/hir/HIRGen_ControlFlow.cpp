@@ -9,7 +9,7 @@ namespace nova::hir {
 void HIRGenerator::visit(IfStmt& node) {
         // Generate condition
         node.test->accept(*this);
-        auto cond = lastValue_;
+        auto cond = toBoolean(lastValue_);
         
         // Create blocks
         auto* thenBlock = currentFunction_->createBasicBlock("if.then").get();
@@ -81,7 +81,7 @@ void HIRGenerator::visit(WhileStmt& node) {
         if(NOVA_DEBUG) std::cerr << "DEBUG: Evaluating while condition" << std::endl;
         node.test->accept(*this);
         if(NOVA_DEBUG) std::cerr << "DEBUG: While condition evaluated, lastValue_=" << lastValue_ << std::endl;
-        builder_->createCondBr(lastValue_, bodyBlock, endBlock);
+        builder_->createCondBr(toBoolean(lastValue_), bodyBlock, endBlock);
 
         // Body block
         builder_->setInsertPoint(bodyBlock);
@@ -133,7 +133,7 @@ void HIRGenerator::visit(DoWhileStmt& node) {
         // Condition block
         builder_->setInsertPoint(condBlock);
         node.test->accept(*this);
-        auto* condition = lastValue_;
+        auto* condition = toBoolean(lastValue_);
         // If condition is true, branch back to body, otherwise go to end
         builder_->createCondBr(condition, bodyBlock, endBlock);
         
@@ -188,7 +188,7 @@ void HIRGenerator::visit(ForStmt& node) {
         if(NOVA_DEBUG) std::cerr << "DEBUG: Evaluating for condition" << std::endl;
         if (node.test) {
             node.test->accept(*this);
-            auto* condition = lastValue_;
+            auto* condition = toBoolean(lastValue_);
             if(NOVA_DEBUG) std::cerr << "DEBUG: For condition evaluated, condition=" << condition << std::endl;
             builder_->createCondBr(condition, bodyBlock, endBlock);
         } else {
@@ -794,9 +794,47 @@ void HIRGenerator::visit(ReturnStmt& node) {
             }
         } else {
             // Normal return
-            if (node.argument) {
+            if (currentFunction_ && currentFunction_->isAsync) {
+                HIRValue* returnValue = nullptr;
+                bool returnsPromise = false;
+                if (node.argument) {
+                    lastWasPromise_ = false;
+                    node.argument->accept(*this);
+                    returnValue = lastValue_;
+                    returnsPromise = lastWasPromise_;
+                }
+                lastWasPromise_ = false;
+                builder_->createReturn(returnsPromise
+                    ? returnValue : createResolvedPromise(returnValue));
+            } else if (node.argument) {
                 node.argument->accept(*this);
-                builder_->createReturn(lastValue_);
+
+                // A function can return a closure indirectly by forwarding the
+                // result of another function which is already known to return
+                // one.  Record that relationship while HIR is being built so
+                // later call sites (which may be generated before MIR) can
+                // invoke the returned closure with its environment.
+                if (currentFunction_) {
+                    if (auto* call = dynamic_cast<CallExpr*>(node.argument.get())) {
+                        if (auto* callee = dynamic_cast<Identifier*>(call->callee.get())) {
+                            auto returnedClosure =
+                                module_->closureReturnedBy.find(callee->name);
+                            if (returnedClosure !=
+                                module_->closureReturnedBy.end()) {
+                                module_->closureReturnedBy[currentFunction_->name] =
+                                    returnedClosure->second;
+                            }
+                        }
+                    }
+                }
+
+                const bool returnsJSValue = currentFunction_ &&
+                    currentFunction_->functionType &&
+                    currentFunction_->functionType->returnType &&
+                    currentFunction_->functionType->returnType->kind ==
+                        HIRType::Kind::JSValue;
+                builder_->createReturn(
+                    returnsJSValue ? toJSValue(lastValue_) : lastValue_);
             } else {
                 builder_->createReturn(nullptr);
             }

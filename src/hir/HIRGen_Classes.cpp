@@ -2,7 +2,7 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 0
+#define NOVA_DEBUG 1
 
 namespace nova::hir {
 
@@ -26,6 +26,8 @@ void HIRGenerator::visit(ClassExpr& node) {
                 case Type::Kind::Number: return HIRType::Kind::I64;
                 case Type::Kind::String: return HIRType::Kind::String;
                 case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::BigInt:
+                case Type::Kind::Symbol: return HIRType::Kind::Pointer;
                 case Type::Kind::Any: return HIRType::Kind::Any;
                 default: return HIRType::Kind::Any;
             }
@@ -314,14 +316,14 @@ void HIRGenerator::visit(ClassExpr& node) {
     
 
 void HIRGenerator::visit(NewExpr& node) {
-        std::cerr << "=== DEBUG HIRGen: Processing 'new' expression ===" << std::endl;
+        if(NOVA_DEBUG) std::cerr << "=== DEBUG HIRGen: Processing 'new' expression ===" << std::endl;
 
         // Get class name from callee (should be an Identifier or MemberExpr for Intl.*)
         std::string className;
         std::string objectName;  // For MemberExpr like Intl.NumberFormat
         if (auto* id = dynamic_cast<Identifier*>(node.callee.get())) {
             className = id->name;
-            std::cerr << "  DEBUG NEW: Class name: " << className << std::endl;
+            if(NOVA_DEBUG) std::cerr << "  DEBUG NEW: Class name: " << className << std::endl;
         } else if (auto* memberExpr = dynamic_cast<MemberExpr*>(node.callee.get())) {
             // Handle Intl.NumberFormat, Intl.DateTimeFormat, etc.
             if (auto* objId = dynamic_cast<Identifier*>(memberExpr->object.get())) {
@@ -1420,27 +1422,104 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Promise constructor (ES2015)
         if (className == "Promise") {
-            std::cerr << "  DEBUG: Handling Promise constructor" << std::endl;
+            if(NOVA_DEBUG) std::cerr << "  DEBUG: Handling Promise constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            HIRValue* executorValue = builder_->createNullConstant(ptrType.get());
+            HIRValue* executorEnvironment =
+                builder_->createNullConstant(ptrType.get());
 
-            // Promise takes an executor function: (resolve, reject) => void
-            // For now, create a pending promise
-            std::vector<HIRTypePtr> paramTypes = {};
-            auto existingFunc = module_->getFunction("nova_promise_create");
+            if (!node.arguments.empty()) {
+                const bool savedExecutorABI = forcePromiseExecutorABI_;
+                const std::string savedResolveName = promiseExecutorResolveName_;
+                const std::string savedRejectName = promiseExecutorRejectName_;
+                const std::string savedFunctionName = lastFunctionName_;
+
+                promiseExecutorResolveName_.clear();
+                promiseExecutorRejectName_.clear();
+                if (auto* arrow = dynamic_cast<ArrowFunctionExpr*>(
+                        node.arguments[0].get())) {
+                    if (!arrow->params.empty()) {
+                        promiseExecutorResolveName_ = arrow->params[0];
+                    }
+                    if (arrow->params.size() > 1) {
+                        promiseExecutorRejectName_ = arrow->params[1];
+                    }
+                } else if (auto* expression = dynamic_cast<FunctionExpr*>(
+                               node.arguments[0].get())) {
+                    if (!expression->params.empty()) {
+                        promiseExecutorResolveName_ = expression->params[0];
+                    }
+                    if (expression->params.size() > 1) {
+                        promiseExecutorRejectName_ = expression->params[1];
+                    }
+                }
+
+                forcePromiseExecutorABI_ = true;
+                lastFunctionName_.clear();
+                node.arguments[0]->accept(*this);
+                if (!lastFunctionName_.empty()) {
+                    const std::string executorName = lastFunctionName_;
+                    executorValue = builder_->createStringConstant(executorName);
+
+                    // Function-expression lowering records captured storage in
+                    // a closure environment. Materialize that environment at
+                    // the Promise construction site so the synchronously
+                    // invoked executor can read and update outer bindings.
+                    auto environment = module_->closureEnvironments.find(
+                        executorName);
+                    auto capturedNames = module_->closureCapturedVars.find(
+                        executorName);
+                    if (environment != module_->closureEnvironments.end() &&
+                        capturedNames != module_->closureCapturedVars.end()) {
+                        // LLVM lowering recognizes closure-environment storage
+                        // by the __env_struct marker and allocates the concrete
+                        // object layout instead of an uninitialized pointer slot.
+                        auto* allocation = builder_->createAlloca(
+                            environment->second,
+                            "__env_struct.promise.executor");
+                        lastFunctionName_ = savedFunctionName;
+                        for (size_t index = 0;
+                             index < capturedNames->second.size(); ++index) {
+                            HIRValue* capturedStorage = lookupVariable(
+                                capturedNames->second[index]);
+                            if (!capturedStorage) continue;
+                            HIRValue* field = builder_->createGetField(
+                                allocation, static_cast<uint32_t>(index),
+                                capturedNames->second[index]);
+                            // Promise executors run synchronously and must share
+                            // the enclosing binding cell. A copied value cannot
+                            // implement writes such as `savedResolve = resolve`.
+                            builder_->createStore(capturedStorage, field);
+                        }
+                        executorEnvironment = allocation;
+                    }
+                }
+
+                forcePromiseExecutorABI_ = savedExecutorABI;
+                promiseExecutorResolveName_ = savedResolveName;
+                promiseExecutorRejectName_ = savedRejectName;
+                lastFunctionName_ = savedFunctionName;
+            }
+
+            std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType};
+            auto existingFunc = module_->getFunction("nova_promise_construct");
             HIRFunction* func = nullptr;
             if (existingFunc) {
                 func = existingFunc.get();
             } else {
                 HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
-                HIRFunctionPtr funcPtr = module_->createFunction("nova_promise_create", funcType);
+                HIRFunctionPtr funcPtr = module_->createFunction(
+                    "nova_promise_construct", funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
                 func = funcPtr.get();
             }
 
-            std::vector<HIRValue*> args = {};
-            lastValue_ = builder_->createCall(func, args, "promise");
-            lastValue_->type = ptrType;
+            std::vector<HIRValue*> args = {
+                executorValue, executorEnvironment};
+            HIRValue* promiseResult = builder_->createCall(func, args, "promise");
+            promiseResult->type = ptrType;
+            lastValue_ = promiseResult;
             lastWasPromise_ = true;  // Track for method calls
             return;
         }
@@ -1667,10 +1746,20 @@ void HIRGenerator::visit(NewExpr& node) {
 
 void HIRGenerator::visit(ThisExpr& node) {
         (void)node;
+        if (currentFunctionIsArrow_) {
+            // An arrow does not receive its own `this`; using it keeps the
+            // nearest ordinary function's tentative receiver alive and lets
+            // normal closure capture materialize that lexical value.
+            currentOrdinaryFunctionUsesThis_ = true;
+            Identifier lexicalThis("this");
+            visit(lexicalThis);
+            return;
+        }
         std::cerr << "\n=== TRACE: ThisExpr visitor ===" << std::endl;
         std::cerr << "  currentThis_ pointer: " << currentThis_ << std::endl;
 
         if (currentThis_) {
+            currentOrdinaryFunctionUsesThis_ = true;
             lastValue_ = currentThis_;
             std::cerr << "  TRACE: Set lastValue_ = currentThis_" << std::endl;
             std::cerr << "  TRACE: lastValue_ pointer: " << lastValue_ << std::endl;
@@ -1714,6 +1803,8 @@ void HIRGenerator::visit(ClassDecl& node) {
                 case Type::Kind::Number: return HIRType::Kind::I64;
                 case Type::Kind::String: return HIRType::Kind::String;
                 case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::BigInt:
+                case Type::Kind::Symbol: return HIRType::Kind::Pointer;
                 case Type::Kind::Any: return HIRType::Kind::Any;
                 case Type::Kind::Unknown: return HIRType::Kind::Unknown;
                 case Type::Kind::Never: return HIRType::Kind::Never;

@@ -57,6 +57,7 @@ jobs:
     - name: Test executable
       run: |
         ./build/macos-arm64/nova --version
+        ctest --test-dir build/macos-arm64 --output-on-failure
 
     - name: Package binary
       run: |
@@ -114,6 +115,7 @@ jobs:
     - name: Test executable
       run: |
         ./build/linux-x64/nova --version
+        ctest --test-dir build/linux-x64 --output-on-failure
 
     - name: Package binary
       run: |
@@ -292,6 +294,7 @@ jobs:
       shell: pwsh
       run: |
         ./build/windows-x64/nova.exe --version
+        ctest --test-dir build/windows-x64 --output-on-failure
 
     - name: Package binary
       shell: pwsh

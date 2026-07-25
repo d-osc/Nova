@@ -2,11 +2,22 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
+#include <algorithm>
 #define NOVA_DEBUG 0
 
 namespace nova::hir {
 
 void HIRGenerator::visit(FunctionExpr& node) {
+        const bool savedFunctionIsArrow = currentFunctionIsArrow_;
+        HIRValue* savedCurrentThis = currentThis_;
+        const bool savedOrdinaryFunctionUsesThis =
+            currentOrdinaryFunctionUsesThis_;
+        currentFunctionIsArrow_ = false;
+        currentOrdinaryFunctionUsesThis_ = false;
+        const auto savedDynamicBindingNames = dynamicBindingNames_;
+        const auto savedDynamicObjectVars = dynamicObjectVars_;
+        dynamicObjectVars_.clear();
+        dynamicBindingNames_ = analyzeDynamicBindings(node.body.get());
         // Function expression: let f = function(a, b) { return a + b; }
 
         // Helper to convert AST Type::Kind to HIR HIRType::Kind
@@ -16,22 +27,53 @@ void HIRGenerator::visit(FunctionExpr& node) {
                 case Type::Kind::Number: return HIRType::Kind::I64;
                 case Type::Kind::String: return HIRType::Kind::String;
                 case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::BigInt:
+                case Type::Kind::Symbol: return HIRType::Kind::Pointer;
                 case Type::Kind::Any: return HIRType::Kind::Any;
+                case Type::Kind::Union: return HIRType::Kind::JSValue;
                 default: return HIRType::Kind::Any;
             }
         };
 
         // Create function type with parameter types
         std::vector<HIRTypePtr> paramTypes;
+        const bool supportsDynamicThis = !node.isGenerator &&
+            !forcePromiseExecutorABI_ && !forceTaggedFunctionABI_;
+        if (supportsDynamicThis) {
+            paramTypes.push_back(
+                std::make_shared<HIRType>(HIRType::Kind::JSValue));
+        }
         for (size_t i = 0; i < node.params.size(); ++i) {
-            // FunctionExpr doesn't have paramTypes in AST, use Any for now
-            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));
+            if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
+                appendPatternParameterTypes(
+                    node.paramPatterns[i].get(), paramTypes);
+                continue;
+            }
+            HIRType::Kind typeKind = HIRType::Kind::JSValue;
+            if (!forceTaggedFunctionABI_ && !forcePromiseExecutorABI_ &&
+                i < node.paramTypes.size() && node.paramTypes[i]) {
+                typeKind = convertTypeKind(node.paramTypes[i]->kind);
+            }
+            paramTypes.push_back(std::make_shared<HIRType>(typeKind));
+        }
+        if (!node.restParam.empty()) {
+            auto restElementType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+            auto restArrayType = std::make_shared<HIRArrayType>(restElementType, 0);
+            paramTypes.push_back(std::make_shared<HIRPointerType>(restArrayType, true));
         }
 
         // Return type
         HIRType::Kind retTypeKind = HIRType::Kind::Any;
-        if (node.returnType) {
+        if (forcePromiseExecutorABI_) {
+            retTypeKind = HIRType::Kind::Void;
+        } else if (forceTaggedFunctionABI_) {
+            retTypeKind = HIRType::Kind::JSValue;
+        } else if (node.isAsync && !node.isGenerator) {
+            retTypeKind = HIRType::Kind::Pointer;
+        } else if (node.returnType) {
             retTypeKind = convertTypeKind(node.returnType->kind);
+        } else if (!node.isGenerator && hasHeterogeneousReturns(node.body.get())) {
+            retTypeKind = HIRType::Kind::JSValue;
         }
         auto retType = std::make_shared<HIRType>(retTypeKind);
 
@@ -41,15 +83,29 @@ void HIRGenerator::visit(FunctionExpr& node) {
         static int funcExprCounter = 0;
         std::string funcName = node.name.empty() ?
             "__func_" + std::to_string(funcExprCounter++) : node.name;
+        if (!node.restParam.empty()) {
+            module_->functionRestParams[funcName] = {
+                node.restParam, node.params.size()};
+        }
 
         // Create function
         auto func = module_->createFunction(funcName, funcType);
+        HIRParameter* tentativeThisParam = nullptr;
+        if (supportsDynamicThis && !func->parameters.empty()) {
+            tentativeThisParam = func->parameters.front();
+            tentativeThisParam->name = "__this";
+        }
+        functionParameterPatterns_[funcName] = node.paramPatterns;
+        if (!node.defaultValues.empty()) {
+            functionDefaultValues_[funcName] = &node.defaultValues;
+        }
         func->isAsync = node.isAsync;
         func->isGenerator = node.isGenerator;
 
         // Save current function context
         HIRFunction* savedFunction = currentFunction_;
         currentFunction_ = func.get();
+        currentThis_ = tentativeThisParam;
 
         // Create entry block
         auto entryBlock = func->createBasicBlock("entry");
@@ -84,10 +140,43 @@ void HIRGenerator::visit(FunctionExpr& node) {
 
         // Clear symbol table for the new function scope
         symbolTable_.clear();
+        if (tentativeThisParam) {
+            symbolTable_["this"] = tentativeThisParam;
+        }
 
         // Add parameters to symbol table (skip tentative __env)
+        size_t parameterCursor = tentativeThisParam ? 1 : 0;
         for (size_t i = 0; i < node.params.size(); ++i) {
-            symbolTable_[node.params[i]] = func->parameters[i];
+            if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
+                Expr* parameterDefault = i < node.defaultValues.size()
+                    ? node.defaultValues[i].get() : nullptr;
+                bindPatternParameters(
+                    node.paramPatterns[i].get(), func->parameters,
+                    parameterCursor, parameterDefault);
+            } else if (parameterCursor < func->parameters.size()) {
+                symbolTable_[node.params[i]] =
+                    func->parameters[parameterCursor++];
+            }
+        }
+        if (!node.restParam.empty() &&
+            parameterCursor < func->parameters.size()) {
+            symbolTable_[node.restParam] = func->parameters[parameterCursor];
+        }
+
+        if (symbolTable_.count("arguments") == 0 &&
+            std::none_of(node.paramPatterns.begin(), node.paramPatterns.end(),
+                [](const auto& pattern) { return pattern != nullptr; })) {
+            std::vector<HIRValue*> argumentValues;
+            const size_t argumentCount = std::min(
+                node.params.size(),
+                func->parameters.size() - (tentativeThisParam ? 1 : 0));
+            argumentValues.reserve(argumentCount);
+            for (size_t i = 0; i < argumentCount; ++i) {
+                argumentValues.push_back(
+                    func->parameters[i + (tentativeThisParam ? 1 : 0)]);
+            }
+            symbolTable_["arguments"] = builder_->createArrayConstruct(
+                argumentValues, "arguments");
         }
 
         // Generate function body
@@ -96,16 +185,31 @@ void HIRGenerator::visit(FunctionExpr& node) {
             node.body->accept(*this);
             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function body generated, checking for terminator..." << std::endl;
 
+            if (retTypeKind == HIRType::Kind::Any) {
+                for (auto& block : func->basicBlocks) {
+                    auto terminator = block->getTerminator();
+                    if (terminator && terminator->opcode == HIRInstruction::Opcode::Return &&
+                        !terminator->operands.empty() && terminator->operands[0]->type) {
+                        func->functionType->returnType = terminator->operands[0]->type;
+                        break;
+                    }
+                }
+            }
+
             // Add implicit return if needed
             if (!entryBlock->hasTerminator()) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Adding implicit return to " << funcName << std::endl;
-                builder_->createReturn(nullptr);
+                builder_->createReturn(node.isAsync
+                    ? createResolvedPromise(nullptr) : nullptr);
             } else {
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function " << funcName << " already has terminator" << std::endl;
             }
         } else {
             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WARNING - No body for function " << funcName << std::endl;
         }
+
+        propagateTransitiveCaptures(
+            savedFunctionName, savedSymbolTable, funcName);
 
         // After body generation, update closure environment struct type if this function captures variables
         if (tentativeEnvParam && capturedVariables_.count(funcName) && !capturedVariables_[funcName].empty()) {
@@ -158,11 +262,27 @@ void HIRGenerator::visit(FunctionExpr& node) {
             }
         }
 
+        if (tentativeThisParam) {
+            if (currentOrdinaryFunctionUsesThis_) {
+                dynamicThisFunctions_.insert(funcName);
+            } else if (!func->parameters.empty() &&
+                       func->parameters.front() == tentativeThisParam) {
+                func->parameters.erase(func->parameters.begin());
+                func->functionType->paramTypes.erase(
+                    func->functionType->paramTypes.begin());
+                delete tentativeThisParam;
+                for (size_t i = 0; i < func->parameters.size(); ++i) {
+                    func->parameters[i]->index = static_cast<uint32_t>(i);
+                }
+            }
+        }
+
         // Restore context
         scopeStack_.pop_back();
         symbolTable_ = savedSymbolTable;
         builder_ = std::move(savedBuilder);
         currentFunction_ = savedFunction;
+        currentThis_ = savedCurrentThis;
 
         // Restore function name (but keep funcName available for variable association)
         // Note: We keep the current funcName in lastFunctionName_ so it can be associated with a variable
@@ -173,11 +293,21 @@ void HIRGenerator::visit(FunctionExpr& node) {
         // Return a string constant with the function name
         // This will be used by MIRGen to identify the function and allocate closure if needed
         lastValue_ = builder_->createStringConstant(funcName);
+        dynamicBindingNames_ = savedDynamicBindingNames;
+        dynamicObjectVars_ = savedDynamicObjectVars;
+        currentFunctionIsArrow_ = savedFunctionIsArrow;
+        currentOrdinaryFunctionUsesThis_ = savedOrdinaryFunctionUsesThis;
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function " << funcName << " reference created" << std::endl;
     }
     
 
 void HIRGenerator::visit(ArrowFunctionExpr& node) {
+        const bool savedFunctionIsArrow = currentFunctionIsArrow_;
+        currentFunctionIsArrow_ = true;
+        const auto savedDynamicBindingNames = dynamicBindingNames_;
+        const auto savedDynamicObjectVars = dynamicObjectVars_;
+        dynamicObjectVars_.clear();
+        dynamicBindingNames_ = analyzeDynamicBindings(node.body.get());
         // Arrow function: (a, b) => a + b
         // For now, treat as anonymous function with auto-generated name
 
@@ -188,7 +318,10 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
                 case Type::Kind::Number: return HIRType::Kind::I64;
                 case Type::Kind::String: return HIRType::Kind::String;
                 case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::BigInt:
+                case Type::Kind::Symbol: return HIRType::Kind::Pointer;
                 case Type::Kind::Any: return HIRType::Kind::Any;
+                case Type::Kind::Union: return HIRType::Kind::JSValue;
                 default: return HIRType::Kind::Any;
             }
         };
@@ -196,17 +329,37 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
         // Create function type with parameter types
         std::vector<HIRTypePtr> paramTypes;
         for (size_t i = 0; i < node.params.size(); ++i) {
-            HIRType::Kind typeKind = HIRType::Kind::Any;
-            if (i < node.paramTypes.size() && node.paramTypes[i]) {
+            if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
+                appendPatternParameterTypes(
+                    node.paramPatterns[i].get(), paramTypes);
+                continue;
+            }
+            HIRType::Kind typeKind = HIRType::Kind::JSValue;
+            if (!forceTaggedFunctionABI_ && !forcePromiseExecutorABI_ &&
+                i < node.paramTypes.size() && node.paramTypes[i]) {
                 typeKind = convertTypeKind(node.paramTypes[i]->kind);
             }
             paramTypes.push_back(std::make_shared<HIRType>(typeKind));
         }
 
+        if (!node.restParam.empty()) {
+            auto restElementType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+            auto restArrayType = std::make_shared<HIRArrayType>(restElementType, 0);
+            paramTypes.push_back(std::make_shared<HIRPointerType>(restArrayType, true));
+        }
+
         // Return type
         HIRType::Kind retTypeKind = HIRType::Kind::Any;
-        if (node.returnType) {
+        if (forcePromiseExecutorABI_) {
+            retTypeKind = HIRType::Kind::Void;
+        } else if (forceTaggedFunctionABI_) {
+            retTypeKind = HIRType::Kind::JSValue;
+        } else if (node.isAsync) {
+            retTypeKind = HIRType::Kind::Pointer;
+        } else if (node.returnType) {
             retTypeKind = convertTypeKind(node.returnType->kind);
+        } else if (hasHeterogeneousReturns(node.body.get())) {
+            retTypeKind = HIRType::Kind::JSValue;
         }
         auto retType = std::make_shared<HIRType>(retTypeKind);
 
@@ -215,9 +368,17 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
         // Generate unique name for arrow function
         static int arrowFuncCounter = 0;
         std::string funcName = "__arrow_" + std::to_string(arrowFuncCounter++);
+        if (!node.restParam.empty()) {
+            module_->functionRestParams[funcName] = {
+                node.restParam, node.params.size()};
+        }
 
         // Create function
         auto func = module_->createFunction(funcName, funcType);
+        functionParameterPatterns_[funcName] = node.paramPatterns;
+        if (!node.defaultValues.empty()) {
+            functionDefaultValues_[funcName] = &node.defaultValues;
+        }
         func->isAsync = node.isAsync;
 
         // Save current function context
@@ -240,12 +401,45 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
         auto savedSymbolTable = symbolTable_;
         scopeStack_.push_back(savedSymbolTable);  // Push for closure access
 
+        HIRParameter* tentativeEnvParam = nullptr;
+        if (!savedSymbolTable.empty()) {
+            auto tempEnvStruct = new HIRStructType("__temp_env_" + funcName, {});
+            std::shared_ptr<HIRType> tempEnvType(tempEnvStruct);
+            tentativeEnvParam = new HIRParameter(
+                tempEnvType, "__env", func->parameters.size());
+            func->parameters.push_back(tentativeEnvParam);
+            func->functionType->paramTypes.push_back(tempEnvType);
+        }
+
         // Clear symbol table for the new function scope
         symbolTable_.clear();
 
         // Add parameters to symbol table
+        size_t parameterCursor = 0;
         for (size_t i = 0; i < node.params.size(); ++i) {
-            symbolTable_[node.params[i]] = func->parameters[i];
+            if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
+                Expr* parameterDefault = i < node.defaultValues.size()
+                    ? node.defaultValues[i].get() : nullptr;
+                bindPatternParameters(
+                    node.paramPatterns[i].get(), func->parameters,
+                    parameterCursor, parameterDefault);
+                continue;
+            }
+            if (parameterCursor >= func->parameters.size()) break;
+            symbolTable_[node.params[i]] = func->parameters[parameterCursor++];
+            if (i < node.paramTypes.size() && node.paramTypes[i] &&
+                (node.paramTypes[i]->kind == Type::Kind::Array ||
+                 node.paramTypes[i]->kind == Type::Kind::Tuple)) {
+                runtimeArrayVars_.insert(node.params[i]);
+                if (forceTaggedFunctionABI_) {
+                    taggedRuntimeArrayVars_.insert(node.params[i]);
+                }
+            }
+        }
+
+        if (!node.restParam.empty() &&
+            parameterCursor < func->parameters.size()) {
+            symbolTable_[node.restParam] = func->parameters[parameterCursor];
         }
 
         // Generate function body
@@ -272,7 +466,8 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
                     }
                 }
 
-                builder_->createReturn(lastValue_);
+                builder_->createReturn(node.isAsync
+                    ? createResolvedPromise(lastValue_) : lastValue_);
             } else {
                 // Arrow function with block body: x => { return x + 1; }
                 node.body->accept(*this);
@@ -308,10 +503,44 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
                     if (!block->hasTerminator()) {
                         // Set insert point to this block
                         builder_->setInsertPoint(block.get());
-                        builder_->createReturn(nullptr);
+                        builder_->createReturn(node.isAsync
+                            ? createResolvedPromise(nullptr) : nullptr);
                         if(NOVA_DEBUG) std::cerr << "DEBUG: Added return terminator to block '" << block->label << "'" << std::endl;
                     }
                 }
+            }
+        }
+
+        propagateTransitiveCaptures(
+            savedFunctionName, savedSymbolTable, funcName);
+
+        if (tentativeEnvParam && capturedVariables_.count(funcName) &&
+            !capturedVariables_[funcName].empty()) {
+            if (auto* envStruct = createClosureEnvironment(funcName)) {
+                auto envPtrType = std::make_shared<HIRPointerType>(
+                    std::shared_ptr<HIRType>(envStruct), true);
+                tentativeEnvParam->type = envPtrType;
+                func->functionType->paramTypes.back() = envPtrType;
+                closureEnvironments_[funcName] = envStruct;
+                module_->closureEnvironments[funcName] = envStruct;
+                if (environmentFieldNames_.count(funcName)) {
+                    module_->closureCapturedVars[funcName] =
+                        environmentFieldNames_[funcName];
+                }
+                if (environmentFieldValues_.count(funcName)) {
+                    module_->closureCapturedVarValues[funcName] =
+                        environmentFieldValues_[funcName];
+                }
+                if (savedFunction) {
+                    module_->closureReturnedBy[savedFunction->name] = funcName;
+                }
+            }
+        } else if (tentativeEnvParam) {
+            if (!func->parameters.empty() &&
+                func->parameters.back() == tentativeEnvParam) {
+                func->parameters.pop_back();
+                func->functionType->paramTypes.pop_back();
+                delete tentativeEnvParam;
             }
         }
 
@@ -327,6 +556,9 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
         // Return a string constant with the function name
         // This will be used by MIRGen to identify the function and allocate closure if needed
         lastValue_ = builder_->createStringConstant(funcName);
+        dynamicBindingNames_ = savedDynamicBindingNames;
+        dynamicObjectVars_ = savedDynamicObjectVars;
+        currentFunctionIsArrow_ = savedFunctionIsArrow;
 
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created arrow function '" << funcName << "' with "
                   << node.params.size() << " parameters" << std::endl;
@@ -334,8 +566,16 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
     
 
 void HIRGenerator::visit(FunctionDecl& node) {
-        std::cerr << "DEBUG: Entering visit(FunctionDecl), function name: " << node.name << std::endl;
-        std::cerr << "DEBUG: Default values count: " << node.defaultValues.size() << std::endl;
+        const bool savedFunctionIsArrow = currentFunctionIsArrow_;
+        HIRValue* savedCurrentThis = currentThis_;
+        const bool savedOrdinaryFunctionUsesThis =
+            currentOrdinaryFunctionUsesThis_;
+        currentFunctionIsArrow_ = false;
+        currentOrdinaryFunctionUsesThis_ = false;
+        const auto savedDynamicBindingNames = dynamicBindingNames_;
+        const auto savedDynamicObjectVars = dynamicObjectVars_;
+        dynamicObjectVars_.clear();
+        dynamicBindingNames_ = analyzeDynamicBindings(node.body.get());
 
         // Helper to convert AST Type::Kind to HIR HIRType::Kind
         auto convertTypeKind = [](Type::Kind astKind) -> HIRType::Kind {
@@ -344,17 +584,26 @@ void HIRGenerator::visit(FunctionDecl& node) {
                 case Type::Kind::Number: return HIRType::Kind::I64;  // Default to i64 for numbers
                 case Type::Kind::String: return HIRType::Kind::String;
                 case Type::Kind::Boolean: return HIRType::Kind::Bool;
+                case Type::Kind::BigInt:
+                case Type::Kind::Symbol: return HIRType::Kind::Pointer;
                 case Type::Kind::Any: return HIRType::Kind::Any;
                 case Type::Kind::Unknown: return HIRType::Kind::Unknown;
                 case Type::Kind::Never: return HIRType::Kind::Never;
                 case Type::Kind::Null: return HIRType::Kind::Any;  // Map to Any for now
                 case Type::Kind::Undefined: return HIRType::Kind::Any;  // Map to Any for now
+                case Type::Kind::Union: return HIRType::Kind::JSValue;
                 default: return HIRType::Kind::Any;
             }
         };
 
         // Create function type with actual parameter types
         std::vector<HIRTypePtr> paramTypes;
+
+        const bool supportsDynamicThis = !node.isGenerator;
+        if (supportsDynamicThis) {
+            paramTypes.push_back(
+                std::make_shared<HIRType>(HIRType::Kind::JSValue));
+        }
 
         // For generator functions, add implicit genPtr and input parameters
         if (node.isGenerator) {
@@ -363,6 +612,11 @@ void HIRGenerator::visit(FunctionDecl& node) {
         }
 
         for (size_t i = 0; i < node.params.size(); ++i) {
+            if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
+                appendPatternParameterTypes(
+                    node.paramPatterns[i].get(), paramTypes);
+                continue;
+            }
             // Default to I64 for better type inference in closures
             // JavaScript numbers are typically 64-bit floats, but we use i64 for integers
             HIRType::Kind typeKind = HIRType::Kind::I64;  // Default to I64 instead of Any
@@ -370,15 +624,36 @@ void HIRGenerator::visit(FunctionDecl& node) {
             // Use type annotation if available
             if (i < node.paramTypes.size() && node.paramTypes[i]) {
                 typeKind = convertTypeKind(node.paramTypes[i]->kind);
+            } else if (auto inferred = inferredFunctionParameterTypes_.find(node.name);
+                       inferred != inferredFunctionParameterTypes_.end() &&
+                       i < inferred->second.size()) {
+                typeKind = inferred->second[i];
             }
 
             paramTypes.push_back(std::make_shared<HIRType>(typeKind));
         }
 
+        // Lower a JavaScript rest parameter as one explicit trailing array
+        // parameter. Call sites package all excess arguments into this array,
+        // avoiding a platform-specific C varargs ABI while preserving the
+        // JavaScript-visible rest value.
+        if (!node.restParam.empty()) {
+            auto restElementType = std::make_shared<HIRType>(
+                HIRType::Kind::JSValue);
+            auto restArrayType = std::make_shared<HIRArrayType>(
+                restElementType, 0);
+            paramTypes.push_back(std::make_shared<HIRPointerType>(
+                restArrayType, true));
+        }
+
         // Use return type annotation if available
         HIRType::Kind retTypeKind = HIRType::Kind::Any;  // Default to Any
-        if (node.returnType) {
+        if (node.isAsync && !node.isGenerator) {
+            retTypeKind = HIRType::Kind::Pointer;
+        } else if (node.returnType) {
             retTypeKind = convertTypeKind(node.returnType->kind);
+        } else if (!node.isGenerator && hasHeterogeneousReturns(node.body.get())) {
+            retTypeKind = HIRType::Kind::JSValue;
         }
         auto retType = std::make_shared<HIRType>(retTypeKind);
 
@@ -386,6 +661,12 @@ void HIRGenerator::visit(FunctionDecl& node) {
         
         // Create function
         auto func = module_->createFunction(node.name, funcType);
+        HIRParameter* tentativeThisParam = nullptr;
+        if (supportsDynamicThis && !func->parameters.empty()) {
+            tentativeThisParam = func->parameters.front();
+            tentativeThisParam->name = "__this";
+        }
+        functionParameterPatterns_[node.name] = node.paramPatterns;
         func->isAsync = node.isAsync;
         func->isGenerator = node.isGenerator;
 
@@ -397,6 +678,8 @@ void HIRGenerator::visit(FunctionDecl& node) {
         } else if (node.isGenerator) {
             // Regular Generator (ES2015) - function*
             generatorFuncs_.insert(node.name);
+        } else if (node.isAsync) {
+            asyncFuncs_.insert(node.name);
         }
 
         // Track all functions for call/apply/bind support
@@ -413,6 +696,7 @@ void HIRGenerator::visit(FunctionDecl& node) {
 
         auto savedCurrentFunction = currentFunction_;
         currentFunction_ = func.get();
+        currentThis_ = tentativeThisParam;
 
         // Store default parameter values for this function
         if (!node.defaultValues.empty()) {
@@ -456,30 +740,53 @@ void HIRGenerator::visit(FunctionDecl& node) {
 
         // Clear symbol table for the new function scope
         symbolTable_.clear();
+        if (tentativeThisParam) {
+            symbolTable_["this"] = tentativeThisParam;
+        }
 
         // Add parameters to symbol table
         // For generators, parameters are loaded from local slots (set at call site)
+        size_t parameterCursor = node.isGenerator ? 2 :
+            (tentativeThisParam ? 1 : 0);
         if (!node.isGenerator) {
             for (size_t i = 0; i < node.params.size(); ++i) {
-                if (i < func->parameters.size()) {
-                    symbolTable_[node.params[i]] = func->parameters[i];
+                if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
+                    Expr* parameterDefault = i < node.defaultValues.size()
+                        ? node.defaultValues[i].get() : nullptr;
+                    bindPatternParameters(
+                        node.paramPatterns[i].get(), func->parameters,
+                        parameterCursor, parameterDefault);
+                } else if (parameterCursor < func->parameters.size()) {
+                    symbolTable_[node.params[i]] =
+                        func->parameters[parameterCursor++];
                 }
             }
         }
         // For generators, parameter loading happens after state machine setup
 
-        // Handle rest parameter (...args)
+        // Handle rest parameter (...args). The trailing function parameter is
+        // the materialized array created by the call-site lowering.
         if (!node.restParam.empty()) {
-            // Create an array to hold rest arguments
-            // For now, create an empty array - runtime will populate via varargs
-            auto* arrayType = new hir::HIRType(hir::HIRType::Kind::Array);
-            auto* restArray = builder_->createAlloca(arrayType, node.restParam);
-            symbolTable_[node.restParam] = restArray;
+            const size_t restIndex = parameterCursor;
+            if (restIndex < func->parameters.size()) {
+                symbolTable_[node.restParam] = func->parameters[restIndex];
+            }
+        }
 
-            // TODO: Full implementation requires varargs collection
-            // This needs LLVM va_list support or a custom calling convention
-            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Rest parameter '" << node.restParam
-                                      << "' created for function '" << node.name << "' (varargs collection stub)" << std::endl;
+        if (!node.isGenerator && symbolTable_.count("arguments") == 0 &&
+            std::none_of(node.paramPatterns.begin(), node.paramPatterns.end(),
+                [](const auto& pattern) { return pattern != nullptr; })) {
+            std::vector<HIRValue*> argumentValues;
+            const size_t argumentCount = std::min(
+                node.params.size(),
+                func->parameters.size() - (tentativeThisParam ? 1 : 0));
+            argumentValues.reserve(argumentCount);
+            for (size_t i = 0; i < argumentCount; ++i) {
+                argumentValues.push_back(
+                    func->parameters[i + (tentativeThisParam ? 1 : 0)]);
+            }
+            symbolTable_["arguments"] = builder_->createArrayConstruct(
+                argumentValues, "arguments");
         }
 
         // For generator functions, set up state machine
@@ -715,8 +1022,12 @@ void HIRGenerator::visit(FunctionDecl& node) {
 
         // Add implicit return if needed
         if (!entryBlock->hasTerminator()) {
-            builder_->createReturn(nullptr);
+            builder_->createReturn(node.isAsync && !node.isGenerator
+                ? createResolvedPromise(nullptr) : nullptr);
         }
+
+        propagateTransitiveCaptures(
+            savedFunctionName, savedSymbolTable, node.name);
 
         // After body generation, update closure environment struct type if this function captures variables
         if (tentativeEnvParam && capturedVariables_.count(node.name) && !capturedVariables_[node.name].empty()) {
@@ -761,6 +1072,21 @@ void HIRGenerator::visit(FunctionDecl& node) {
             }
         }
 
+        if (tentativeThisParam) {
+            if (currentOrdinaryFunctionUsesThis_) {
+                dynamicThisFunctions_.insert(node.name);
+            } else if (!func->parameters.empty() &&
+                       func->parameters.front() == tentativeThisParam) {
+                func->parameters.erase(func->parameters.begin());
+                func->functionType->paramTypes.erase(
+                    func->functionType->paramTypes.begin());
+                delete tentativeThisParam;
+                for (size_t i = 0; i < func->parameters.size(); ++i) {
+                    func->parameters[i]->index = static_cast<uint32_t>(i);
+                }
+            }
+        }
+
         // Restore context
         if (!savedSymbolTable.empty()) {
             if (!scopeStack_.empty()) {
@@ -770,7 +1096,12 @@ void HIRGenerator::visit(FunctionDecl& node) {
         symbolTable_ = savedSymbolTable;
         builder_ = std::move(savedBuilder);
         currentFunction_ = savedCurrentFunction;
+        currentThis_ = savedCurrentThis;
         lastFunctionName_ = savedFunctionName;  // Restore function name context
+        dynamicBindingNames_ = savedDynamicBindingNames;
+        dynamicObjectVars_ = savedDynamicObjectVars;
+        currentFunctionIsArrow_ = savedFunctionIsArrow;
+        currentOrdinaryFunctionUsesThis_ = savedOrdinaryFunctionUsesThis;
     }
     
 

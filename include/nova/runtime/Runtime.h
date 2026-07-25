@@ -27,8 +27,13 @@ struct ObjectHeader {
     size_t size;
     uint32_t type_id;
     bool is_marked;
+    // 0 = legacy raw slots, 1 = NaN-boxed JSValue slots. This consumes
+    // existing alignment padding, preserving the 24-byte ABI layout.
+    uint8 value_encoding;
     ObjectHeader* next;
 };
+
+static_assert(sizeof(ObjectHeader) == 24, "ObjectHeader ABI must remain 24 bytes");
 
 // Type identifiers for runtime objects
 enum class TypeId : uint32_t {

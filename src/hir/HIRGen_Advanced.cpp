@@ -124,9 +124,48 @@ void HIRGenerator::visit(TemplateLiteralExpr& node) {
         lastValue_ = result;
     }
     
+HIRValue* HIRGenerator::createResolvedPromise(HIRValue* value) {
+        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+        auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+        HIRValue* payload = toJSValue(value);
+
+        HIRFunction* resolveFunction = nullptr;
+        if (auto existing = module_->getFunction("nova_promise_resolve")) {
+            resolveFunction = existing.get();
+        } else {
+            auto* functionType = new HIRFunctionType({jsValueType}, ptrType);
+            auto function = module_->createFunction("nova_promise_resolve", functionType);
+            function->linkage = HIRFunction::Linkage::External;
+            resolveFunction = function.get();
+        }
+        auto* promise = builder_->createCall(resolveFunction, {payload}, "async.promise");
+        promise->type = ptrType;
+        return promise;
+    }
+
 void HIRGenerator::visit(AwaitExpr& node) {
-        // await expression
+        // Awaiting a non-Promise still yields the value. Known Promise-producing
+        // expressions are unwrapped through the runtime.
+        lastWasPromise_ = false;
         node.argument->accept(*this);
+        HIRValue* awaited = lastValue_;
+        const bool isPromise = lastWasPromise_;
+        lastWasPromise_ = false;
+        if (!isPromise || !awaited) return;
+
+        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+        auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+        HIRFunction* awaitFunction = nullptr;
+        if (auto existing = module_->getFunction("nova_promise_await")) {
+            awaitFunction = existing.get();
+        } else {
+            auto* functionType = new HIRFunctionType({ptrType}, jsValueType);
+            auto function = module_->createFunction("nova_promise_await", functionType);
+            function->linkage = HIRFunction::Linkage::External;
+            awaitFunction = function.get();
+        }
+        lastValue_ = builder_->createCall(awaitFunction, {awaited}, "await.value");
+        lastValue_->type = jsValueType;
     }
     
 void HIRGenerator::visit(YieldExpr& node) {
@@ -468,8 +507,8 @@ void HIRGenerator::visit(MetaProperty& node) {
 
         if (node.meta == "new" && node.property == "target") {
             // new.target - returns undefined outside constructors, constructor function inside
-            // For simplicity, return undefined (0) for now
-            lastValue_ = builder_->createIntConstant(0);
+            auto undefinedType = std::make_shared<HIRType>(HIRType::Kind::Unknown);
+            lastValue_ = builder_->createUndefinedConstant(undefinedType.get());
         } else if (node.meta == "import" && node.property == "meta") {
             // import.meta - return an object with url property
             // For compiled code, this is typically the file path
@@ -758,15 +797,88 @@ void HIRGenerator::visit(ImportDecl& node) {
             return;
         }
 
+        std::unordered_map<std::string, double> moduleNumbers;
+        std::unordered_map<std::string, std::string> moduleStrings;
+        std::unordered_map<std::string, bool> moduleBooleans;
+        std::unordered_map<std::string, std::string> moduleFunctions;
+
         // Process the imported module's declarations
         // Save current state
         std::string savedFilePath = currentFilePath_;
         currentFilePath_ = resolvedPath;
 
-        // Process all statements in the imported module
+        // During the program hoisting prepass there is no active function for
+        // module-level allocas. Hoist exported functions and retain literal
+        // constants as compiler bindings that can be materialized in each
+        // importing function.
+        const bool modulePrepass = currentFunction_ == nullptr;
         for (auto& stmt : ast->body) {
-            if (stmt) {
+            if (!stmt) continue;
+            if (!modulePrepass) {
                 stmt->accept(*this);
+                continue;
+            }
+
+            auto* declarationStatement = dynamic_cast<DeclStmt*>(stmt.get());
+            auto* exported = declarationStatement
+                ? dynamic_cast<ExportDecl*>(declarationStatement->declaration.get())
+                : nullptr;
+            if (!exported) {
+                if (declarationStatement && declarationStatement->declaration &&
+                    dynamic_cast<FunctionDecl*>(declarationStatement->declaration.get())) {
+                    declarationStatement->declaration->accept(*this);
+                }
+                continue;
+            }
+
+            if (!exported->source.empty()) {
+                ImportDecl reexport;
+                reexport.source = exported->source;
+                reexport.location = exported->location;
+                for (const auto& specifier : exported->specifiers) {
+                    ImportDecl::Specifier imported;
+                    imported.imported = specifier.local;
+                    imported.local = specifier.exported;
+                    reexport.specifiers.push_back(std::move(imported));
+                }
+                visit(reexport);
+            }
+
+            if (exported->exportedDecl) {
+                exported->exportedDecl->accept(*this);
+                if (auto* function =
+                        dynamic_cast<FunctionDecl*>(exported->exportedDecl.get())) {
+                    moduleFunctions[function->name] = function->name;
+                }
+            }
+            if (exported->isDefault && exported->declaration) {
+                if (auto* number =
+                        dynamic_cast<NumberLiteral*>(exported->declaration.get())) {
+                    importedNumberConstants_["default"] = number->value;
+                } else if (auto* string =
+                               dynamic_cast<StringLiteral*>(exported->declaration.get())) {
+                    importedStringConstants_["default"] = string->value;
+                } else if (auto* boolean =
+                               dynamic_cast<BooleanLiteral*>(exported->declaration.get())) {
+                    importedBooleanConstants_["default"] = boolean->value;
+                }
+            }
+            auto* variables = exported->exportedStmt
+                ? dynamic_cast<VarDeclStmt*>(exported->exportedStmt.get()) : nullptr;
+            if (!variables) continue;
+            for (auto& declarator : variables->declarations) {
+                if (auto* number = dynamic_cast<NumberLiteral*>(declarator.init.get())) {
+                    importedNumberConstants_[declarator.name] = number->value;
+                    moduleNumbers[declarator.name] = number->value;
+                } else if (auto* string =
+                               dynamic_cast<StringLiteral*>(declarator.init.get())) {
+                    importedStringConstants_[declarator.name] = string->value;
+                    moduleStrings[declarator.name] = string->value;
+                } else if (auto* boolean =
+                               dynamic_cast<BooleanLiteral*>(declarator.init.get())) {
+                    importedBooleanConstants_[declarator.name] = boolean->value;
+                    moduleBooleans[declarator.name] = boolean->value;
+                }
             }
         }
 
@@ -782,6 +894,24 @@ void HIRGenerator::visit(ImportDecl& node) {
             } else {
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Warning - imported symbol not found: " << spec.imported << std::endl;
             }
+            if (auto number = importedNumberConstants_.find(spec.imported);
+                number != importedNumberConstants_.end()) {
+                importedNumberConstants_[spec.local] = number->second;
+            }
+            if (auto string = importedStringConstants_.find(spec.imported);
+                string != importedStringConstants_.end()) {
+                importedStringConstants_[spec.local] = string->second;
+            }
+            if (auto boolean = importedBooleanConstants_.find(spec.imported);
+                boolean != importedBooleanConstants_.end()) {
+                importedBooleanConstants_[spec.local] = boolean->second;
+            }
+            if (module_->getFunction(spec.imported) && spec.local != spec.imported) {
+                functionReferences_[spec.local] = spec.imported;
+            } else if (auto function = functionReferences_.find(spec.imported);
+                       function != functionReferences_.end()) {
+                functionReferences_[spec.local] = function->second;
+            }
         }
 
         // Handle default imports
@@ -791,10 +921,30 @@ void HIRGenerator::visit(ImportDecl& node) {
                 symbolTable_[node.defaultImport] = it->second;
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Bound default import as '" << node.defaultImport << "'" << std::endl;
             }
+            if (auto number = importedNumberConstants_.find("default");
+                number != importedNumberConstants_.end()) {
+                importedNumberConstants_[node.defaultImport] = number->second;
+            }
+            if (auto string = importedStringConstants_.find("default");
+                string != importedStringConstants_.end()) {
+                importedStringConstants_[node.defaultImport] = string->second;
+            }
+            if (auto boolean = importedBooleanConstants_.find("default");
+                boolean != importedBooleanConstants_.end()) {
+                importedBooleanConstants_[node.defaultImport] = boolean->second;
+            }
         }
 
         // Handle namespace imports
         if (!node.namespaceImport.empty()) {
+            moduleNamespaceNumberConstants_[node.namespaceImport] =
+                std::move(moduleNumbers);
+            moduleNamespaceStringConstants_[node.namespaceImport] =
+                std::move(moduleStrings);
+            moduleNamespaceBooleanConstants_[node.namespaceImport] =
+                std::move(moduleBooleans);
+            moduleNamespaceFunctions_[node.namespaceImport] =
+                std::move(moduleFunctions);
             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Namespace import as '" << node.namespaceImport << "'" << std::endl;
         }
     }
@@ -837,6 +987,10 @@ void HIRGenerator::visit(ExportDecl& node) {
             node.exportedDecl->accept(*this);
         }
 
+        if (node.exportedStmt) {
+            node.exportedStmt->accept(*this);
+        }
+
         // If there's a declaration expression (e.g., export default someExpr), evaluate it
         if (node.declaration) {
             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing export declaration expression" << std::endl;
@@ -854,7 +1008,13 @@ void HIRGenerator::visit(ExportDecl& node) {
     }
     
 void HIRGenerator::visit(Program& node) {
+        const auto savedDynamicBindingNames = dynamicBindingNames_;
+        const auto savedInferredFunctionParameterTypes = inferredFunctionParameterTypes_;
+        BlockStmt topLevelBody(node.body);
+        dynamicBindingNames_ = analyzeDynamicBindings(&topLevelBody);
+        inferredFunctionParameterTypes_ = analyzeFunctionParameterTypes(node);
         // Collect function/class declarations first (hoisting)
+        std::vector<size_t> importDeclIndices;
         std::vector<size_t> functionDeclIndices;
         std::vector<size_t> topLevelIndices;
 
@@ -863,9 +1023,12 @@ void HIRGenerator::visit(Program& node) {
             if (!stmt) continue;
 
             // Check if this is a DeclStmt containing a function or class declaration
+            bool isImport = false;
             bool isDeclaration = false;
             if (auto* declStmt = dynamic_cast<DeclStmt*>(stmt.get())) {
                 if (declStmt->declaration) {
+                    isImport = dynamic_cast<ImportDecl*>(
+                        declStmt->declaration.get()) != nullptr;
                     if (dynamic_cast<FunctionDecl*>(declStmt->declaration.get()) ||
                         dynamic_cast<ClassDecl*>(declStmt->declaration.get()) ||
                         dynamic_cast<InterfaceDecl*>(declStmt->declaration.get()) ||
@@ -876,11 +1039,19 @@ void HIRGenerator::visit(Program& node) {
                 }
             }
 
-            if (isDeclaration) {
+            if (isImport) {
+                importDeclIndices.push_back(i);
+            } else if (isDeclaration) {
                 functionDeclIndices.push_back(i);
             } else {
                 topLevelIndices.push_back(i);
             }
+        }
+
+        // Resolve imports before local function bodies so imported bindings are
+        // visible while those bodies are generated.
+        for (size_t idx : importDeclIndices) {
+            node.body[idx]->accept(*this);
         }
 
         // Process function/class declarations first (they can be used anywhere)
@@ -920,6 +1091,8 @@ void HIRGenerator::visit(Program& node) {
             currentFunction_ = savedFunction;
             builder_.reset();
         }
+        dynamicBindingNames_ = savedDynamicBindingNames;
+        inferredFunctionParameterTypes_ = savedInferredFunctionParameterTypes;
     }
 
 } // namespace nova::hir

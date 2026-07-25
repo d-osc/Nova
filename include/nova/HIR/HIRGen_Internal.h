@@ -144,6 +144,7 @@ public:
 
     // Closure helper methods
     hir::HIRStructType* createClosureEnvironment(const std::string& funcName);
+    HIRValue* materializeClosureEnvironment(const std::string& funcName);
 
     // Class helper methods
     void generateConstructorFunction(const std::string& className, const ClassDecl::Method& constructor, hir::HIRStructType* structType, std::function<HIRType::Kind(Type::Kind)> convertTypeKind);
@@ -158,6 +159,33 @@ public:
     void setFilePath(const std::string& path) { currentFilePath_ = path; }
 
 private:
+    // ECMAScript ToBoolean conversion used by every conditional context.
+    // Keeping this centralized prevents if/loops/logical operators from
+    // developing different truthiness rules.
+    HIRValue* toBoolean(HIRValue* value);
+    HIRValue* toJSValue(HIRValue* value);
+    HIRValue* getCapturedVariableStorage(const std::string& name);
+    void propagateTransitiveCaptures(
+        const std::string& enclosingFunction,
+        const std::unordered_map<std::string, HIRValue*>& enclosingLocals,
+        const std::string& childFunction);
+    HIRValue* applyDestructuringDefault(HIRValue* value, Expr* defaultValue);
+    void bindDestructuringPattern(Pattern* pattern, HIRValue* value,
+                                  Expr* defaultValue = nullptr);
+    void assignDestructuringPattern(Pattern* pattern, HIRValue* value);
+    void appendPatternParameterTypes(Pattern* pattern,
+                                     std::vector<HIRTypePtr>& types);
+    void bindPatternParameters(Pattern* pattern,
+                               const std::vector<HIRParameter*>& parameters,
+                               size_t& cursor, Expr* defaultValue = nullptr);
+    void appendPatternArguments(Pattern* pattern, HIRValue* value,
+                                std::vector<HIRValue*>& arguments);
+    HIRValue* createResolvedPromise(HIRValue* value);
+    std::unordered_set<std::string> analyzeDynamicBindings(Stmt* statement);
+    bool hasHeterogeneousReturns(Stmt* statement);
+    std::unordered_map<std::string, std::vector<HIRType::Kind>>
+        analyzeFunctionParameterTypes(Program& program);
+
     // Core module and builder
     HIRModule* module_;
     std::unique_ptr<HIRBuilder> builder_;
@@ -165,17 +193,46 @@ private:
 
     // Context tracking
     HIRValue* currentThis_ = nullptr;  // Current 'this' context for methods
+    bool currentFunctionIsArrow_ = false;
+    bool currentOrdinaryFunctionUsesThis_ = false;
     hir::HIRStructType* currentClassStructType_ = nullptr;  // Current class struct type
     HIRValue* lastValue_ = nullptr;
 
     // Symbol tables and scopes
     std::unordered_map<std::string, HIRValue*> symbolTable_;
+    std::unordered_set<std::string> dynamicBindingNames_;
+    std::unordered_set<std::string> dynamicObjectVars_;
+    std::unordered_map<std::string, std::vector<HIRType::Kind>>
+        inferredFunctionParameterTypes_;
+    // Preserve statically known null/undefined through allocas, whose current
+    // split representation otherwise loses the constant kind on load.
+    std::unordered_map<std::string, HIRConstant::Kind> staticNullishVariables_;
+    std::unordered_map<std::string, double> importedNumberConstants_;
+    std::unordered_map<std::string, std::string> importedStringConstants_;
+    std::unordered_map<std::string, bool> importedBooleanConstants_;
+    std::unordered_map<std::string, std::unordered_map<std::string, double>>
+        moduleNamespaceNumberConstants_;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
+        moduleNamespaceStringConstants_;
+    std::unordered_map<std::string, std::unordered_map<std::string, bool>>
+        moduleNamespaceBooleanConstants_;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
+        moduleNamespaceFunctions_;
     std::vector<std::unordered_map<std::string, HIRValue*>> scopeStack_;  // Parent scopes for closures
 
     // Function tracking
     std::unordered_map<std::string, std::string> functionReferences_;  // Maps variable names to function names
+    std::unordered_map<std::string, std::vector<HIRValue*>>
+        boundFunctionArguments_;
+    std::unordered_map<std::string, HIRValue*> boundFunctionThis_;
+    std::unordered_set<std::string> dynamicThisFunctions_;
+    std::string pendingBoundFunction_;
+    std::vector<HIRValue*> pendingBoundArguments_;
+    HIRValue* pendingBoundThis_ = nullptr;
     std::string lastFunctionName_;  // Tracks the last created arrow function name
     std::unordered_map<std::string, const std::vector<ExprPtr>*> functionDefaultValues_;  // Maps function names to default values
+    std::unordered_map<std::string, std::vector<std::shared_ptr<Pattern>>>
+        functionParameterPatterns_;
     std::unordered_set<std::string> functionVars_;  // Set of variable names that are functions
     std::unordered_map<std::string, int64_t> functionParamCounts_;  // Function name -> param count
 
@@ -184,6 +241,7 @@ private:
     std::unordered_map<std::string, hir::HIRStructType*> closureEnvironments_;  // Maps function name -> environment struct type
     std::unordered_map<std::string, std::vector<std::string>> environmentFieldNames_;  // Maps function name -> ordered field names
     std::unordered_map<std::string, std::vector<hir::HIRValue*>> environmentFieldValues_;  // Maps function name -> ordered field HIRValues
+    std::unordered_set<hir::HIRValue*> heapClosureCells_;
 
     // Class tracking
     std::string lastClassName_;      // Tracks the last created class name for class expressions
@@ -264,6 +322,11 @@ private:
     // Generator tracking (ES2015)
     std::unordered_set<std::string> generatorVars_;
     std::unordered_set<std::string> generatorFuncs_;
+    std::unordered_set<std::string> asyncFuncs_;
+    bool forceTaggedFunctionABI_ = false;
+    bool forcePromiseExecutorABI_ = false;
+    std::string promiseExecutorResolveName_;
+    std::string promiseExecutorRejectName_;
     std::unordered_set<std::string> asyncGeneratorFuncs_;  // ES2018
     std::unordered_set<std::string> asyncGeneratorVars_;
     bool lastWasAsyncGenerator_ = false;
@@ -298,6 +361,7 @@ private:
 
     // Runtime array tracking
     std::unordered_set<std::string> runtimeArrayVars_;
+    std::unordered_set<std::string> taggedRuntimeArrayVars_;
     bool lastWasRuntimeArray_ = false;
 
     // Label support
@@ -405,6 +469,22 @@ private:
     // Object literal field tracking (for for-in loops and property access)
     // Maps object variable name -> ordered list of field names
     std::unordered_map<std::string, std::vector<std::string>> objectFieldNames_;
+
+    // Integrity state for fixed-layout object literals. Runtime Object instances
+    // use a separate representation and continue through the runtime helpers.
+    std::unordered_set<std::string> frozenObjectVars_;
+    std::unordered_set<std::string> sealedObjectVars_;
+    std::unordered_set<std::string> nonExtensibleObjectVars_;
+    std::string lastIntegrityObjectName_;
+
+    // Explicit data-property attributes introduced by Object.defineProperty
+    // on fixed-layout object variables. Missing entries use literal defaults.
+    std::unordered_map<std::string, std::unordered_map<std::string, bool>>
+        propertyWritable_;
+    std::unordered_map<std::string, std::unordered_map<std::string, bool>>
+        propertyEnumerable_;
+    std::unordered_map<std::string, std::unordered_map<std::string, bool>>
+        propertyConfigurable_;
 
     // Multi-file module system
     std::string currentFilePath_;    // Current file being compiled

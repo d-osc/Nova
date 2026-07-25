@@ -4,6 +4,71 @@
 
 namespace nova {
 
+namespace {
+std::unique_ptr<Pattern> expressionToAssignmentPattern(const ExprPtr& expression) {
+    if (!expression) return nullptr;
+    if (auto* identifier = dynamic_cast<Identifier*>(expression.get())) {
+        return std::make_unique<IdentifierPattern>(identifier->name);
+    }
+    if (auto* assignment = dynamic_cast<AssignmentExpr*>(expression.get());
+        assignment && assignment->op == AssignmentExpr::Op::Assign) {
+        auto left = expressionToAssignmentPattern(assignment->left);
+        if (!left) return nullptr;
+        return std::make_unique<AssignmentPattern>(
+            std::move(left), assignment->right);
+    }
+    if (auto* spread = dynamic_cast<SpreadExpr*>(expression.get())) {
+        auto argument = expressionToAssignmentPattern(spread->argument);
+        return argument
+            ? std::make_unique<RestElement>(std::move(argument)) : nullptr;
+    }
+    if (auto* array = dynamic_cast<ArrayExpr*>(expression.get())) {
+        auto pattern = std::make_unique<ArrayPattern>();
+        for (const auto& element : array->elements) {
+            if (!element) {
+                pattern->elements.push_back(nullptr);
+                continue;
+            }
+            auto converted = expressionToAssignmentPattern(element);
+            if (!converted) return nullptr;
+            if (auto* rest = dynamic_cast<RestElement*>(converted.get())) {
+                pattern->rest = std::move(rest->argument);
+            } else {
+                pattern->elements.push_back(std::move(converted));
+            }
+        }
+        return pattern;
+    }
+    if (auto* object = dynamic_cast<ObjectExpr*>(expression.get())) {
+        auto pattern = std::make_unique<ObjectPattern>();
+        for (const auto& property : object->properties) {
+            if (auto* spread = dynamic_cast<SpreadExpr*>(property.value.get())) {
+                pattern->rest = expressionToAssignmentPattern(spread->argument);
+                if (!pattern->rest) return nullptr;
+                continue;
+            }
+            std::string key;
+            if (auto* identifier = dynamic_cast<Identifier*>(property.key.get())) {
+                key = identifier->name;
+            } else if (auto* literal =
+                           dynamic_cast<StringLiteral*>(property.key.get())) {
+                key = literal->value;
+            }
+            if (key.empty()) return nullptr;
+            auto value = expressionToAssignmentPattern(property.value);
+            if (!value) return nullptr;
+            ObjectPattern::Property converted;
+            converted.key = key;
+            converted.value = std::move(value);
+            converted.shorthand = property.isShorthand;
+            pattern->properties.push_back(std::move(converted));
+        }
+        return pattern;
+    }
+    return nullptr;
+}
+} // namespace
+
 // Forward declarations of helper functions
 BinaryExpr::Op tokenToBinaryOp(TokenType type);
 UnaryExpr::Op tokenToUnaryOp(TokenType type);
@@ -42,7 +107,10 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
             advance(); // consume '('
 
             std::vector<std::string> params;
+            std::vector<std::shared_ptr<Pattern>> paramPatterns;
+            std::vector<ExprPtr> defaultValues;
             std::vector<TypePtr> paramTypes;
+            std::string restParam;
             bool couldBeArrow = true;
 
             // Empty params: async () => body
@@ -77,8 +145,32 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
             } else {
                 // Parse parameter list
                 while (!check(TokenType::RightParen) && !isAtEnd()) {
-                    if (check(TokenType::Identifier)) {
-                        params.push_back(advance().value);
+                    if (match(TokenType::DotDotDot)) {
+                        if (!check(TokenType::Identifier)) {
+                            couldBeArrow = false;
+                            break;
+                        }
+                        restParam = advance().value;
+                        if (match(TokenType::Colon)) {
+                            parseTypeAnnotation();
+                        }
+                        if (!check(TokenType::RightParen)) {
+                            couldBeArrow = false;
+                        }
+                        break;
+                    } else if (check(TokenType::Identifier) ||
+                               check(TokenType::LeftBrace) ||
+                               check(TokenType::LeftBracket)) {
+                        if (check(TokenType::Identifier)) {
+                            params.push_back(advance().value);
+                            paramPatterns.push_back(nullptr);
+                        } else {
+                            auto pattern = parseBindingPattern();
+                            params.push_back(
+                                "__pattern_param_" + std::to_string(params.size()));
+                            paramPatterns.push_back(
+                                std::shared_ptr<Pattern>(std::move(pattern)));
+                        }
 
                         // Optional type annotation
                         TypePtr paramType = nullptr;
@@ -86,6 +178,12 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
                             paramType = parseTypeAnnotation();
                         }
                         paramTypes.push_back(std::move(paramType));
+
+                        ExprPtr defaultValue = nullptr;
+                        if (match(TokenType::Equal)) {
+                            defaultValue = parseAssignmentExpression();
+                        }
+                        defaultValues.push_back(std::move(defaultValue));
 
                         if (check(TokenType::RightParen)) break;
                         if (!match(TokenType::Comma)) {
@@ -111,7 +209,10 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
                         arrow->location = getCurrentLocation();
                         arrow->isAsync = true;
                         arrow->params = std::move(params);
+                        arrow->paramPatterns = std::move(paramPatterns);
+                        arrow->defaultValues = std::move(defaultValues);
                         arrow->paramTypes = std::move(paramTypes);
+                        arrow->restParam = std::move(restParam);
                         arrow->returnType = std::move(returnType);
 
                         if (check(TokenType::LeftBrace)) {
@@ -211,6 +312,16 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
             std::move(expr),
             std::move(right)
         );
+        if (assign->op == AssignmentExpr::Op::Assign &&
+            (dynamic_cast<ArrayExpr*>(assign->left.get()) ||
+             dynamic_cast<ObjectExpr*>(assign->left.get()))) {
+            auto pattern = expressionToAssignmentPattern(assign->left);
+            if (!pattern) {
+                reportError("Invalid destructuring assignment target");
+            } else {
+                assign->pattern = std::shared_ptr<Pattern>(std::move(pattern));
+            }
+        }
         assign->location = op.location;
         
         return assign;
@@ -602,7 +713,12 @@ std::unique_ptr<Expr> Parser::parsePostfixExpression() {
         }
         // Optional chaining: obj?.prop
         else if (match(TokenType::QuestionDot)) {
-            Token prop = consume(TokenType::Identifier, "Expected property name");
+            Token prop;
+            if (check(TokenType::Identifier) || peek().isKeyword()) {
+                prop = advance();
+            } else {
+                prop = consume(TokenType::Identifier, "Expected property name");
+            }
             
             auto propExpr = std::make_unique<Identifier>(prop.value);
             propExpr->location = prop.location;
@@ -728,15 +844,23 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
         // Try to detect arrow function: (a, b) => body
         size_t savedPos = current_;
         std::vector<std::string> params;
+        std::vector<std::shared_ptr<Pattern>> paramPatterns;
+        std::vector<ExprPtr> defaultValues;
+        std::string restParam;
         bool couldBeArrow = true;
         
         // Empty params: () => body
         if (check(TokenType::RightParen)) {
             advance();
+            TypePtr returnType = nullptr;
+            if (match(TokenType::Colon)) {
+                returnType = parseTypeAnnotation();
+            }
             if (check(TokenType::Arrow)) {
                 advance();
                 auto arrow = std::make_unique<ArrowFunctionExpr>();
                 arrow->location = getCurrentLocation();
+                arrow->returnType = std::move(returnType);
                 // Empty params and paramTypes (no parameters)
 
                 if (check(TokenType::LeftBrace)) {
@@ -759,8 +883,32 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
         // Try parsing as parameter list
         std::vector<TypePtr> paramTypes;
         while (!check(TokenType::RightParen) && !isAtEnd()) {
-            if (check(TokenType::Identifier)) {
-                params.push_back(advance().value);
+            if (match(TokenType::DotDotDot)) {
+                if (!check(TokenType::Identifier)) {
+                    couldBeArrow = false;
+                    break;
+                }
+                restParam = advance().value;
+                if (match(TokenType::Colon)) {
+                    parseTypeAnnotation();
+                }
+                if (!check(TokenType::RightParen)) {
+                    couldBeArrow = false;
+                }
+                break;
+            } else if (check(TokenType::Identifier) ||
+                       check(TokenType::LeftBrace) ||
+                       check(TokenType::LeftBracket)) {
+                if (check(TokenType::Identifier)) {
+                    params.push_back(advance().value);
+                    paramPatterns.push_back(nullptr);
+                } else {
+                    auto pattern = parseBindingPattern();
+                    params.push_back(
+                        "__pattern_param_" + std::to_string(params.size()));
+                    paramPatterns.push_back(
+                        std::shared_ptr<Pattern>(std::move(pattern)));
+                }
 
                 // Optional type annotation
                 TypePtr paramType = nullptr;
@@ -768,6 +916,12 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
                     paramType = parseTypeAnnotation();
                 }
                 paramTypes.push_back(std::move(paramType));
+
+                ExprPtr defaultValue = nullptr;
+                if (match(TokenType::Equal)) {
+                    defaultValue = parseAssignmentExpression();
+                }
+                defaultValues.push_back(std::move(defaultValue));
 
                 if (check(TokenType::RightParen)) break;
                 if (!match(TokenType::Comma)) {
@@ -792,7 +946,10 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
                 auto arrow = std::make_unique<ArrowFunctionExpr>();
                 arrow->location = getCurrentLocation();
                 arrow->params = std::move(params);
+                arrow->paramPatterns = std::move(paramPatterns);
+                arrow->defaultValues = std::move(defaultValues);
                 arrow->paramTypes = std::move(paramTypes);
+                arrow->restParam = std::move(restParam);
                 arrow->returnType = std::move(returnType);
 
                 if (check(TokenType::LeftBrace)) {
@@ -933,7 +1090,7 @@ std::unique_ptr<Expr> Parser::parseLiteral() {
                 bigintLit->location = lit.location;
                 return bigintLit;
             }
-            auto numLit = std::make_unique<NumberLiteral>(std::stod(lit.value));
+            auto numLit = std::make_unique<NumberLiteral>(std::stod(lit.value), lit.value);
             numLit->location = lit.location;
             return numLit;
         }
@@ -1081,11 +1238,15 @@ std::unique_ptr<Expr> Parser::parseObjectLiteral() {
                 while (!check(TokenType::RightParen) && !isAtEnd()) {
                     Token param = consume(TokenType::Identifier, "Expected parameter name");
                     func->params.push_back(param.value);
+                    func->paramPatterns.push_back(nullptr);
 
                     // Optional type annotation
+                    TypePtr paramType = nullptr;
                     if (match(TokenType::Colon)) {
-                        parseTypeAnnotation(); // Parse and discard for now
+                        paramType = parseTypeAnnotation();
                     }
+                    func->paramTypes.push_back(std::move(paramType));
+                    func->defaultValues.push_back(nullptr);
 
                     if (!check(TokenType::RightParen)) {
                         consume(TokenType::Comma, "Expected ',' between parameters");
@@ -1175,13 +1336,41 @@ std::unique_ptr<Expr> Parser::parseFunctionExpression() {
     consume(TokenType::LeftParen, "Expected '(' after function");
     
     while (!check(TokenType::RightParen) && !isAtEnd()) {
-        Token param = consume(TokenType::Identifier, "Expected parameter name");
-        func->params.push_back(param.value);
+        if (match(TokenType::DotDotDot)) {
+            Token rest = consume(TokenType::Identifier, "Expected rest parameter name");
+            func->restParam = rest.value;
+            if (match(TokenType::Colon)) {
+                parseTypeAnnotation();
+            }
+            if (!check(TokenType::RightParen)) {
+                reportError("Rest parameter must be last");
+            }
+            break;
+        }
+        if (check(TokenType::LeftBrace) || check(TokenType::LeftBracket)) {
+            auto pattern = parseBindingPattern();
+            func->params.push_back(
+                "__pattern_param_" + std::to_string(func->params.size()));
+            func->paramPatterns.push_back(
+                std::shared_ptr<Pattern>(std::move(pattern)));
+        } else {
+            Token param = consume(TokenType::Identifier, "Expected parameter name");
+            func->params.push_back(param.value);
+            func->paramPatterns.push_back(nullptr);
+        }
         
         // Optional type annotation
+        TypePtr paramType = nullptr;
         if (match(TokenType::Colon)) {
-            parseTypeAnnotation(); // Parse and discard for now
+            paramType = parseTypeAnnotation();
         }
+        func->paramTypes.push_back(std::move(paramType));
+
+        ExprPtr defaultValue = nullptr;
+        if (match(TokenType::Equal)) {
+            defaultValue = parseAssignmentExpression();
+        }
+        func->defaultValues.push_back(std::move(defaultValue));
         
         if (!check(TokenType::RightParen)) {
             consume(TokenType::Comma, "Expected ',' between parameters");
