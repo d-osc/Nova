@@ -2,7 +2,7 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 0
+#define NOVA_DEBUG 1
 
 namespace nova::hir {
 
@@ -491,6 +491,22 @@ void HIRGenerator::visit(MemberExpr& node) {
             if (auto propExpr = dynamic_cast<Identifier*>(node.property.get())) {
                 std::string propertyName = propExpr->name;
 
+                // Extract the base variable name from node.object, handling chained calls
+                // For: mySet.add(1).has(2) -> node.object is CallExpr(mySet.add(1)), property is "has"
+                // We need to find the original Set variable name (mySet)
+                std::string setVarName;
+                Expr* current = node.object.get();
+                while (auto* callExpr = dynamic_cast<CallExpr*>(current)) {
+                    if (auto* memberExpr = dynamic_cast<MemberExpr*>(callExpr->callee.get())) {
+                        current = memberExpr->object.get();
+                    } else {
+                        break;
+                    }
+                }
+                if (auto* objIdent = dynamic_cast<Identifier*>(current)) {
+                    setVarName = objIdent->name;
+                }
+
                 // Check if this is TypedArray property access
                 if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
                     auto typeIt = typedArrayTypes_.find(objIdent->name);
@@ -625,114 +641,6 @@ void HIRGenerator::visit(MemberExpr& node) {
                             std::vector<HIRValue*> args = {object};
                             lastValue_ = builder_->createCall(func, args, "dataview_prop");
                             lastValue_->type = returnType;
-                            return;
-                        }
-                    }
-
-                    // Check if this is Map property access (ES2015)
-                    if (mapVars_.count(objIdent->name) > 0) {
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Map property access: " << objIdent->name << "." << propertyName << std::endl;
-
-                        if (propertyName == "size") {
-                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                            std::vector<HIRTypePtr> paramTypes = {ptrType};
-                            auto existingFunc = module_->getFunction("nova_map_size");
-                            HIRFunction* func = nullptr;
-                            if (existingFunc) {
-                                func = existingFunc.get();
-                            } else {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
-                                HIRFunctionPtr funcPtr = module_->createFunction("nova_map_size", funcType);
-                                funcPtr->linkage = HIRFunction::Linkage::External;
-                                func = funcPtr.get();
-                            }
-
-                            std::vector<HIRValue*> args = {object};
-                            lastValue_ = builder_->createCall(func, args, "map_size");
-                            lastValue_->type = intType;
-                            return;
-                        }
-                    }
-
-                    // Check if this is Set property access (ES2015)
-                    if (setVars_.count(objIdent->name) > 0) {
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Set property access: " << objIdent->name << "." << propertyName << std::endl;
-
-                        if (propertyName == "size") {
-                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                            std::vector<HIRTypePtr> paramTypes = {ptrType};
-                            auto existingFunc = module_->getFunction("nova_set_size");
-                            HIRFunction* func = nullptr;
-                            if (existingFunc) {
-                                func = existingFunc.get();
-                            } else {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
-                                HIRFunctionPtr funcPtr = module_->createFunction("nova_set_size", funcType);
-                                funcPtr->linkage = HIRFunction::Linkage::External;
-                                func = funcPtr.get();
-                            }
-
-                            std::vector<HIRValue*> args = {object};
-                            lastValue_ = builder_->createCall(func, args, "set_size");
-                            lastValue_->type = intType;
-                            return;
-                        }
-                    }
-
-                    // Check if this is WeakMap property access
-                    if (weakMapVars_.count(objIdent->name) > 0) {
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WeakMap property access: " << objIdent->name << "." << propertyName << std::endl;
-
-                        if (propertyName == "size") {
-                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                            std::vector<HIRTypePtr> paramTypes = {ptrType};
-                            auto existingFunc = module_->getFunction("nova_weakmap_size");
-                            HIRFunction* func = nullptr;
-                            if (existingFunc) {
-                                func = existingFunc.get();
-                            } else {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
-                                HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_size", funcType);
-                                funcPtr->linkage = HIRFunction::Linkage::External;
-                                func = funcPtr.get();
-                            }
-
-                            std::vector<HIRValue*> args = {object};
-                            lastValue_ = builder_->createCall(func, args, "weakmap_size");
-                            lastValue_->type = intType;
-                            return;
-                        }
-                    }
-
-                    // Check if this is WeakSet property access
-                    if (weakSetVars_.count(objIdent->name) > 0) {
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WeakSet property access: " << objIdent->name << "." << propertyName << std::endl;
-
-                        if (propertyName == "size") {
-                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
-                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                            std::vector<HIRTypePtr> paramTypes = {ptrType};
-                            auto existingFunc = module_->getFunction("nova_weakset_size");
-                            HIRFunction* func = nullptr;
-                            if (existingFunc) {
-                                func = existingFunc.get();
-                            } else {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
-                                HIRFunctionPtr funcPtr = module_->createFunction("nova_weakset_size", funcType);
-                                funcPtr->linkage = HIRFunction::Linkage::External;
-                                func = funcPtr.get();
-                            }
-
-                            std::vector<HIRValue*> args = {object};
-                            lastValue_ = builder_->createCall(func, args, "weakset_size");
-                            lastValue_->type = intType;
                             return;
                         }
                     }
@@ -938,103 +846,187 @@ void HIRGenerator::visit(MemberExpr& node) {
                     }
                 }
 
+                // Check if this is Map property access (ES2015) - handle chained calls
+                if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                    std::string mapCheckName = !setVarName.empty() ? setVarName : objIdent->name;
+                    if (mapVars_.count(mapCheckName) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Map property access: " << mapCheckName << "." << propertyName << std::endl;
+
+                        if (propertyName == "size") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_map_size");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_map_size", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "map_size");
+                            lastValue_->type = intType;
+                            return;
+                        } else if (propertyName == "set" || propertyName == "get" ||
+                                   propertyName == "has" || propertyName == "delete" ||
+                                   propertyName == "clear" || propertyName == "keys" ||
+                                   propertyName == "values" || propertyName == "entries" ||
+                                   propertyName == "forEach") {
+                            // Return the Map object itself - CallExpr will call the actual method
+                            lastValue_ = object;
+                            return;
+                        }
+                    }
+                }
+
+                // Check if this is Set property access (ES2015) - handle chained calls
+                if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                    std::string setCheckName = !setVarName.empty() ? setVarName : objIdent->name;
+                    if (setVars_.count(setCheckName) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Set property access: " << setCheckName << "." << propertyName << std::endl;
+
+                        if (propertyName == "size") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_set_size");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_set_size", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "set_size");
+                            lastValue_->type = intType;
+                            return;
+                        } else if (propertyName == "add" || propertyName == "has" ||
+                                   propertyName == "delete" || propertyName == "clear" ||
+                                   propertyName == "forEach" || propertyName == "keys" ||
+                                   propertyName == "values" || propertyName == "entries") {
+                            // Return the Set object itself - CallExpr will call the actual method
+                            lastValue_ = object;
+                            return;
+                        }
+                    }
+                }
+
+                // Check if this is WeakMap property access - handle chained calls
+                if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                    std::string weakMapCheckName = !setVarName.empty() ? setVarName : objIdent->name;
+                    if (weakMapVars_.count(weakMapCheckName) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WeakMap property access: " << weakMapCheckName << "." << propertyName << std::endl;
+
+                        if (propertyName == "size") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_weakmap_size");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_size", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "weakmap_size");
+                            lastValue_->type = intType;
+                            return;
+                        } else if (propertyName == "set" || propertyName == "get" ||
+                                   propertyName == "has" || propertyName == "delete") {
+                            // Return the WeakMap object itself - CallExpr will call the actual method
+                            lastValue_ = object;
+                            return;
+                        }
+                    }
+                }
+
+                // Check if this is WeakSet property access - handle chained calls
+                if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                    std::string weakSetCheckName = !setVarName.empty() ? setVarName : objIdent->name;
+                    if (weakSetVars_.count(weakSetCheckName) > 0) {
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: WeakSet property access: " << weakSetCheckName << "." << propertyName << std::endl;
+
+                        if (propertyName == "size") {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            auto existingFunc = module_->getFunction("nova_weakset_size");
+                            HIRFunction* func = nullptr;
+                            if (existingFunc) {
+                                func = existingFunc.get();
+                            } else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionPtr funcPtr = module_->createFunction("nova_weakset_size", funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {object};
+                            lastValue_ = builder_->createCall(func, args, "weakset_size");
+                            lastValue_->type = intType;
+                            return;
+                        } else if (propertyName == "add" || propertyName == "has" ||
+                                   propertyName == "delete") {
+                            // Return the WeakSet object itself - CallExpr will call the actual method
+                            lastValue_ = object;
+                            return;
+                        }
+                    }
+                }
+
                 // Try to get the struct type from the object
                 uint32_t fieldIndex = 0;
                 bool found = false;
                 hir::HIRStructType* structType = nullptr;
 
-                std::cerr << "\n=== TRACE: MemberExpr property access ===" << std::endl;
-                std::cerr << "  Property name: '" << propertyName << "'" << std::endl;
-                std::cerr << "  object pointer: " << object << std::endl;
-                std::cerr << "  currentThis_ pointer: " << currentThis_ << std::endl;
-                std::cerr << "  object == currentThis_: " << (object == currentThis_ ? "YES" : "NO") << std::endl;
-                std::cerr << "  currentClassStructType_: " << currentClassStructType_ << std::endl;
-
                 // Check if this is a 'this' property access
                 if (object == currentThis_ && currentClassStructType_) {
                     // Use the current class struct type directly
                     structType = currentClassStructType_;
-                    std::cerr << "  TRACE: Using currentClassStructType_ for 'this' property access" << std::endl;
-                    std::cerr << "  TRACE: Struct has " << structType->fields.size() << " fields" << std::endl;
                 } else if (object && object->type) {
-                    std::cerr << "  TRACE: Extracting struct type from object->type" << std::endl;
-                    std::cerr << "  TRACE: object->type pointer: " << object->type.get() << std::endl;
-                    std::cerr << "  TRACE: object->type->kind = " << static_cast<int>(object->type->kind) << std::endl;
-
                     // First check if object is directly a struct type
                     if (object->type->kind == hir::HIRType::Kind::Struct) {
-                        std::cerr << "  TRACE: Object type is directly a Struct" << std::endl;
                         structType = dynamic_cast<hir::HIRStructType*>(object->type.get());
-                        if (structType) {
-                            std::cerr << "  TRACE: Successfully cast to HIRStructType" << std::endl;
-                            std::cerr << "  TRACE: Struct name: " << structType->name << std::endl;
-                            std::cerr << "  TRACE: Struct has " << structType->fields.size() << " fields:" << std::endl;
-                            for (size_t i = 0; i < structType->fields.size(); ++i) {
-                                std::cerr << "    [" << i << "] " << structType->fields[i].name
-                                          << " (kind=" << static_cast<int>(structType->fields[i].type->kind) << ")" << std::endl;
-                            }
-                        } else {
-                            std::cerr << "  TRACE ERROR: Failed to cast to HIRStructType!" << std::endl;
-                        }
                     }
                     // Otherwise try pointer to struct
                     else {
-                        std::cerr << "  TRACE: Object type is NOT directly a Struct, trying Pointer" << std::endl;
-                        // Try to cast to HIRPointerType
                         hir::HIRPointerType* ptrTypeCast = dynamic_cast<hir::HIRPointerType*>(object->type.get());
-                        std::cerr << "  TRACE: HIRPointerType cast result: " << ptrTypeCast << std::endl;
 
                         // Check if it's a pointer to struct
                         if (auto ptrType = ptrTypeCast) {
-                            std::cerr << "  TRACE: Successfully cast to HIRPointerType" << std::endl;
                             if (ptrType->pointeeType) {
-                                std::cerr << "  TRACE: Pointee type exists, kind=" << static_cast<int>(ptrType->pointeeType->kind) << std::endl;
-
                                 structType = dynamic_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
-                                if (structType) {
-                                    std::cerr << "  TRACE: Pointee is a struct!" << std::endl;
-                                    std::cerr << "  TRACE: Struct name: " << structType->name << std::endl;
-                                    std::cerr << "  TRACE: Struct has " << structType->fields.size() << " fields:" << std::endl;
-                                    for (size_t i = 0; i < structType->fields.size(); ++i) {
-                                        std::cerr << "    [" << i << "] " << structType->fields[i].name
-                                                  << " (kind=" << static_cast<int>(structType->fields[i].type->kind) << ")" << std::endl;
-                                    }
-                                } else {
-                                    std::cerr << "  TRACE: Pointee is NOT a struct" << std::endl;
-                                }
-                            } else {
-                                std::cerr << "  TRACE ERROR: Pointer has NULL pointeeType!" << std::endl;
                             }
-                        } else {
-                            std::cerr << "  TRACE ERROR: Failed to cast to HIRPointerType!" << std::endl;
                         }
-                    }
-                } else {
-                    std::cerr << "  TRACE ERROR: object is NULL or object->type is NULL!" << std::endl;
-                    std::cerr << "    object: " << object << std::endl;
-                    if (object) {
-                        std::cerr << "    object->type: " << object->type.get() << std::endl;
                     }
                 }
 
                 // Find the field in the struct type
-                std::cerr << "\n  TRACE: Searching for field '" << propertyName << "' in struct..." << std::endl;
                 if (structType) {
-                    std::cerr << "  TRACE: structType is valid, searching " << structType->fields.size() << " fields" << std::endl;
                     for (size_t i = 0; i < structType->fields.size(); ++i) {
-                        std::cerr << "    Checking field[" << i << "]: '" << structType->fields[i].name << "'" << std::endl;
                         if (structType->fields[i].name == propertyName) {
                             fieldIndex = static_cast<uint32_t>(i);
                             found = true;
-                            std::cerr << "  TRACE SUCCESS: Found field '" << propertyName << "' at index " << fieldIndex << std::endl;
                             break;
                         }
                     }
-                    if (!found) {
-                        std::cerr << "  TRACE ERROR: Field '" << propertyName << "' NOT FOUND in struct!" << std::endl;
-                    }
-                } else {
-                    std::cerr << "  TRACE ERROR: structType is NULL, cannot search for field!" << std::endl;
                 }
 
                 // Check if this property has a getter
@@ -1046,7 +1038,7 @@ void HIRGenerator::visit(MemberExpr& node) {
                             // This property has a getter - call the getter function
                             std::string getterName = className + "_get_" + propertyName;
                             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Calling getter " << getterName << std::endl;
-                            
+
                             auto getterFunc = module_->getFunction(getterName);
                             if (getterFunc) {
                                 std::vector<HIRValue*> args = { object };
@@ -1058,21 +1050,8 @@ void HIRGenerator::visit(MemberExpr& node) {
                 }
 
                 if (found) {
-                    // Create GetField instruction with the correct field index
-                    std::cerr << "\n  TRACE: Creating GetField operation" << std::endl;
-                    std::cerr << "    object pointer: " << object << std::endl;
-                    std::cerr << "    field index: " << fieldIndex << std::endl;
-                    std::cerr << "    field name: '" << propertyName << "'" << std::endl;
-
                     lastValue_ = builder_->createGetField(object, fieldIndex, propertyName);
-
-                    std::cerr << "    Result lastValue_: " << lastValue_ << std::endl;
-                    if (lastValue_ && lastValue_->type) {
-                        std::cerr << "    Result type kind: " << static_cast<int>(lastValue_->type->kind) << std::endl;
-                    }
-                    std::cerr << "=== END TRACE ===" << std::endl;
                 } else {
-                    std::cerr << "\n  TRACE: Field NOT found, entering fallback logic" << std::endl;
                     // Check for built-in string properties
                     if (object && object->type && object->type->kind == hir::HIRType::Kind::String && propertyName == "length") {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Accessing built-in string.length property" << std::endl;
@@ -1185,12 +1164,8 @@ void HIRGenerator::visit(MemberExpr& node) {
                             }
                         }
 
-                        if (!foundBuiltinMethod) {
+        if (!foundBuiltinMethod) {
                             // Property not found, return 0 as placeholder
-                            std::cerr << "Warning: Property '" << propertyName << "' not found in struct" << std::endl;
-                            if (object && object->type) {
-                                std::cerr << "  Object type: kind=" << static_cast<int>(object->type->kind) << std::endl;
-                            }
                             lastValue_ = builder_->createIntConstant(0);
                         }
                     }
@@ -1198,20 +1173,17 @@ void HIRGenerator::visit(MemberExpr& node) {
             }
         }
     }
-    
+
 void HIRGenerator::visit(ObjectExpr& node) {
         // Object literal construction
         // Create struct type with fields for each property
         std::vector<hir::HIRStructType::Field> fields;
         std::vector<hir::HIRValue*> fieldValues;
-        // Use a placeholder - will be replaced with actual object ID
         std::string structName = "anon_obj";
 
         // Generate unique ID for this object
         static int objectCounter = 0;
         std::string objectId = "__obj_" + std::to_string(objectCounter++);
-
-        std::cerr << "\n=== TRACE: ObjectExpr processing, ID=" << objectId << " ===" << std::endl;
 
         // FIRST PASS: Collect data fields and identify methods
         // We need to create the struct type FIRST, so methods can reference it
@@ -1221,7 +1193,7 @@ void HIRGenerator::visit(ObjectExpr& node) {
             auto& prop = node.properties[i];
 
             // Get the property name from the key
-            std::string fieldName = "field" + std::to_string(i);  // Default name
+            std::string fieldName = "field" + std::to_string(i);
             if (auto identifier = dynamic_cast<Identifier*>(prop.key.get())) {
                 fieldName = identifier->name;
             }
@@ -1231,7 +1203,6 @@ void HIRGenerator::visit(ObjectExpr& node) {
                            dynamic_cast<FunctionExpr*>(prop.value.get()) != nullptr;
 
             if (isMethod) {
-                std::cerr << "  TRACE: Property '" << fieldName << "' is a method - deferring generation" << std::endl;
                 // Store method for later generation (after struct type is created)
                 auto* funcExpr = dynamic_cast<FunctionExpr*>(prop.value.get());
                 if (funcExpr) {
@@ -1239,30 +1210,25 @@ void HIRGenerator::visit(ObjectExpr& node) {
                 }
             } else {
                 // Regular property value - evaluate now
-                std::cerr << "  TRACE: Property '" << fieldName << "' is a data field" << std::endl;
                 prop.value->accept(*this);
                 fieldValues.push_back(lastValue_);
 
                 // Create field descriptor - ONLY for data properties
                 hir::HIRStructType::Field field;
                 field.name = fieldName;
-                field.type = lastValue_->type;  // Use the value's type
+                field.type = lastValue_->type;
                 field.isPublic = true;
                 fields.push_back(field);
             }
         }
 
         // Create the struct type NOW (before generating methods)
-        // IMPORTANT: Use objectId as the struct name so LLVM codegen can find it!
-        structName = objectId;  // e.g., "__obj_0"
-        std::cerr << "  TRACE: Creating struct type '" << structName << "' with " << fields.size() << " data fields" << std::endl;
+        structName = objectId;
         auto structType = new hir::HIRStructType(structName, fields);
         auto structTypePtr = std::make_shared<hir::HIRStructType>(*structType);
 
         // SECOND PASS: Generate methods with proper 'this' type
         for (auto& [fieldName, funcExpr] : methodsToGenerate) {
-                std::cerr << "  TRACE: Generating method '" << fieldName << "'" << std::endl;
-
                 // Generate unique function name for this method
                 std::string methodFuncName = objectId + "_method_" + fieldName;
 
@@ -1275,11 +1241,8 @@ void HIRGenerator::visit(ObjectExpr& node) {
                 // Create function type with 'this' as first parameter
                 std::vector<HIRTypePtr> paramTypes;
 
-                // First parameter: 'this' (pointer to struct) - USE PROPER HIRPointerType!
+                // First parameter: 'this' (pointer to struct)
                 auto thisType = std::make_shared<hir::HIRPointerType>(structTypePtr, true);
-                std::cerr << "    TRACE: Created HIRPointerType for 'this' parameter" << std::endl;
-                std::cerr << "    TRACE: thisType kind: " << static_cast<int>(thisType->kind) << std::endl;
-                std::cerr << "    TRACE: thisType->pointeeType: " << thisType->pointeeType.get() << std::endl;
                 paramTypes.push_back(thisType);
 
                 // Remaining parameters from method signature
@@ -1310,18 +1273,6 @@ void HIRGenerator::visit(ObjectExpr& node) {
                 // Set currentThis_ to the first parameter (the 'this' pointer)
                 currentThis_ = func->parameters[0];
 
-                std::cerr << "\n=== TRACE: Object method setup ===" << std::endl;
-                std::cerr << "  Method: " << methodFuncName << std::endl;
-                std::cerr << "  Set currentThis_ = func->parameters[0]" << std::endl;
-                std::cerr << "  currentThis_ pointer: " << currentThis_ << std::endl;
-                if (currentThis_->type) {
-                    std::cerr << "  currentThis_ type kind: " << static_cast<int>(currentThis_->type->kind) << std::endl;
-                    std::cerr << "  currentThis_ type pointer: " << currentThis_->type.get() << std::endl;
-                } else {
-                    std::cerr << "  ERROR: currentThis_->type is NULL!" << std::endl;
-                }
-                std::cerr << "=== END TRACE ===" << std::endl;
-
                 // Add method parameters to symbol table (starting from index 1, since 0 is 'this')
                 for (size_t j = 0; j < funcExpr->params.size(); ++j) {
                     symbolTable_[funcExpr->params[j]] = func->parameters[j + 1];
@@ -1346,8 +1297,6 @@ void HIRGenerator::visit(ObjectExpr& node) {
                 // Store method function name for later lookup
                 objectMethodFunctions_[objectId][fieldName] = methodFuncName;
                 objectMethodProperties_[objectId].insert(fieldName);
-
-                std::cerr << "    TRACE: Method '" << fieldName << "' generation complete" << std::endl;
         }
 
         // Store the field names for for-in loop support

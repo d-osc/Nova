@@ -71,6 +71,11 @@ private:
     // Used for tracking struct types of pointer fields in structs
     std::map<std::pair<llvm::Value*, unsigned>, llvm::Type*> nestedStructTypeMap;
 
+    // String constant interning (deduplicates identical string literals so that
+    // the same string content always resolves to the same global address; this is
+    // essential for pointer-based comparisons in Set/Map to work correctly).
+    std::unordered_map<std::string, llvm::GlobalVariable*> stringConstants_;
+
     // Current function context
     llvm::Function* currentFunction;
     mir::MIRPlace* currentReturnPlace;  // The _0 place for return values

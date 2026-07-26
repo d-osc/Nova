@@ -8062,7 +8062,18 @@ void HIRGenerator::visit(CallExpr& node) {
             // This is critical: Map/Set/WeakMap/WeakSet checks must run BEFORE
             // memberExpr->object->accept(*this) to avoid corrupting lastValue_ with
             // failed field lookups.
-            if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+
+            // Extract the base variable from potentially chained calls like mySet.add(1).add(2)
+            // In such chains, memberExpr->object is a CallExpr, not an Identifier.
+            Expr* baseExpr = memberExpr->object.get();
+            while (auto* callExpr = dynamic_cast<CallExpr*>(baseExpr)) {
+                if (auto* innerMemberExpr = dynamic_cast<MemberExpr*>(callExpr->callee.get())) {
+                    baseExpr = innerMemberExpr->object.get();
+                } else {
+                    break;
+                }
+            }
+            if (auto* objIdent = dynamic_cast<Identifier*>(baseExpr)) {
                 if (auto* propExpr = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                     std::string methodName = propExpr->name;
                     if (mapVars_.count(objIdent->name) > 0) {
@@ -8193,18 +8204,30 @@ void HIRGenerator::visit(CallExpr& node) {
                             return;
                         }
                     }
-                    if (setVars_.count(objIdent->name) > 0) {
+                    if (objIdent && setVars_.count(objIdent->name) > 0) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Set method call: " << methodName << std::endl;
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
-                        memberExpr->object->accept(*this);
-                        HIRValue* setObj = lastValue_;
+                        HIRValue* setObj = nullptr;
+                        {
+                            // Visit the FULL memberExpr->object (not just extracted baseExpr)
+                            // so chained calls like mySet.add(1).add(2) generate HIR for
+                            // every call in the chain. baseExpr is only used to CHECK if the
+                            // base variable is a Set; the actual HIR must come from visiting
+                            // the real object expression.
+                            memberExpr->object->accept(*this);
+                            setObj = lastValue_;
+                        }
+                        if(NOVA_DEBUG) {
+                            std::cerr << "DEBUG HIRGen Set: setObj HIR = " << (setObj ? setObj->toString() : "nullptr") << std::endl;
+                        }
                         if (methodName == "add") {
                             HIRValue* valueArg = nullptr;
                             if (node.arguments.size() >= 1) {
                                 node.arguments[0]->accept(*this);
                                 valueArg = lastValue_;
                             } else { valueArg = builder_->createIntConstant(0); }
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen Set: valueArg HIR = " << (valueArg ? valueArg->toString() : "nullptr") << std::endl;
                             HIRFunction* func = nullptr;
                             auto existingFunc = module_->getFunction("nova_set_add");
                             if (existingFunc) func = existingFunc.get();
@@ -10483,14 +10506,24 @@ void HIRGenerator::visit(CallExpr& node) {
                 }
 
                 // Check if object is a Set (ES2015)
-                if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
+                // Extract base variable from potentially chained calls like mySet.add(1).add(2)
+                Expr* setBaseExpr = memberExpr->object.get();
+                while (auto* callExpr = dynamic_cast<CallExpr*>(setBaseExpr)) {
+                    if (auto* innerMemberExpr = dynamic_cast<MemberExpr*>(callExpr->callee.get())) {
+                        setBaseExpr = innerMemberExpr->object.get();
+                    } else {
+                        break;
+                    }
+                }
+                if (auto* objIdent = dynamic_cast<Identifier*>(setBaseExpr)) {
                     if (setVars_.count(objIdent->name) > 0) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Set method call: " << methodName << std::endl;
 
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
 
-                        // Get the Set object
+                        // Visit the full memberExpr->object (not just extracted setBaseExpr)
+                        // so chained calls generate HIR for every call in the chain.
                         memberExpr->object->accept(*this);
                         HIRValue* setObj = lastValue_;
 

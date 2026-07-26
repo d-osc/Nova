@@ -800,12 +800,20 @@ llvm::Value* LLVMCodeGen::convertOperand(mir::MIROperand* operand) {
         } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::String) {
             std::string strVal = std::get<std::string>(constOp->value);
             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating string constant: " << strVal << std::endl;
-            // Create global string constant
-            llvm::Constant* strConstant = llvm::ConstantDataArray::getString(*context, strVal, true);
-            // Create global variable for the string
-            llvm::GlobalVariable* globalStr = new llvm::GlobalVariable(
-                *module, strConstant->getType(), true, llvm::GlobalValue::PrivateLinkage,
-                strConstant, ".str");
+            // Deduplicate string constants: identical content must resolve to the
+            // same global address so pointer-based comparisons (e.g. Set/Map keys)
+            // work correctly across multiple occurrences of the same literal.
+            llvm::GlobalVariable* globalStr = nullptr;
+            auto it = stringConstants_.find(strVal);
+            if (it != stringConstants_.end()) {
+                globalStr = it->second;
+            } else {
+                llvm::Constant* strConstant = llvm::ConstantDataArray::getString(*context, strVal, true);
+                globalStr = new llvm::GlobalVariable(
+                    *module, strConstant->getType(), true, llvm::GlobalValue::PrivateLinkage,
+                    strConstant, ".str");
+                stringConstants_[strVal] = globalStr;
+            }
             // Get pointer to the string
             return builder->CreateBitCast(globalStr, llvm::PointerType::getUnqual(*context), "str");
         } else if (constOp->constKind == mir::MIRConstOperand::ConstKind::Null ||

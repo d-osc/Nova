@@ -1,5 +1,4 @@
 #include "nova/MIR/MIRGen.h"
-// Debug mode enabled for investigation
 #define NOVA_DEBUG 0
 #include "nova/MIR/MIRBuilder.h"
 #include <algorithm>
