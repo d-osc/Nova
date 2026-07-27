@@ -26,11 +26,41 @@ TypePtr share(std::unique_ptr<TypeAnnotation> type) {
 } // namespace
 
 std::unique_ptr<TypeAnnotation> Parser::parseTypeAnnotation() {
-    return parseUnionType();
+    auto t = parseUnionType();
+    // Conditional type: T extends U ? X : Y
+    if (match(TokenType::KeywordExtends)) {
+        auto extends = parseUnionType();
+        consume(TokenType::Question, "Expected '?' in conditional type");
+        auto trueT = parseTypeAnnotation();
+        consume(TokenType::Colon, "Expected ':' in conditional type");
+        auto falseT = parseTypeAnnotation();
+        auto cond = std::make_unique<TypeAnnotation>(Type::Kind::Conditional);
+        cond->location = t->location;
+        cond->checkType = share(std::move(t));
+        cond->extendsType = share(std::move(extends));
+        cond->trueType = share(std::move(trueT));
+        cond->falseType = share(std::move(falseT));
+        return cond;
+    }
+    return t;
 }
 
 std::unique_ptr<TypeAnnotation> Parser::parsePrimaryType() {
     const SourceLocation location = getCurrentLocation();
+    if (match(TokenType::KeywordKeyof)) {
+        auto inner = parsePrimaryType();
+        auto k = std::make_unique<TypeAnnotation>(Type::Kind::Keyof);
+        k->location = location;
+        k->elementType = share(std::move(inner));
+        return k;
+    }
+    if (match(TokenType::KeywordInfer)) {
+        // infer T at type level (only valid inside conditional extends)
+        const Token nameTok = consume(TokenType::Identifier, "Expected identifier after 'infer'");
+        auto inf = std::make_unique<TypeAnnotation>(Type::Kind::Infer, nameTok.value);
+        inf->location = location;
+        return inf;
+    }
     if (match(TokenType::LeftParen)) {
         auto type = parseTypeAnnotation();
         consume(TokenType::RightParen, "Expected ')' after type annotation");
@@ -63,6 +93,16 @@ std::unique_ptr<TypeAnnotation> Parser::parsePrimaryType() {
 
     auto type = std::make_unique<TypeAnnotation>(primitiveKind(name), name);
     type->location = location;
+
+    // Generic type reference: Foo<T1, T2, ...>
+    if (check(TokenType::Less)) {
+        if (tryParseTypeArguments()) {
+            // Type arguments parsed successfully; for type-erasure purposes we
+            // treat generic type refs as their named type. The TypeChecker can
+            // still inspect the type arguments if needed.
+            // (Type arguments themselves are consumed by tryParseTypeArguments.)
+        }
+    }
     return type;
 }
 

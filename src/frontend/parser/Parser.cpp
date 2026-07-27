@@ -71,6 +71,60 @@ Token Parser::consume(TokenType type, const std::string& message) {
     throw std::runtime_error(message);
 }
 
+bool Parser::checkIdentifierName() const {
+    if (isAtEnd()) return false;
+    const Token token = peek();
+    return token.type == TokenType::Identifier || token.isKeyword() ||
+           token.isLiteral();
+}
+
+bool Parser::checkBindingIdentifier() const {
+    if (isAtEnd()) return false;
+    switch (peek().type) {
+        case TokenType::Identifier:
+        case TokenType::KeywordAsync:
+        case TokenType::KeywordFrom:
+        case TokenType::KeywordAs:
+        case TokenType::KeywordOf:
+        case TokenType::KeywordType:
+        case TokenType::KeywordInterface:
+        case TokenType::KeywordNamespace:
+        case TokenType::KeywordDeclare:
+        case TokenType::KeywordAbstract:
+        case TokenType::KeywordPublic:
+        case TokenType::KeywordPrivate:
+        case TokenType::KeywordProtected:
+        case TokenType::KeywordReadonly:
+        case TokenType::KeywordStatic:
+        case TokenType::KeywordGet:
+        case TokenType::KeywordSet:
+        case TokenType::KeywordOverride:
+        case TokenType::KeywordSatisfies:
+        case TokenType::KeywordKeyof:
+        case TokenType::KeywordInfer:
+        case TokenType::KeywordIs:
+        case TokenType::KeywordAsserts:
+        case TokenType::KeywordUnique:
+        case TokenType::KeywordImplements:
+        case TokenType::KeywordUsing:
+            return true;
+        default:
+            return false;
+    }
+}
+
+Token Parser::consumeIdentifierName(const std::string& message) {
+    if (checkIdentifierName()) return advance();
+    reportError(message);
+    throw std::runtime_error(message);
+}
+
+Token Parser::consumeBindingIdentifier(const std::string& message) {
+    if (checkBindingIdentifier()) return advance();
+    reportError(message);
+    throw std::runtime_error(message);
+}
+
 bool Parser::isAtEnd() const {
     return current_ >= tokens_.size() || peek().type == TokenType::EndOfFile;
 }

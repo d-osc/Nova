@@ -67,23 +67,39 @@ static int64_t tmToTimestamp(struct tm* t, int64_t ms) {
 // Static Methods
 // ============================================
 
-// Date.now() - already exists in Utility.cpp, but we add it here too
-int64_t nova_date_now() {
-    return getCurrentTimeMs();
-}
+// Date.now() - implemented in Utility.cpp to avoid duplicate definition
 
 // Date.parse(string) - parse date string to timestamp
 int64_t nova_date_parse(void* strPtr) {
     if (!strPtr) return 0;
     const char* str = static_cast<const char*>(strPtr);
+    size_t len = strlen(str);
 
-    // Try to parse ISO 8601 format: YYYY-MM-DDTHH:MM:SS
-    int year, month, day, hour = 0, minute = 0, second = 0;
+    // Detect UTC marker (trailing 'Z')
+    bool isUTC = (len > 0 && (str[len - 1] == 'Z' || str[len - 1] == 'z'));
 
-    if (sscanf(str, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second) >= 3 ||
-        sscanf(str, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second) >= 3 ||
-        sscanf(str, "%d/%d/%d", &month, &day, &year) == 3) {
+    int year = 1970, month = 1, day = 1, hour = 0, minute = 0, second = 0;
+    int millis = 0;
 
+    // Try ISO format with optional T separator and optional fractional seconds
+    int matched = sscanf(str, "%d-%d-%dT%d:%d:%d.%d",
+                         &year, &month, &day, &hour, &minute, &second, &millis);
+    if (matched < 3) {
+        // Try without milliseconds
+        matched = sscanf(str, "%d-%d-%dT%d:%d:%d",
+                         &year, &month, &day, &hour, &minute, &second);
+    }
+    if (matched < 3) {
+        // Try space separator
+        matched = sscanf(str, "%d-%d-%d %d:%d:%d",
+                         &year, &month, &day, &hour, &minute, &second);
+    }
+    if (matched < 3) {
+        // Try date only (YYYY-MM-DD)
+        matched = sscanf(str, "%d-%d-%d", &year, &month, &day);
+    }
+
+    if (matched >= 3) {
         struct tm t = {};
         t.tm_year = year - 1900;
         t.tm_mon = month - 1;
@@ -91,16 +107,26 @@ int64_t nova_date_parse(void* strPtr) {
         t.tm_hour = hour;
         t.tm_min = minute;
         t.tm_sec = second;
-        t.tm_isdst = -1;
+        t.tm_isdst = isUTC ? 0 : -1;
 
-        time_t seconds = mktime(&t);
+        time_t seconds;
+        if (isUTC) {
+#ifdef _WIN32
+            seconds = _mkgmtime(&t);
+#else
+            seconds = timegm(&t);
+#endif
+        } else {
+            seconds = mktime(&t);
+        }
+
         if (seconds != -1) {
-            return static_cast<int64_t>(seconds) * 1000;
+            return static_cast<int64_t>(seconds) * 1000 + millis;
         }
     }
 
-    // Return NaN equivalent (use INT64_MIN as invalid)
-    return INT64_MIN;
+    // Return 0 as invalid (JavaScript would return NaN)
+    return 0;
 }
 
 // Date.UTC(year, month, day, hour, minute, second, ms) - create UTC timestamp

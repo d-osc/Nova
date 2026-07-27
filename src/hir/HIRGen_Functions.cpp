@@ -685,6 +685,9 @@ void HIRGenerator::visit(FunctionDecl& node) {
         // Track all functions for call/apply/bind support
         functionVars_.insert(node.name);
         functionParamCounts_[node.name] = static_cast<int64_t>(node.params.size());
+        // Mark this name as a Function-typed value for instanceof resolution
+        functionReferences_[node.name] = node.name;
+        variableKinds_[node.name] = "Function";
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered function: " << node.name << " with " << node.params.size() << " params" << std::endl;
 
         // Track rest parameters

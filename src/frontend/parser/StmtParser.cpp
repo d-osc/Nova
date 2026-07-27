@@ -146,7 +146,7 @@ std::unique_ptr<Stmt> Parser::parseVariableDeclaration() {
             declarator.pattern = parseObjectPattern();
         } else {
             // Simple identifier
-            Token id = consume(TokenType::Identifier, "Expected variable name");
+            Token id = consumeBindingIdentifier("Expected variable name");
             declarator.name = id.value;
         }
 
@@ -199,7 +199,7 @@ std::unique_ptr<Stmt> Parser::parseVariableDeclarationWithoutSemicolon() {
             declarator.pattern = parseObjectPattern();
         } else {
             // Simple identifier
-            Token id = consume(TokenType::Identifier, "Expected variable name");
+            Token id = consumeBindingIdentifier("Expected variable name");
             declarator.name = id.value;
         }
 
@@ -486,23 +486,40 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
         // Member decorators
         auto memberDecorators = parseDecorators();
         
-        // Private field with # prefix
+        // Private field with # prefix — may appear before OR after visibility
+        // modifiers (e.g., `readonly #owner`, `static #count`). Track and
+        // re-check after each modifier.
         bool isPrivateField = false;
         if (match(TokenType::Hash)) {
             isPrivateField = true;
         }
-        
+
         // Visibility modifiers
         /*bool isPublic =*/ match(TokenType::KeywordPublic);
         /*bool isPrivate =*/ match(TokenType::KeywordPrivate) || isPrivateField;
         /*bool isProtected =*/ match(TokenType::KeywordProtected);
-        
+
+        // After visibility, # may still appear
+        if (!isPrivateField && match(TokenType::Hash)) {
+            isPrivateField = true;
+        }
+
         // Static
         bool isStatic = match(TokenType::KeywordStatic);
-        
+
+        // After static, # may still appear
+        if (!isPrivateField && match(TokenType::Hash)) {
+            isPrivateField = true;
+        }
+
         // Abstract/Readonly
         bool isAbstract = match(TokenType::KeywordAbstract);
         bool isReadonly = match(TokenType::KeywordReadonly);
+
+        // After readonly, # may still appear
+        if (!isPrivateField && match(TokenType::Hash)) {
+            isPrivateField = true;
+        }
         
         // Async
         bool isAsync = match(TokenType::KeywordAsync);
@@ -512,17 +529,30 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
         bool isSetter = match(TokenType::KeywordSet);
         
         // Member name
-        if (!check(TokenType::Identifier)) {
+        bool isComputed = false;
+        ExprPtr computedKeyExpr;
+        Token memberName;
+        if (match(TokenType::LeftBracket)) {
+            // Computed property name: [expr]
+            isComputed = true;
+            computedKeyExpr = parseExpression();
+            consume(TokenType::RightBracket, "Expected ']' after computed property name");
+            // Use the source text as the (placeholder) name; HIRGen routes via computedKey.
+            memberName.value = "__computed__";
+        } else if (check(TokenType::Identifier) || peek().isKeyword()) {
+            memberName = advance();
+        } else if (check(TokenType::StringLiteral)) {
+            // String literal member name: "method"() { ... }
+            memberName = advance();
+        } else {
             reportError("Expected class member name");
             synchronize();
             continue;
         }
-        
-        Token memberName = advance();
-        
+
         // Add # prefix if it's a private field
         std::string finalName = isPrivateField ? "#" + memberName.value : memberName.value;
-        
+
         // Check if it's a method (has parentheses) or property
         if (check(TokenType::LeftParen)) {
             // Method
@@ -531,6 +561,8 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
             method.isStatic = isStatic;
             method.isAsync = isAsync;
             method.isAbstract = isAbstract;
+            method.isComputed = isComputed;
+            if (isComputed) method.computedKey = std::move(computedKeyExpr);
             
             if (isGetter) {
                 method.kind = ClassDecl::Method::Kind::Get;
@@ -583,6 +615,8 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
             prop.name = finalName;
             prop.isStatic = isStatic;
             prop.isReadonly = isReadonly;
+            prop.isComputed = isComputed;
+            if (isComputed) prop.computedKey = std::move(computedKeyExpr);
             
             // Type annotation
             if (match(TokenType::Colon)) {

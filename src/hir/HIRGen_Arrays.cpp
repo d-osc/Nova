@@ -18,6 +18,9 @@ void HIRGenerator::visit(ArrayExpr& node) {
             return;
         }
 
+        // Mark this as an Array for instanceof resolution
+        lastVariableKind_ = "Array";
+
         // Array literal construction
         // Check if any elements are spread expressions
         bool hasSpread = false;

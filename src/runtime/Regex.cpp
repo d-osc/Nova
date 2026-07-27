@@ -6,6 +6,19 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
+
+namespace nova::runtime {
+struct ObjectHeader { char _[24]; };
+struct StringArray {
+    ObjectHeader header;
+    int64_t length;
+    int64_t capacity;
+    const char** elements;
+};
+} // namespace nova::runtime
+
+// Forward-declare the runtime helper implemented in String.cpp.
+extern "C" nova::runtime::StringArray* nova_string_array_create(int64_t capacity);
 #include <iostream>
 #include <vector>
 
@@ -165,12 +178,76 @@ const char* nova_regex_exec(void* regexPtr, const char* str) {
             }
             regex->lastIndex = 0;
             return nullptr;
-        } else {
-            if (std::regex_search(s, match, *regex->compiled)) {
-                return strdup(match.str().c_str());
-            }
-            return nullptr;
         }
+
+        if (std::regex_search(s, match, *regex->compiled)) {
+            return strdup(match.str().c_str());
+        }
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// regex.exec(str) — JS-spec shape: returns a StringArray whose element 0 is
+// the full match and elements 1..N are the capture groups. Returns nullptr
+// when no match.
+void* nova_regex_exec_array(void* regexPtr, const char* str) {
+    if (!regexPtr || !str) return nullptr;
+    NovaRegex* regex = static_cast<NovaRegex*>(regexPtr);
+    if (!regex->compiled) return nullptr;
+
+    try {
+        std::string s(str);
+        std::smatch m;
+        bool matched = false;
+        size_t startPos = 0;
+
+        if (regex->sticky || regex->global) {
+            if (regex->lastIndex >= (int64_t)s.length()) {
+                regex->lastIndex = 0;
+                return nullptr;
+            }
+            std::string sub = s.substr(regex->lastIndex);
+            if (regex->sticky) {
+                if (std::regex_search(sub, m, *regex->compiled) && m.position() == 0) {
+                    matched = true;
+                    startPos = static_cast<size_t>(regex->lastIndex);
+                    regex->lastIndex += m.position() + m.length();
+                } else {
+                    regex->lastIndex = 0;
+                }
+            } else {
+                if (std::regex_search(sub, m, *regex->compiled)) {
+                    matched = true;
+                    startPos = static_cast<size_t>(regex->lastIndex);
+                    regex->lastIndex += m.position() + m.length();
+                } else {
+                    regex->lastIndex = 0;
+                }
+            }
+        } else {
+            if (std::regex_search(s, m, *regex->compiled)) {
+                matched = true;
+            }
+        }
+
+        if (!matched) return nullptr;
+
+        const size_t count = m.size();
+        auto* array = nova_string_array_create(static_cast<int64_t>(count));
+        array->length = static_cast<int64_t>(count);
+        for (size_t i = 0; i < count; ++i) {
+            const std::string sub = m[i].matched ? m[i].str() : std::string();
+            char* buf = static_cast<char*>(malloc(sub.size() + 1));
+            if (buf) {
+                std::memcpy(buf, sub.c_str(), sub.size());
+                buf[sub.size()] = 0;
+                array->elements[i] = buf;
+            }
+        }
+        (void)startPos;
+        return array;
     } catch (...) {
         return nullptr;
     }
@@ -190,6 +267,41 @@ const char* nova_string_match(const char* str, void* regexPtr) {
             return strdup(match.str().c_str());
         }
         return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// String.match(regex) variant that returns a StringArray (JS spec shape).
+// Returns nullptr when no match, otherwise a StringArray whose element 0 is
+// the full match and elements 1..N are the capture groups.
+void* nova_string_match_array(const char* str, void* regexPtr) {
+    if (!str || !regexPtr) return nullptr;
+    NovaRegex* regex = static_cast<NovaRegex*>(regexPtr);
+    if (!regex->compiled) return nullptr;
+
+    try {
+        std::string s(str);
+        std::smatch m;
+
+        if (!std::regex_search(s, m, *regex->compiled)) {
+            return nullptr;
+        }
+
+        // Build [full_match, group1, group2, ...]
+        const size_t count = m.size();
+        auto* array = nova_string_array_create(static_cast<int64_t>(count));
+        array->length = static_cast<int64_t>(count);
+        for (size_t i = 0; i < count; ++i) {
+            const std::string sub = m[i].matched ? m[i].str() : std::string();
+            char* buf = static_cast<char*>(malloc(sub.size() + 1));
+            if (buf) {
+                std::memcpy(buf, sub.c_str(), sub.size());
+                buf[sub.size()] = 0;
+                array->elements[i] = buf;
+            }
+        }
+        return array;
     } catch (...) {
         return nullptr;
     }

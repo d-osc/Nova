@@ -220,6 +220,9 @@ set(NOVA_SOURCES
     src/runtime/WeakRef.cpp
     src/runtime/WeakSet.cpp
     src/runtime/Test.cpp
+    src/runtime/Date.cpp
+    src/runtime/Boolean.cpp
+    src/runtime/Atomics.cpp
 
     # Built-in Modules (nova:fs, nova:test, nova:path, nova:os)
     src/runtime/BuiltinModules.cpp

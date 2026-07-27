@@ -1755,6 +1755,38 @@ int64_t nova_value_array_reduceRight(void* array_ptr, ReduceRightCallbackFunc ca
     return accumulator;
 }
 
+// Array.reduce() without an explicit initial value: per spec, the first
+// element is used as the initial accumulator and iteration starts at index 1.
+int64_t nova_value_array_reduce_no_init(void* array_ptr, ReduceCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback || array->length == 0) {
+        return 0;  // Matches V8 behavior: TypeError in spec, but we return 0.
+    }
+
+    int64_t accumulator = array->elements[0];
+    for (int64_t i = 1; i < array->length; i++) {
+        accumulator = callback(accumulator, array->elements[i]);
+    }
+    return accumulator;
+}
+
+// Array.reduceRight() without an explicit initial value: per spec, the last
+// element is used as the initial accumulator and iteration moves backwards.
+int64_t nova_value_array_reduceRight_no_init(void* array_ptr, ReduceRightCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+
+    if (!array || !callback || array->length == 0) {
+        return 0;
+    }
+
+    int64_t accumulator = array->elements[array->length - 1];
+    for (int64_t i = array->length - 2; i >= 0; i--) {
+        accumulator = callback(accumulator, array->elements[i]);
+    }
+    return accumulator;
+}
+
 
 
 } // extern "C"

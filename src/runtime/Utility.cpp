@@ -33,6 +33,9 @@ namespace {
 // Global exception handling state
 static thread_local bool g_exception_pending = false;
 static thread_local int64_t g_exception_value = 0;
+// Optional class-name tag for thrown values (used by instanceof on catch).
+// Only set when the program throws `new ClassName(...)`; null otherwise.
+static thread_local const char* g_exception_class_name = nullptr;
 [[maybe_unused]] static thread_local jmp_buf* g_exception_handler = nullptr;
 [[maybe_unused]] static thread_local jmp_buf g_exception_buffer;  // The actual buffer
 static thread_local int g_try_depth = 0;  // Track try nesting
@@ -1581,6 +1584,7 @@ char* nova_decodeURI(const char* str) {
 void nova_try_begin() {
     g_try_depth++;
     g_exception_pending = false;
+    g_exception_class_name = nullptr;
 }
 
 // End a try block
@@ -1604,6 +1608,17 @@ void nova_throw(int64_t value) {
     // Otherwise, the exception will be caught by polling
 }
 
+// Record the class name of the value being thrown (used for instanceof in catch).
+// Must be called immediately before nova_throw when the thrown value originates
+// from `new ClassName(...)`. Pass nullptr to clear.
+void nova_set_thrown_class_name(const char* name) {
+    g_exception_class_name = name;
+}
+
+const char* nova_get_thrown_class_name() {
+    return g_exception_class_name;
+}
+
 // Check if exception is pending
 int64_t nova_exception_pending() {
     return g_exception_pending ? 1 : 0;
@@ -1618,6 +1633,7 @@ int64_t nova_get_exception() {
 void nova_clear_exception() {
     g_exception_pending = false;
     g_exception_value = 0;
+    g_exception_class_name = nullptr;
 }
 
 // eval() - evaluates JavaScript code at runtime (ES1)

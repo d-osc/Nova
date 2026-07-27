@@ -4,6 +4,78 @@
 
 namespace nova {
 
+bool Parser::tryParseTypeArguments() {
+    // Precondition: caller already verified that current token is `<`.
+    // Scan tokens, tracking depth of `<>`, `()`, `[]`, `{}`. Stop when we
+    // find the matching `>` at outer depth. If we hit end-of-input or a
+    // token that clearly can't be inside a type (e.g., `=>`, `;`, `=`),
+    // bail and let caller treat `<` as a comparison.
+    if (!check(TokenType::Less)) return false;
+    size_t savedPos = current_;
+    advance();  // consume `<`
+
+    int angleDepth = 1;
+    int braceDepth = 0;
+    int parenDepth = 0;
+    int bracketDepth = 0;
+
+    while (!isAtEnd()) {
+        TokenType t = peek().type;
+
+        if (t == TokenType::Less) {
+            angleDepth++;
+            advance();
+        } else if (t == TokenType::Greater) {
+            angleDepth--;
+            advance();
+            if (angleDepth == 0) return true;
+        } else if (t == TokenType::GreaterGreater) {
+            // `>>` — close two levels.
+            angleDepth -= 2;
+            advance();
+            if (angleDepth <= 0) return true;
+        } else if (t == TokenType::LessEqual || t == TokenType::GreaterEqual) {
+            // `<=` / `>=` — clearly a comparison, not a type.
+            current_ = savedPos;
+            return false;
+        } else if (t == TokenType::LeftBrace) { braceDepth++; advance(); }
+        else if (t == TokenType::RightBrace) {
+            if (braceDepth == 0) { current_ = savedPos; return false; }
+            braceDepth--; advance();
+        } else if (t == TokenType::LeftBracket) { bracketDepth++; advance(); }
+        else if (t == TokenType::RightBracket) {
+            if (bracketDepth == 0) { current_ = savedPos; return false; }
+            bracketDepth--; advance();
+        } else if (t == TokenType::LeftParen) { parenDepth++; advance(); }
+        else if (t == TokenType::RightParen) {
+            if (parenDepth == 0) { current_ = savedPos; return false; }
+            parenDepth--; advance();
+        } else if (t == TokenType::Semicolon || t == TokenType::Equal ||
+                   t == TokenType::EqualEqual ||
+                   t == TokenType::Arrow || t == TokenType::Pipe ||
+                   t == TokenType::Ampersand) {
+            // These would be valid in some type contexts but at outermost
+            // depth suggest we're past the type. Bail to be safe.
+            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0 && angleDepth == 1) {
+                // `|` and `&` are union/intersection types — allow those.
+                if (t == TokenType::Pipe || t == TokenType::Ampersand) {
+                    advance();
+                } else {
+                    current_ = savedPos;
+                    return false;
+                }
+            } else {
+                advance();
+            }
+        } else {
+            advance();
+        }
+    }
+
+    current_ = savedPos;
+    return false;
+}
+
 namespace {
 std::unique_ptr<Pattern> expressionToAssignmentPattern(const ExprPtr& expression) {
     if (!expression) return nullptr;
@@ -687,9 +759,42 @@ std::unique_ptr<Expr> Parser::parsePostfixExpression() {
             
             expr = std::move(member);
         }
-        // Function call: func(args)
+        // Function call: func(args) — possibly with explicit type args
+        // func<T>(args) which we consume via tryParseTypeArguments().
+        else if (check(TokenType::Less)) {
+            if (tryParseTypeArguments()) {
+                // Type args consumed; expect (args) next.
+                if (!match(TokenType::LeftParen)) {
+                    // Wasn't a call after all — caller should retry.
+                    // Reset is unsafe here (already consumed), so error.
+                    reportError("Expected '(' after type arguments");
+                }
+                std::vector<ExprPtr> arguments;
+                while (!check(TokenType::RightParen) && !isAtEnd()) {
+                    if (match(TokenType::DotDotDot)) {
+                        auto spread = std::make_unique<SpreadExpr>(parseAssignmentExpression());
+                        spread->location = getCurrentLocation();
+                        arguments.push_back(std::move(spread));
+                    } else {
+                        arguments.push_back(parseAssignmentExpression());
+                    }
+                    if (!check(TokenType::RightParen)) {
+                        consume(TokenType::Comma, "Expected ',' between arguments");
+                    }
+                }
+                consume(TokenType::RightParen, "Expected ')' after arguments");
+                auto call = std::make_unique<CallExpr>(std::move(expr), std::move(arguments));
+                call->location = getCurrentLocation();
+                expr = std::move(call);
+            } else {
+                break;
+            }
+        }
         else if (match(TokenType::LeftParen)) {
             std::vector<ExprPtr> arguments;
+
+            // Note: type arguments (e.g., func<T>(args)) are consumed
+            // by tryParseTypeArguments() below before we reach this branch.
 
             while (!check(TokenType::RightParen) && !isAtEnd()) {
                 // Check for spread argument: fn(...arr)
@@ -824,8 +929,10 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
         return parseLiteral();
     }
     
-    // Identifier
-    if (check(TokenType::Identifier)) {
+    // Identifier. Contextual keywords retain identifier semantics when they
+    // are not being consumed by a grammar production (for example `set` in
+    // `const set = new Set(); set.add(1)`).
+    if (checkBindingIdentifier()) {
         return parseIdentifier();
     }
     
@@ -1020,7 +1127,24 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
         }
         
         auto callee = parsePrimaryExpression();
-        
+
+        // Optional type arguments on constructor calls: new Set<number>(...).
+        // Try to parse them; if parsing fails or doesn't end in `(`, roll back
+        // so the `<` is treated as a comparison (rare in `new` context, but
+        // safe).
+        if (check(TokenType::Less)) {
+            size_t savedPos = current_;
+            try {
+                if (tryParseTypeArguments()) {
+                    // Successfully consumed <...>; fall through to argument parsing.
+                } else {
+                    current_ = savedPos;
+                }
+            } catch (...) {
+                current_ = savedPos;
+            }
+        }
+
         std::vector<ExprPtr> arguments;
         
         // Arguments (optional for new)
@@ -1069,7 +1193,7 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
 }
 
 std::unique_ptr<Expr> Parser::parseIdentifier() {
-    Token id = consume(TokenType::Identifier, "Expected identifier");
+    Token id = consumeBindingIdentifier("Expected identifier");
     
     auto identifier = std::make_unique<Identifier>(id.value);
     identifier->location = id.location;
@@ -1180,18 +1304,79 @@ std::unique_ptr<Expr> Parser::parseArrayLiteral() {
 
 std::unique_ptr<Expr> Parser::parseObjectLiteral() {
     consume(TokenType::LeftBrace, "Expected '{'");
-    
+
     std::vector<ObjectExpr::Property> properties;
-    
+
+    auto parseMethod = [this](const SourceLocation& location,
+                              bool isAsync,
+                              bool isGenerator) {
+        auto function = std::make_unique<FunctionExpr>();
+        function->location = location;
+        function->isAsync = isAsync;
+        function->isGenerator = isGenerator;
+
+        consume(TokenType::LeftParen, "Expected '(' after method name");
+        while (!check(TokenType::RightParen) && !isAtEnd()) {
+            if (match(TokenType::DotDotDot)) {
+                Token rest = consumeBindingIdentifier(
+                    "Expected rest parameter name");
+                function->restParam = rest.value;
+                if (match(TokenType::Colon)) {
+                    parseTypeAnnotation();
+                }
+                if (!check(TokenType::RightParen)) {
+                    reportError("Rest parameter must be last");
+                }
+                break;
+            }
+
+            if (check(TokenType::LeftBrace) || check(TokenType::LeftBracket)) {
+                auto pattern = parseBindingPattern();
+                function->params.push_back(
+                    "__pattern_param_" +
+                    std::to_string(function->params.size()));
+                function->paramPatterns.push_back(
+                    std::shared_ptr<Pattern>(std::move(pattern)));
+            } else {
+                Token parameter = consumeBindingIdentifier(
+                    "Expected parameter name");
+                function->params.push_back(parameter.value);
+                function->paramPatterns.push_back(nullptr);
+            }
+
+            match(TokenType::Question);
+            TypePtr parameterType = nullptr;
+            if (match(TokenType::Colon)) {
+                parameterType = parseTypeAnnotation();
+            }
+            function->paramTypes.push_back(std::move(parameterType));
+
+            ExprPtr defaultValue = nullptr;
+            if (match(TokenType::Equal)) {
+                defaultValue = parseAssignmentExpression();
+            }
+            function->defaultValues.push_back(std::move(defaultValue));
+
+            if (!check(TokenType::RightParen)) {
+                consume(TokenType::Comma, "Expected ',' between parameters");
+            }
+        }
+        consume(TokenType::RightParen, "Expected ')' after parameters");
+
+        if (match(TokenType::Colon)) {
+            function->returnType = parseTypeAnnotation();
+        }
+        function->body = parseBlockStatement();
+        return function;
+    };
+
     while (!check(TokenType::RightBrace) && !isAtEnd()) {
         // Spread property: { ...obj }
         if (match(TokenType::DotDotDot)) {
             auto spread = std::make_unique<SpreadExpr>(parseAssignmentExpression());
             spread->location = getCurrentLocation();
-            
-            // Create a special spread property
+
             ObjectExpr::Property prop;
-            // Use a special marker for spread properties
             auto keyIdent = std::make_unique<StringLiteral>("...");
             prop.key = std::move(keyIdent);
             prop.value = std::move(spread);
@@ -1206,114 +1391,116 @@ std::unique_ptr<Expr> Parser::parseObjectLiteral() {
             }
             continue;
         }
-        
+
         ObjectExpr::Property property;
-        
-        // Computed property: [key]: value
+
+        bool isAsync = false;
+        bool isGenerator = false;
+        ObjectExpr::Property::Kind methodKind =
+            ObjectExpr::Property::Kind::Method;
+
+        // `async` is contextual: async() {} is a method named "async", while
+        // async method() {} and async *method() {} carry the async modifier.
+        if (check(TokenType::KeywordAsync) &&
+            peek(1).type != TokenType::LeftParen &&
+            peek(1).type != TokenType::Colon &&
+            peek(1).type != TokenType::Comma &&
+            peek(1).type != TokenType::RightBrace) {
+            advance();
+            isAsync = true;
+        }
+        if (match(TokenType::Star)) {
+            isGenerator = true;
+        }
+
+        // `get` and `set` are accessor introducers only when followed by
+        // another property name. get() {}, set: 1 and { get } use ordinary
+        // IdentifierName semantics.
+        if ((check(TokenType::KeywordGet) || check(TokenType::KeywordSet)) &&
+            peek(1).type != TokenType::LeftParen &&
+            peek(1).type != TokenType::Colon &&
+            peek(1).type != TokenType::Comma &&
+            peek(1).type != TokenType::RightBrace) {
+            const bool getter = check(TokenType::KeywordGet);
+            advance();
+            methodKind = getter ? ObjectExpr::Property::Kind::Get
+                                : ObjectExpr::Property::Kind::Set;
+        }
+
+        SourceLocation keyLocation = getCurrentLocation();
         if (match(TokenType::LeftBracket)) {
             property.isComputed = true;
             property.key = parseAssignmentExpression();
             consume(TokenType::RightBracket, "Expected ']' after computed property");
-            consume(TokenType::Colon, "Expected ':' after computed property key");
-            property.value = parseAssignmentExpression();
-            property.isShorthand = false;
-            property.kind = ObjectExpr::Property::Kind::Init;
-        }
-        // Key
-        else if (check(TokenType::Identifier)) {
-            Token key = advance();
-            auto keyIdent = std::make_unique<Identifier>(key.value);
-            keyIdent->location = key.location;
-            property.key = std::move(keyIdent);
-
-            // Method shorthand: { method() { ... } }
-            if (check(TokenType::LeftParen)) {
-                // Parse as method: method(params) { body }
-                auto func = std::make_unique<FunctionExpr>();
-                func->location = key.location;
-
-                // Parse parameters
-                consume(TokenType::LeftParen, "Expected '(' after method name");
-
-                while (!check(TokenType::RightParen) && !isAtEnd()) {
-                    Token param = consume(TokenType::Identifier, "Expected parameter name");
-                    func->params.push_back(param.value);
-                    func->paramPatterns.push_back(nullptr);
-
-                    // Optional type annotation
-                    TypePtr paramType = nullptr;
-                    if (match(TokenType::Colon)) {
-                        paramType = parseTypeAnnotation();
-                    }
-                    func->paramTypes.push_back(std::move(paramType));
-                    func->defaultValues.push_back(nullptr);
-
-                    if (!check(TokenType::RightParen)) {
-                        consume(TokenType::Comma, "Expected ',' between parameters");
-                    }
-                }
-
-                consume(TokenType::RightParen, "Expected ')' after parameters");
-
-                // Optional return type
-                if (match(TokenType::Colon)) {
-                    func->returnType = parseTypeAnnotation();
-                }
-
-                // Method body
-                func->body = parseBlockStatement();
-
-                property.value = std::move(func);
-                property.isShorthand = false;
-                property.isComputed = false;
-                property.kind = ObjectExpr::Property::Kind::Method;
-            }
-            // Shorthand property: { x } instead of { x: x }
-            else if (check(TokenType::Comma) || check(TokenType::RightBrace)) {
-                property.isShorthand = true;
-                auto valueIdent = std::make_unique<Identifier>(key.value);
-                valueIdent->location = key.location;
-                property.value = std::move(valueIdent);
-                property.isComputed = false;
-                property.kind = ObjectExpr::Property::Kind::Init;
-            }
-            // Regular property: { key: value }
-            else {
-                consume(TokenType::Colon, "Expected ':' after property key");
-                property.value = parseAssignmentExpression();
-                property.isShorthand = false;
-                property.isComputed = false;
-                property.kind = ObjectExpr::Property::Kind::Init;
-            }
-        } 
-        else if (check(TokenType::StringLiteral)) {
+        } else if (check(TokenType::StringLiteral)) {
             Token key = advance();
             auto keyStr = std::make_unique<StringLiteral>(key.value);
             keyStr->location = key.location;
             property.key = std::move(keyStr);
-            consume(TokenType::Colon, "Expected ':' after property key");
-            property.value = parseAssignmentExpression();
-            property.isShorthand = false;
             property.isComputed = false;
-            property.kind = ObjectExpr::Property::Kind::Init;
-        } 
-        else {
+            keyLocation = key.location;
+        } else if (check(TokenType::NumberLiteral)) {
+            Token key = advance();
+            auto keyNumber = std::make_unique<NumberLiteral>(
+                std::stod(key.value), key.value);
+            keyNumber->location = key.location;
+            property.key = std::move(keyNumber);
+            property.isComputed = false;
+            keyLocation = key.location;
+        } else if (checkIdentifierName()) {
+            Token key = consumeIdentifierName("Expected property name");
+            auto keyIdent = std::make_unique<Identifier>(key.value);
+            keyIdent->location = key.location;
+            property.key = std::move(keyIdent);
+            property.isComputed = false;
+            keyLocation = key.location;
+        } else {
             reportError("Expected property name");
             break;
         }
-        
+
+        if (check(TokenType::LeftParen)) {
+            property.value = parseMethod(
+                keyLocation, isAsync, isGenerator);
+            property.isShorthand = false;
+            property.kind = methodKind;
+        } else {
+            if (isAsync || isGenerator ||
+                methodKind != ObjectExpr::Property::Kind::Method) {
+                reportError("Expected '(' after method name");
+                break;
+            }
+
+            if (!property.isComputed &&
+                (check(TokenType::Comma) || check(TokenType::RightBrace))) {
+                property.isShorthand = true;
+                const auto* identifier =
+                    dynamic_cast<Identifier*>(property.key.get());
+                auto value = std::make_unique<Identifier>(
+                    identifier ? identifier->name : "");
+                value->location = keyLocation;
+                property.value = std::move(value);
+                property.kind = ObjectExpr::Property::Kind::Init;
+            } else {
+                consume(TokenType::Colon, "Expected ':' after property key");
+                property.value = parseAssignmentExpression();
+                property.isShorthand = false;
+                property.kind = ObjectExpr::Property::Kind::Init;
+            }
+        }
+
         properties.push_back(std::move(property));
-        
+
         if (!check(TokenType::RightBrace)) {
             consume(TokenType::Comma, "Expected ',' between properties");
         }
     }
-    
+
     consume(TokenType::RightBrace, "Expected '}'");
-    
+
     auto object = std::make_unique<ObjectExpr>(std::move(properties));
     object->location = getCurrentLocation();
-    
+
     return object;
 }
 
@@ -1511,10 +1698,8 @@ std::unique_ptr<Expr> Parser::parseClassExpression() {
 }
 
 std::unique_ptr<Expr> Parser::parseTemplateLiteral() {
-    std::cerr << "*** PARSER: parseTemplateLiteral() called!" << std::endl;
     Token lit = advance();
     std::string templateStr = lit.value;
-    std::cerr << "*** PARSER: Template string = '" << templateStr << "'" << std::endl;
 
     // Parse template literal with ${} expressions
     std::vector<std::string> quasis;
@@ -1713,7 +1898,7 @@ std::unique_ptr<Pattern> Parser::parseBindingPattern() {
         return parseObjectPattern();
     } else if (check(TokenType::LeftBracket)) {
         return parseArrayPattern();
-    } else if (check(TokenType::Identifier)) {
+    } else if (checkBindingIdentifier()) {
         auto name = advance().value;
         TypePtr type = nullptr;
         if (match(TokenType::Colon)) {
@@ -1891,6 +2076,4 @@ AssignmentExpr::Op tokenToAssignmentOp(TokenType type) {
 }
 
 } // namespace nova
-
-
 

@@ -13,6 +13,11 @@
 #include <llvm/Support/SourceMgr.h>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
+#include <filesystem>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -58,7 +63,25 @@ std::string CompilationCache::computeSourceHash(const std::string& sourceFile) c
 
     std::stringstream buffer;
     buffer << file.rdbuf();
-    return fnv1aHash(buffer.str());
+
+    // Also factor in the compiler binary's mtime so that recompiling nova.exe
+    // invalidates the cache (the compiler itself may emit different code).
+    std::string combined = buffer.str();
+    try {
+        // Locate nova.exe next to the running executable.
+        wchar_t exePathW[MAX_PATH] = {0};
+        if (GetModuleFileNameW(nullptr, exePathW, MAX_PATH) > 0) {
+            std::wstring wide(exePathW);
+            std::string exePath(wide.begin(), wide.end());
+            auto ftime = std::filesystem::last_write_time(exePath);
+            auto modTime = std::chrono::duration_cast<std::chrono::seconds>(
+                ftime.time_since_epoch()).count();
+            combined += "|nova_mtime=" + std::to_string(modTime);
+        }
+    } catch (...) {
+        // Ignore — source-only hash is the safe fallback.
+    }
+    return fnv1aHash(combined);
 }
 
 bool CompilationCache::isStale(const std::string& sourceFile, const CacheEntry& entry) const {

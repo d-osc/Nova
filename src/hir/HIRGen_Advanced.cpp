@@ -88,8 +88,129 @@ void HIRGenerator::visit(TemplateLiteralExpr& node) {
                     lastValue_ = callInst;
                     exprValue = lastValue_;
 
-                    std::cerr << "  *** TEMPLATE DEBUG: Created nova_i64_to_string call, inst ptr=" << callInst << std::endl;
-                    std::cerr << "  *** TEMPLATE DEBUG: exprValue now points to: " << exprValue << std::endl;
+                    if(NOVA_DEBUG) {
+                        std::cerr << "  *** TEMPLATE DEBUG: Created nova_i64_to_string call, inst ptr=" << callInst << std::endl;
+                        std::cerr << "  *** TEMPLATE DEBUG: exprValue now points to: " << exprValue << std::endl;
+                    }
+                } else if (exprValue->type->kind == HIRType::Kind::F64 ||
+                           exprValue->type->kind == HIRType::Kind::F32) {
+                    if(NOVA_DEBUG) std::cerr << "  Converting float to string" << std::endl;
+                    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto f64Type = std::make_shared<HIRType>(HIRType::Kind::F64);
+                    std::vector<HIRTypePtr> paramTypes = {f64Type};
+
+                    HIRFunction* toStringFunc = nullptr;
+                    auto existingFunc = module_->getFunction("nova_f64_to_string");
+                    if (existingFunc) {
+                        toStringFunc = existingFunc.get();
+                    } else {
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, stringType);
+                        HIRFunctionPtr funcPtr = module_->createFunction("nova_f64_to_string", funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        toStringFunc = funcPtr.get();
+                    }
+
+                    std::vector<HIRValue*> args = {exprValue};
+                    auto* callInst = builder_->createCall(toStringFunc, args, "float_to_str");
+                    callInst->type = stringType;
+                    lastValue_ = callInst;
+                    exprValue = lastValue_;
+                } else if (exprValue->type->kind == HIRType::Kind::Bool) {
+                    // Convert boolean to "true" / "false" string via runtime.
+                    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                    // Widen bool to i64 for the C ABI.
+                    HIRValue* boolAsI64 = builder_->createCast(exprValue, i64Type.get());
+
+                    HIRFunction* toStringFunc = nullptr;
+                    auto existingFunc = module_->getFunction("nova_bool_to_string");
+                    if (existingFunc) {
+                        toStringFunc = existingFunc.get();
+                    } else {
+                        HIRFunctionType* funcType = new HIRFunctionType({i64Type}, stringType);
+                        HIRFunctionPtr funcPtr = module_->createFunction("nova_bool_to_string", funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        toStringFunc = funcPtr.get();
+                    }
+
+                    auto* callInst = builder_->createCall(toStringFunc, {boolAsI64}, "bool_to_str");
+                    callInst->type = stringType;
+                    lastValue_ = callInst;
+                    exprValue = lastValue_;
+                } else if (exprValue->type->kind == HIRType::Kind::Pointer) {
+                    // Inspect the pointee to choose between array vs. object
+                    // string conversion. Pointers with no known pointee default
+                    // to the array path (the common case for `${arr}`).
+                    bool isObjectPointer = false;
+                    if (auto* ptrTy = dynamic_cast<HIRPointerType*>(exprValue->type.get())) {
+                        if (ptrTy->pointeeType &&
+                            ptrTy->pointeeType->kind == HIRType::Kind::Struct) {
+                            isObjectPointer = true;
+                        }
+                    }
+                    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+                    if (isObjectPointer) {
+                        std::vector<HIRTypePtr> paramTypes = {ptrType};
+                        HIRFunction* toStringFunc = nullptr;
+                        const std::string runtimeName = "nova_object_toString";
+                        if (auto existing = module_->getFunction(runtimeName)) {
+                            toStringFunc = existing.get();
+                        } else {
+                            auto* funcType = new HIRFunctionType(paramTypes, stringType);
+                            auto funcPtr = module_->createFunction(runtimeName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            toStringFunc = funcPtr.get();
+                        }
+                        std::vector<HIRValue*> args = {exprValue};
+                        auto* callInst = builder_->createCall(toStringFunc, args, "obj_to_str");
+                        callInst->type = stringType;
+                        lastValue_ = callInst;
+                        exprValue = lastValue_;
+                    } else {
+                        std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType};
+                        HIRFunction* toStringFunc = nullptr;
+                        const std::string runtimeName = "nova_value_array_join";
+                        if (auto existing = module_->getFunction(runtimeName)) {
+                            toStringFunc = existing.get();
+                        } else {
+                            auto* funcType = new HIRFunctionType(paramTypes, stringType);
+                            auto funcPtr = module_->createFunction(runtimeName, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            toStringFunc = funcPtr.get();
+                        }
+                        auto* delim = builder_->createStringConstant(",");
+                        std::vector<HIRValue*> args = {exprValue, delim};
+                        auto* callInst = builder_->createCall(toStringFunc, args, "array_to_str");
+                        callInst->type = stringType;
+                        lastValue_ = callInst;
+                        exprValue = lastValue_;
+                    }
+                } else if (exprValue->type->kind == HIRType::Kind::Struct ||
+                           exprValue->type->kind == HIRType::Kind::Reference) {
+                    // Object literals become "[object Object]".
+                    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    std::vector<HIRTypePtr> paramTypes = {ptrType};
+
+                    HIRFunction* toStringFunc = nullptr;
+                    const std::string runtimeName = "nova_object_toString";
+                    if (auto existing = module_->getFunction(runtimeName)) {
+                        toStringFunc = existing.get();
+                    } else {
+                        auto* funcType = new HIRFunctionType(paramTypes, stringType);
+                        auto funcPtr = module_->createFunction(runtimeName, funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        toStringFunc = funcPtr.get();
+                    }
+
+                    std::vector<HIRValue*> args = {exprValue};
+                    auto* callInst = builder_->createCall(toStringFunc, args, "obj_to_str");
+                    callInst->type = stringType;
+                    lastValue_ = callInst;
+                    exprValue = lastValue_;
                 }
             }
 
@@ -433,6 +554,49 @@ void HIRGenerator::generateYieldDelegate(YieldExpr& node) {
 void HIRGenerator::visit(AsExpr& node) {
         // Type assertion - just evaluate expression
         node.expression->accept(*this);
+
+        if(NOVA_DEBUG) {
+            std::cerr << "DEBUG AsExpr: target name='" << (node.targetType ? node.targetType->name : "<null>")
+                      << "', lastValue_ type kind="
+                      << (lastValue_ && lastValue_->type ? static_cast<int>(lastValue_->type->kind) : -1)
+                      << std::endl;
+        }
+
+        // When casting a JSValue (e.g. an exception caught via `catch (e)`)
+        // to a class type, generate an unbox so subsequent field accesses
+        // resolve through the class's struct layout instead of falling
+        // through to the "property not found" path.
+        if (node.targetType && lastValue_ && lastValue_->type &&
+            lastValue_->type->kind == HIRType::Kind::JSValue &&
+            !node.targetType->name.empty()) {
+            auto structIt = classStructTypes_.find(node.targetType->name);
+            if(NOVA_DEBUG) {
+                std::cerr << "DEBUG AsExpr: looking up '" << node.targetType->name
+                          << "' in classStructTypes_, found="
+                          << (structIt != classStructTypes_.end() ? "YES" : "NO")
+                          << ", total entries=" << classStructTypes_.size() << std::endl;
+            }
+            if (structIt != classStructTypes_.end()) {
+                auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                auto structTypePtr = std::shared_ptr<HIRType>(
+                    structIt->second, [](HIRType*){});
+                auto ptrType = std::make_shared<HIRPointerType>(
+                    structTypePtr, true);
+                auto* function = [&]() -> HIRFunction* {
+                    if (auto existing = module_->getFunction("nova_value_to_object")) {
+                        return existing.get();
+                    }
+                    auto* functionType = new HIRFunctionType({jsValueType}, ptrType);
+                    auto created = module_->createFunction("nova_value_to_object", functionType);
+                    created->linkage = HIRFunction::Linkage::External;
+                    return created.get();
+                }();
+                auto* unboxed = builder_->createCall(
+                    function, {lastValue_}, "as_class_unbox");
+                unboxed->type = ptrType;
+                lastValue_ = unboxed;
+            }
+        }
     }
     
 void HIRGenerator::visit(SatisfiesExpr& node) {
@@ -460,10 +624,35 @@ void HIRGenerator::visit(TaggedTemplateExpr& node) {
         auto* stringsArray = builder_->createArrayConstruct(quasiValues, "tagged_strings");
         args.push_back(stringsArray);
 
-        // Evaluate and add each expression as additional arguments
+        // Evaluate each expression now so we know their values.
+        std::vector<HIRValue*> exprValues;
         for (auto& expr : node.expressions) {
             expr->accept(*this);
-            args.push_back(lastValue_);
+            exprValues.push_back(lastValue_);
+        }
+
+        // Determine if the callee has a rest parameter. When it does, the
+        // function signature is (strings, values_array) — we must collect
+        // expressions into a single runtime array. Otherwise pass them as
+        // individual arguments.
+        std::string calleeName;
+        if (auto* ident = dynamic_cast<Identifier*>(node.tag.get())) {
+            calleeName = ident->name;
+        }
+        bool hasRest = false;
+        if (!calleeName.empty()) {
+            auto restIt = module_->functionRestParams.find(calleeName);
+            if (restIt != module_->functionRestParams.end()) {
+                hasRest = true;
+            }
+        }
+
+        if (hasRest) {
+            auto* valuesArray = builder_->createArrayConstruct(
+                exprValues, "tagged_values");
+            args.push_back(valuesArray);
+        } else {
+            for (auto* v : exprValues) args.push_back(v);
         }
 
         // Call the tag function with (strings, ...values)
@@ -628,31 +817,47 @@ void HIRGenerator::visit(EnumDecl& node) {
         // Enum declaration - store enum values in enumTable_
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing enum declaration: " << node.name << " with " << node.members.size() << " members" << std::endl;
 
-        std::unordered_map<std::string, int64_t> members;
+        std::unordered_map<std::string, EnumValue> members;
         int64_t nextValue = 0;
+        bool hasStringMember = false;
 
         for (const auto& member : node.members) {
-            int64_t value = nextValue;
+            EnumValue ev;
 
             // If member has explicit initializer, evaluate it
             if (member.initializer) {
-                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Member " << member.name << " has initializer" << std::endl;
-                // For now, only support numeric literals as initializers
-                if (auto* numLit = dynamic_cast<NumberLiteral*>(member.initializer.get())) {
-                    value = static_cast<int64_t>(numLit->value);
-                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: NumberLiteral value = " << value << std::endl;
+                if (auto* strLit = dynamic_cast<StringLiteral*>(member.initializer.get())) {
+                    ev.kind = EnumValue::Kind::String;
+                    ev.stringValue = strLit->value;
+                    hasStringMember = true;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: StringLiteral value = \"" << ev.stringValue << "\"" << std::endl;
+                } else if (auto* numLit = dynamic_cast<NumberLiteral*>(member.initializer.get())) {
+                    ev.kind = EnumValue::Kind::Number;
+                    ev.numberValue = static_cast<int64_t>(numLit->value);
+                    nextValue = ev.numberValue + 1;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: NumberLiteral value = " << ev.numberValue << std::endl;
                 } else {
-                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Initializer is NOT a NumberLiteral" << std::endl;
+                    // Fallback: treat as number with auto-value
+                    ev.kind = EnumValue::Kind::Number;
+                    ev.numberValue = nextValue;
+                    nextValue++;
+                    if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Initializer is non-literal, using auto-value" << std::endl;
                 }
+            } else {
+                // Auto-increment numeric value
+                ev.kind = EnumValue::Kind::Number;
+                ev.numberValue = nextValue;
+                nextValue++;
             }
 
-            members[member.name] = value;
-            nextValue = value + 1;  // Next auto-value continues from here
-
-            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Enum member " << node.name << "." << member.name << " = " << value << std::endl;
+            members[member.name] = ev;
+            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Enum member " << node.name << "." << member.name << " = "
+                                     << (ev.kind == EnumValue::Kind::String ? "\"" + ev.stringValue + "\"" : std::to_string(ev.numberValue))
+                                     << std::endl;
         }
 
         enumTable_[node.name] = members;
+        enumIsString_[node.name] = hasStringMember;
     }
     
 void HIRGenerator::visit(ImportDecl& node) {
@@ -775,7 +980,7 @@ void HIRGenerator::visit(ImportDecl& node) {
         // Read the imported file
         std::ifstream file(resolvedPath);
         if (!file.is_open()) {
-            std::cerr << "ERROR HIRGen: Cannot open module file: " << resolvedPath << std::endl;
+            if (NOVA_DEBUG) std::cerr << "ERROR HIRGen: Cannot open module file: " << resolvedPath << std::endl;
             return;
         }
         std::stringstream ss;
@@ -786,14 +991,14 @@ void HIRGenerator::visit(ImportDecl& node) {
         // Parse the imported file
         nova::Lexer lexer(resolvedPath, importedSource);
         if (lexer.hasErrors()) {
-            std::cerr << "ERROR HIRGen: Lexer errors in imported module: " << resolvedPath << std::endl;
+            if (NOVA_DEBUG) std::cerr << "ERROR HIRGen: Lexer errors in imported module: " << resolvedPath << std::endl;
             return;
         }
 
         nova::Parser parser(lexer);
         auto ast = parser.parseProgram();
         if (parser.hasErrors()) {
-            std::cerr << "ERROR HIRGen: Parser errors in imported module: " << resolvedPath << std::endl;
+            if (NOVA_DEBUG) std::cerr << "ERROR HIRGen: Parser errors in imported module: " << resolvedPath << std::endl;
             return;
         }
 

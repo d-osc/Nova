@@ -146,6 +146,13 @@ public:
     hir::HIRStructType* createClosureEnvironment(const std::string& funcName);
     HIRValue* materializeClosureEnvironment(const std::string& funcName);
 
+    // Exception handling helper: when emitting a call inside a try block,
+    // poll nova_exception_pending() afterwards and branch to the catch
+    // block if a thrown exception is awaiting processing. Returns true
+    // when control should continue normally (no pending exception or no
+    // active try).
+    bool pollExceptionAfterCall();
+
     // Class helper methods
     void generateConstructorFunction(const std::string& className, const ClassDecl::Method& constructor, hir::HIRStructType* structType, std::function<HIRType::Kind(Type::Kind)> convertTypeKind);
     void generateDefaultConstructor(const std::string& className, hir::HIRStructType* structType);
@@ -265,7 +272,16 @@ private:
     std::unordered_map<std::string, std::unordered_map<std::string, FieldInitValue>> classFieldInitialValues_;
 
     // Enum tracking
-    std::unordered_map<std::string, std::unordered_map<std::string, int64_t>> enumTable_;  // Maps enum name -> member name -> value
+    struct EnumValue {
+        enum class Kind { Number, String };
+        Kind kind = Kind::Number;
+        int64_t numberValue = 0;
+        std::string stringValue;
+    };
+    // Maps enum name -> (member name -> value). For numeric enums we also
+    // populate reverse members (e.g., Color["0"] = "Red") in enumReverseTable_.
+    std::unordered_map<std::string, std::unordered_map<std::string, EnumValue>> enumTable_;
+    std::unordered_map<std::string, bool> enumIsString_;  // whether each enum has string backing
 
     // TypedArray type tracking
     std::unordered_map<std::string, std::string> typedArrayTypes_;  // Maps variable name -> TypedArray type
@@ -372,9 +388,14 @@ private:
     [[maybe_unused]] HIRBasicBlock* currentFinallyBlock_ = nullptr;
     [[maybe_unused]] HIRBasicBlock* currentTryEndBlock_ = nullptr;
 
-    // Break/continue target stacks for loops and switches
+    // Break/continue target stacks for loops and switches.
+    // Parallel label stack: for each entry pushed onto breakTargetStack_ by a
+    // labeled loop, we record the label here so labeled break/continue can
+    // find the right target by walking the stack. Empty string = unlabeled.
     std::vector<HIRBasicBlock*> breakTargetStack_;
     std::vector<HIRBasicBlock*> continueTargetStack_;
+    std::vector<std::string> breakTargetLabels_;
+    std::vector<std::string> continueTargetLabels_;
 
     // globalThis tracking (ES2020)
     bool lastWasGlobalThis_ = false;
@@ -461,6 +482,15 @@ private:
     // Builtin object type tracking
     std::unordered_map<std::string, std::string> variableObjectTypes_;
     std::string lastBuiltinObjectType_;
+
+    // Track variable "kind" for instanceof resolution:
+    // values are "Array", "Object", "Function", or empty.
+    std::unordered_map<std::string, std::string> variableKinds_;
+    std::string lastVariableKind_;
+
+    // Track typed-array element type per variable name (e.g. "arr" -> String)
+    // so array element access can return properly-typed values.
+    std::unordered_map<std::string, std::string> variableArrayElementTypes_;
 
     // Built-in module imports
     std::unordered_map<std::string, std::string> builtinModuleImports_;

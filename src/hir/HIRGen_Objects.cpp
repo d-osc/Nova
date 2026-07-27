@@ -2,7 +2,7 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
@@ -281,9 +281,29 @@ void HIRGenerator::visit(MemberExpr& node) {
                 if (enumIt != enumTable_.end()) {
                     auto memberIt = enumIt->second.find(propIdent->name);
                     if (memberIt != enumIt->second.end()) {
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Enum access " << objIdent->name << "." << propIdent->name << " = " << memberIt->second << std::endl;
-                        lastValue_ = builder_->createIntConstant(memberIt->second);
+                        const auto& ev = memberIt->second;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Enum access " << objIdent->name << "." << propIdent->name
+                                                 << " = " << (ev.kind == HIRGenerator::EnumValue::Kind::String ? "\"" + ev.stringValue + "\"" : std::to_string(ev.numberValue)) << std::endl;
+                        if (ev.kind == HIRGenerator::EnumValue::Kind::String) {
+                            lastValue_ = builder_->createStringConstant(ev.stringValue);
+                        } else {
+                            lastValue_ = builder_->createIntConstant(ev.numberValue);
+                        }
                         return;
+                    }
+                    // Reverse mapping for numeric enums: Color[0] -> "Red"
+                    if (node.isComputed) {
+                        // property is the expression in brackets
+                        if (auto* numLit = dynamic_cast<NumberLiteral*>(node.property.get())) {
+                            int64_t key = static_cast<int64_t>(numLit->value);
+                            for (const auto& p : enumIt->second) {
+                                if (p.second.kind == HIRGenerator::EnumValue::Kind::Number &&
+                                    p.second.numberValue == key) {
+                                    lastValue_ = builder_->createStringConstant(p.first);
+                                    return;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -291,13 +311,31 @@ void HIRGenerator::visit(MemberExpr& node) {
                 auto staticClassIt = classStaticProps_.find(objIdent->name);
                 if (staticClassIt != classStaticProps_.end()) {
                     if (staticClassIt->second.find(propIdent->name) != staticClassIt->second.end()) {
+                        // Emit runtime getter so static state can be mutated at runtime
+                        // (e.g. private static counters). Use the lazy-init variant so the
+                        // declared initializer is applied on first access without needing
+                        // an active HIR insert point at class-declaration time.
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
                         std::string propKey = objIdent->name + "_" + propIdent->name;
-                        auto valueIt = staticPropertyValues_.find(propKey);
-                        if (valueIt != staticPropertyValues_.end()) {
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Static property access " << propKey << " = " << valueIt->second << std::endl;
-                            lastValue_ = builder_->createIntConstant(valueIt->second);
-                            return;
+                        int64_t initValue = 0;
+                        auto ivIt = staticPropertyValues_.find(propKey);
+                        if (ivIt != staticPropertyValues_.end()) initValue = ivIt->second;
+                        std::string getter = "nova_class_static_get_or_init_i64";
+                        HIRFunction* func = nullptr;
+                        auto existing = module_->getFunction(getter);
+                        if (existing) func = existing.get();
+                        else {
+                            HIRFunctionType* ft = new HIRFunctionType({ptrType, ptrType, intType}, intType);
+                            HIRFunctionPtr fp = module_->createFunction(getter, ft);
+                            fp->linkage = HIRFunction::Linkage::External;
+                            func = fp.get();
                         }
+                        HIRValue* classNameArg = builder_->createStringConstant(objIdent->name);
+                        HIRValue* fieldNameArg = builder_->createStringConstant(propIdent->name);
+                        HIRValue* initValueArg = builder_->createIntConstant(initValue);
+                        lastValue_ = builder_->createCall(func, {classNameArg, fieldNameArg, initValueArg}, "static_get");
+                        return;
                     }
                 }
             }
@@ -373,6 +411,19 @@ void HIRGenerator::visit(MemberExpr& node) {
             }
             if (isStaticArray) {
                 lastValue_ = builder_->createGetElement(object, index, "array_elem");
+                // For typed arrays declared as `let arr: string[]`, the runtime
+                // element access returns I64 but downstream comparisons treat
+                // it as String. Apply an explicit cast so types align.
+                if (lastValue_ && lastValue_->type &&
+                    lastValue_->type->kind == HIRType::Kind::I64) {
+                    if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                        auto it = variableArrayElementTypes_.find(objIdent->name);
+                        if (it != variableArrayElementTypes_.end() && it->second == "String") {
+                            auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                            lastValue_ = builder_->createCast(lastValue_, stringType.get(), "array_elem_str");
+                        }
+                    }
+                }
                 return;
             }
 
@@ -470,6 +521,47 @@ void HIRGenerator::visit(MemberExpr& node) {
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
 
+            // String indexing: s[i] returns the single-character string at i,
+            // matching JS String.prototype.charAt semantics. Without this, the
+            // generic array path would invoke nova_value_array_at on a pointer
+            // to char data, reinterpreting char bytes as a runtime array header.
+            if (object && object->type &&
+                object->type->kind == hir::HIRType::Kind::String) {
+                std::string runtimeFunc = "nova_string_at";
+                auto existingFunc = module_->getFunction(runtimeFunc);
+                HIRFunction* func = nullptr;
+                if (existingFunc) {
+                    func = existingFunc.get();
+                } else {
+                    std::vector<HIRTypePtr> paramTypes = {
+                        std::make_shared<HIRType>(HIRType::Kind::String),
+                        intType};
+                    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, stringType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    func = funcPtr.get();
+                }
+                std::vector<HIRValue*> args = {object, index};
+                lastValue_ = builder_->createCall(func, args, "str_index");
+                lastValue_->type = std::make_shared<HIRType>(HIRType::Kind::String);
+                return;
+            }
+
+            // Determine element type from declared variable annotations
+            // (e.g. `let arr: string[] = ...`) so arr[i] returns a proper String.
+            HIRTypePtr resultType;
+            if (auto* objIdent = dynamic_cast<Identifier*>(node.object.get())) {
+                auto it = variableArrayElementTypes_.find(objIdent->name);
+                if (it != variableArrayElementTypes_.end()) {
+                    if (it->second == "String") {
+                        resultType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else if (it->second == "Bool") {
+                        resultType = std::make_shared<HIRType>(HIRType::Kind::Bool);
+                    }
+                }
+            }
+
             std::string runtimeFunc = "nova_value_array_at";
             auto existingFunc = module_->getFunction(runtimeFunc);
             HIRFunction* func = nullptr;
@@ -484,8 +576,15 @@ void HIRGenerator::visit(MemberExpr& node) {
             }
 
             std::vector<HIRValue*> args = {unboxTaggedObject(object), index};
-            lastValue_ = builder_->createCall(func, args, "array_elem");
-            lastValue_->type = intType;  // Ensure element has correct type!
+            HIRValue* elementValue = builder_->createCall(func, args, "array_elem");
+            // If the element type isn't I64 (e.g. String), emit an explicit
+            // cast so downstream uses see the correct type.
+            if (resultType && resultType->kind != HIRType::Kind::I64) {
+                lastValue_ = builder_->createCast(elementValue, resultType.get(), "array_elem_cast");
+            } else {
+                lastValue_ = elementValue;
+                lastValue_->type = intType;
+            }
         } else {
             // Regular member: obj.property (struct field access)
             if (auto propExpr = dynamic_cast<Identifier*>(node.property.get())) {
@@ -1113,6 +1212,7 @@ void HIRGenerator::visit(MemberExpr& node) {
                     // Check for built-in array properties
                     else if (object && object->type && propertyName == "length") {
                         hir::HIRArrayType* arrayType = nullptr;
+                        bool isOpaqueArrayPointer = false;
 
                         // Check if object is directly an array
                         if (object->type->kind == hir::HIRType::Kind::Array) {
@@ -1123,10 +1223,17 @@ void HIRGenerator::visit(MemberExpr& node) {
                             hir::HIRPointerType* ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get());
                             if (ptrType && ptrType->pointeeType && ptrType->pointeeType->kind == hir::HIRType::Kind::Array) {
                                 arrayType = dynamic_cast<hir::HIRArrayType*>(ptrType->pointeeType.get());
+                            } else {
+                                // Pointer without a typed pointee — this is how
+                                // runtime helpers like nova_string_split surface
+                                // their array results. Treat the pointer as a
+                                // reference to runtime array metadata so .length
+                                // resolves to the metadata's length field.
+                                isOpaqueArrayPointer = true;
                             }
                         }
 
-                        if (arrayType) {
+                        if (arrayType || isOpaqueArrayPointer) {
                             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Accessing built-in array.length property" << std::endl;
 
                             // Generate code to read length from metadata struct at runtime
@@ -1177,6 +1284,8 @@ void HIRGenerator::visit(MemberExpr& node) {
 void HIRGenerator::visit(ObjectExpr& node) {
         // Object literal construction
         // Create struct type with fields for each property
+        // Mark as Object for instanceof resolution
+        lastVariableKind_ = "Object";
         std::vector<hir::HIRStructType::Field> fields;
         std::vector<hir::HIRValue*> fieldValues;
         std::string structName = "anon_obj";

@@ -278,6 +278,7 @@ public:
     MIROperandPtr array;   // The array operand
     MIROperandPtr index;   // The index operand
     bool isFieldAccess;    // true for struct field access (arr.length), false for array element access (arr[0])
+    bool isClassFieldAccess = false;  // true when accessing a named class field (not array metadata)
     MIRTypePtr resultType; // Preserves pointer element types such as strings/nested arrays
 
     MIRGetElementRValue(MIROperandPtr arr, MIROperandPtr idx, bool isField = false,

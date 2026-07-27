@@ -2,9 +2,62 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
+
+namespace {
+
+// Best-effort compile-time evaluation of a class computed-key expression to a
+// string. Returns true and fills `out` when the key is constant-foldable;
+// returns false otherwise (caller should fall back to a placeholder).
+//
+// Supported shapes:
+//   - StringLiteral                            -> its value
+//   - NumberLiteral                            -> its stringified value
+//   - BinaryExpr(Add) of two foldable operands -> concatenation
+//   - Identifier                               -> NOT supported (returns false)
+bool tryFoldComputedKeyToStr(Expr* expr, std::string& out) {
+    if (!expr) return false;
+    if (auto* strLit = dynamic_cast<StringLiteral*>(expr)) {
+        out = strLit->value;
+        return true;
+    }
+    if (auto* numLit = dynamic_cast<NumberLiteral*>(expr)) {
+        out = std::to_string(numLit->value);
+        return true;
+    }
+    if (auto* binExpr = dynamic_cast<BinaryExpr*>(expr)) {
+        if (binExpr->op == BinaryExpr::Op::Add) {
+            std::string lhs, rhs;
+            if (tryFoldComputedKeyToStr(binExpr->left.get(), lhs) &&
+                tryFoldComputedKeyToStr(binExpr->right.get(), rhs)) {
+                out = lhs + rhs;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Resolve a (possibly computed) class member key to its effective name.
+// For non-computed members, returns the literal name. For computed members,
+// tries to fold the key expression; if folding fails, returns a placeholder
+// based on the source location so each unresolved member gets a unique name.
+std::string resolveMemberName(const std::string& literalName,
+                              bool isComputed,
+                              Expr* computedKey) {
+    if (!isComputed) return literalName;
+    std::string folded;
+    if (tryFoldComputedKeyToStr(computedKey, folded)) {
+        return folded;
+    }
+    // Fall back: produce a stable, unique placeholder.
+    static int counter = 0;
+    return "__computed_" + std::to_string(counter++) + "__";
+}
+
+} // namespace anonymous
 
 void HIRGenerator::visit(ClassExpr& node) {
         // Class expression: let C = class { value: number; constructor(v) { this.value = v; } }
@@ -219,11 +272,11 @@ void HIRGenerator::visit(ClassExpr& node) {
                 auto func = module_->createFunction(methodFuncName, funcType);
 
                 // DEBUG: Verify parameter types after function creation
-                std::cerr << "DEBUG METHOD: Created function " << methodFuncName << " with " << func->parameters.size() << " parameters" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "DEBUG METHOD: Created function " << methodFuncName << " with " << func->parameters.size() << " parameters" << std::endl;
                 if (!func->parameters.empty() && func->parameters[0]->type) {
                     std::cerr << "  parameter[0] type->kind = " << static_cast<int>(func->parameters[0]->type->kind) << std::endl;
                 } else {
-                    std::cerr << "  ERROR: parameter[0] type is NULL!" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "  ERROR: parameter[0] type is NULL!" << std::endl;
                 }
 
                 HIRFunction* savedFunction = currentFunction_;
@@ -250,12 +303,12 @@ void HIRGenerator::visit(ClassExpr& node) {
                 currentThis_ = func->parameters[0];
 
                 // DEBUG: Verify parameter type
-                std::cerr << "DEBUG METHOD: After setting currentThis_ from parameter[0]" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "DEBUG METHOD: After setting currentThis_ from parameter[0]" << std::endl;
                 std::cerr << "  currentThis_ pointer: " << currentThis_ << std::endl;
                 if (currentThis_ && currentThis_->type) {
                     std::cerr << "  currentThis_->type->kind = " << static_cast<int>(currentThis_->type->kind) << std::endl;
                 } else {
-                    std::cerr << "  ERROR: currentThis_->type is NULL!" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "  ERROR: currentThis_->type is NULL!" << std::endl;
                 }
 
                 if (method.body) {
@@ -330,16 +383,16 @@ void HIRGenerator::visit(NewExpr& node) {
                 objectName = objId->name;
                 if (auto* propId = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                     className = propId->name;
-                    std::cerr << "  DEBUG: MemberExpr class: " << objectName << "." << className << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "  DEBUG: MemberExpr class: " << objectName << "." << className << std::endl;
                 }
             }
             if (objectName.empty() || className.empty()) {
-                std::cerr << "  ERROR: 'new' expression with complex MemberExpr callee" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  ERROR: 'new' expression with complex MemberExpr callee" << std::endl;
                 lastValue_ = builder_->createIntConstant(0);
                 return;
             }
         } else {
-            std::cerr << "  ERROR: 'new' expression with non-identifier callee" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  ERROR: 'new' expression with non-identifier callee" << std::endl;
             lastValue_ = builder_->createIntConstant(0);
             return;
         }
@@ -388,7 +441,7 @@ void HIRGenerator::visit(NewExpr& node) {
             } else if (className == "Segmenter") {
                 runtimeFunc = "nova_intl_segmenter_create";
             } else {
-                std::cerr << "  ERROR: Unknown Intl constructor: " << className << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  ERROR: Unknown Intl constructor: " << className << std::endl;
                 lastValue_ = builder_->createIntConstant(0);
                 return;
             }
@@ -423,7 +476,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle AggregateError separately - it has different signature: (errors, message)
         if (className == "AggregateError") {
-            std::cerr << "  DEBUG: Handling AggregateError" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling AggregateError" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -463,7 +516,7 @@ void HIRGenerator::visit(NewExpr& node) {
                 HIRFunctionPtr funcPtr = module_->createFunction("nova_aggregate_error_create", funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
                 func = funcPtr.get();
-                std::cerr << "  DEBUG: Created external function: nova_aggregate_error_create" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  DEBUG: Created external function: nova_aggregate_error_create" << std::endl;
             }
 
             // Prepare arguments in runtime order: (message, errors, count)
@@ -474,13 +527,13 @@ void HIRGenerator::visit(NewExpr& node) {
 
             lastValue_ = builder_->createCall(func, args, "aggregate_error");
             lastValue_->type = ptrType;
-            std::cerr << "  DEBUG: Created AggregateError with " << errorCount << " errors" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Created AggregateError with " << errorCount << " errors" << std::endl;
             return;
         }
 
         // Handle ArrayBuffer constructor
         if (className == "ArrayBuffer") {
-            std::cerr << "  DEBUG: Handling ArrayBuffer constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling ArrayBuffer constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -515,7 +568,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle SharedArrayBuffer constructor (ES2017)
         if (className == "SharedArrayBuffer") {
-            std::cerr << "  DEBUG: Handling SharedArrayBuffer constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling SharedArrayBuffer constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -550,8 +603,6 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Map constructor (ES2015)
         if (className == "Map") {
-            std::cerr << "  DEBUG: Handling Map constructor" << std::endl;
-
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
             std::string runtimeFunc = "nova_map_create";
@@ -577,9 +628,33 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Set constructor (ES2015)
         if (className == "Set") {
-            std::cerr << "  DEBUG: Handling Set constructor" << std::endl;
-
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+            // If an iterable argument was provided, use nova_set_create_from
+            if (node.arguments.size() > 0) {
+                node.arguments[0]->accept(*this);
+                HIRValue* iterableArg = lastValue_;
+
+                std::string runtimeFunc = "nova_set_create_from";
+                std::vector<HIRTypePtr> paramTypes = {ptrType};
+
+                auto existingFunc = module_->getFunction(runtimeFunc);
+                HIRFunction* func = nullptr;
+                if (existingFunc) {
+                    func = existingFunc.get();
+                } else {
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                    HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    func = funcPtr.get();
+                }
+
+                std::vector<HIRValue*> args = {iterableArg};
+                lastValue_ = builder_->createCall(func, args, "set_from");
+                lastValue_->type = ptrType;
+                lastWasSet_ = true;
+                return;
+            }
 
             std::string runtimeFunc = "nova_set_create";
             std::vector<HIRTypePtr> paramTypes;  // No parameters for new Set()
@@ -604,8 +679,6 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle WeakMap constructor (ES2015)
         if (className == "WeakMap") {
-            std::cerr << "  DEBUG: Handling WeakMap constructor" << std::endl;
-
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
             std::string runtimeFunc = "nova_weakmap_create";
@@ -631,8 +704,6 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle WeakRef constructor (ES2021)
         if (className == "WeakRef") {
-            std::cerr << "  DEBUG: Handling WeakRef constructor" << std::endl;
-
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
             std::string runtimeFunc = "nova_weakref_create";
@@ -666,7 +737,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle WeakSet constructor (ES2015)
         if (className == "WeakSet") {
-            std::cerr << "  DEBUG: Handling WeakSet constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling WeakSet constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -693,7 +764,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle URL constructor (Web API)
         if (className == "URL") {
-            std::cerr << "  DEBUG: Handling URL constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling URL constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -752,7 +823,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle URLSearchParams constructor (Web API)
         if (className == "URLSearchParams") {
-            std::cerr << "  DEBUG: Handling URLSearchParams constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling URLSearchParams constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -787,7 +858,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle TextEncoder constructor (Web API)
         if (className == "TextEncoder") {
-            std::cerr << "  DEBUG: Handling TextEncoder constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling TextEncoder constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -814,7 +885,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle TextDecoder constructor (Web API)
         if (className == "TextDecoder") {
-            std::cerr << "  DEBUG: Handling TextDecoder constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling TextDecoder constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -851,7 +922,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Headers constructor (Web API)
         if (className == "Headers") {
-            std::cerr << "  DEBUG: Handling Headers constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling Headers constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -878,7 +949,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Request constructor (Web API)
         if (className == "Request") {
-            std::cerr << "  DEBUG: Handling Request constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling Request constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -913,7 +984,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Response constructor (Web API)
         if (className == "Response") {
-            std::cerr << "  DEBUG: Handling Response constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling Response constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
@@ -955,7 +1026,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Proxy constructor (ES2015)
         if (className == "Proxy") {
-            std::cerr << "  DEBUG: Handling Proxy constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling Proxy constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -997,7 +1068,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle Date constructor (ES1)
         if (className == "Date") {
-            std::cerr << "  DEBUG: Handling Date constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling Date constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -1012,11 +1083,49 @@ void HIRGenerator::visit(NewExpr& node) {
                 // No parameters
             } else if (node.arguments.size() == 1) {
                 // new Date(timestamp) or new Date(dateString)
-                // For now, assume timestamp (number)
-                runtimeFunc = "nova_date_create_timestamp";
-                paramTypes.push_back(intType);
-                node.arguments[0]->accept(*this);
-                args.push_back(lastValue_);
+                // Check if the argument is a string
+                bool isStringArg = false;
+                if (auto* strLit = dynamic_cast<StringLiteral*>(node.arguments[0].get())) {
+                    isStringArg = true;
+                } else if (auto* ident = dynamic_cast<Identifier*>(node.arguments[0].get())) {
+                    // Could be a string variable - hard to know without type info
+                    // Conservative: only treat string literals as date strings
+                    isStringArg = false;
+                }
+
+                if (isStringArg) {
+                    // new Date(dateString) - parse string to timestamp first
+                    // Step 1: evaluate the string argument
+                    node.arguments[0]->accept(*this);
+                    HIRValue* strArg = lastValue_;
+
+                    // Step 2: call nova_date_parse(string) -> i64 timestamp
+                    auto strType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    std::vector<HIRTypePtr> parseParamTypes = {strType};
+                    auto parseReturnType = intType;
+                    auto existingParseFunc = module_->getFunction("nova_date_parse");
+                    HIRFunction* parseFunc = nullptr;
+                    if (existingParseFunc) {
+                        parseFunc = existingParseFunc.get();
+                    } else {
+                        HIRFunctionType* parseFuncType = new HIRFunctionType(parseParamTypes, parseReturnType);
+                        HIRFunctionPtr parseFuncPtr = module_->createFunction("nova_date_parse", parseFuncType);
+                        parseFuncPtr->linkage = HIRFunction::Linkage::External;
+                        parseFunc = parseFuncPtr.get();
+                    }
+                    HIRValue* timestampArg = builder_->createCall(parseFunc, {strArg}, "parsed_date");
+
+                    // Step 3: call nova_date_create_timestamp(timestamp)
+                    runtimeFunc = "nova_date_create_timestamp";
+                    paramTypes.push_back(intType);
+                    args.push_back(timestampArg);
+                } else {
+                    // new Date(timestamp) - numeric timestamp
+                    runtimeFunc = "nova_date_create_timestamp";
+                    paramTypes.push_back(intType);
+                    node.arguments[0]->accept(*this);
+                    args.push_back(lastValue_);
+                }
             } else {
                 // new Date(year, month, day?, hour?, minute?, second?, ms?)
                 runtimeFunc = "nova_date_create_parts";
@@ -1063,7 +1172,7 @@ void HIRGenerator::visit(NewExpr& node) {
             className == "Float32Array" || className == "Float64Array" ||
             className == "BigInt64Array" || className == "BigUint64Array") {
 
-            std::cerr << "  DEBUG: Handling TypedArray constructor: " << className << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling TypedArray constructor: " << className << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -1179,7 +1288,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle DataView constructor
         if (className == "DataView") {
-            std::cerr << "  DEBUG: Handling DataView constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling DataView constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -1227,7 +1336,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle DisposableStack constructor (ES2024)
         if (className == "DisposableStack") {
-            std::cerr << "  DEBUG: Handling DisposableStack constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling DisposableStack constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -1253,7 +1362,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle AsyncDisposableStack constructor (ES2024)
         if (className == "AsyncDisposableStack") {
-            std::cerr << "  DEBUG: Handling AsyncDisposableStack constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling AsyncDisposableStack constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -1279,7 +1388,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle FinalizationRegistry constructor (ES2021)
         if (className == "FinalizationRegistry") {
-            std::cerr << "  DEBUG: Handling FinalizationRegistry constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling FinalizationRegistry constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
@@ -1315,7 +1424,7 @@ void HIRGenerator::visit(NewExpr& node) {
         // Handle GeneratorFunction constructor (ES2015)
         // new GeneratorFunction([arg1, arg2, ...argN], functionBody)
         if (className == "GeneratorFunction") {
-            std::cerr << "  DEBUG: Handling GeneratorFunction constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling GeneratorFunction constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -1341,8 +1450,8 @@ void HIRGenerator::visit(NewExpr& node) {
                 }
             }
 
-            std::cerr << "  DEBUG: GeneratorFunction body: " << body << std::endl;
-            std::cerr << "  DEBUG: GeneratorFunction params: " << paramNames.size() << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: GeneratorFunction body: " << body << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: GeneratorFunction params: " << paramNames.size() << std::endl;
 
             // Create runtime call (will log warning about AOT limitation)
             std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, intType};  // body, paramNames, paramCount
@@ -1371,7 +1480,7 @@ void HIRGenerator::visit(NewExpr& node) {
         // Handle AsyncGeneratorFunction constructor (ES2018)
         // new AsyncGeneratorFunction([arg1, arg2, ...argN], functionBody)
         if (className == "AsyncGeneratorFunction") {
-            std::cerr << "  DEBUG: Handling AsyncGeneratorFunction constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling AsyncGeneratorFunction constructor" << std::endl;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -1394,8 +1503,8 @@ void HIRGenerator::visit(NewExpr& node) {
                 }
             }
 
-            std::cerr << "  DEBUG: AsyncGeneratorFunction body: " << body << std::endl;
-            std::cerr << "  DEBUG: AsyncGeneratorFunction params: " << paramNames.size() << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: AsyncGeneratorFunction body: " << body << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: AsyncGeneratorFunction params: " << paramNames.size() << std::endl;
 
             std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, intType};
             auto existingFunc = module_->getFunction("nova_async_generator_function_create");
@@ -1526,7 +1635,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Handle SuppressedError (ES2024) - takes 3 arguments: error, suppressed, message
         if (className == "SuppressedError") {
-            std::cerr << "  DEBUG: Handling SuppressedError constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling SuppressedError constructor" << std::endl;
 
             // Get arguments: error, suppressed, message
             HIRValue* errorArg = nullptr;
@@ -1563,7 +1672,7 @@ void HIRGenerator::visit(NewExpr& node) {
                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
                 func = funcPtr.get();
-                std::cerr << "  DEBUG: Created external function: " << runtimeFunc << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  DEBUG: Created external function: " << runtimeFunc << std::endl;
             }
 
             // Prepare arguments with defaults
@@ -1575,7 +1684,7 @@ void HIRGenerator::visit(NewExpr& node) {
             lastValue_ = builder_->createCall(func, args, "suppressed_error");
             lastValue_->type = ptrType;
             lastWasSuppressedError_ = true;
-            std::cerr << "  DEBUG: Created SuppressedError" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Created SuppressedError" << std::endl;
             return;
         }
 
@@ -1584,7 +1693,7 @@ void HIRGenerator::visit(NewExpr& node) {
             className == "ReferenceError" || className == "SyntaxError" || className == "URIError" ||
             className == "InternalError" || className == "EvalError") {
 
-            std::cerr << "  DEBUG: Handling builtin error type: " << className << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Handling builtin error type: " << className << std::endl;
 
             // Get message argument if provided
             HIRValue* messageArg = nullptr;
@@ -1619,7 +1728,7 @@ void HIRGenerator::visit(NewExpr& node) {
                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
                 func = funcPtr.get();
-                std::cerr << "  DEBUG: Created external function: " << runtimeFunc << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  DEBUG: Created external function: " << runtimeFunc << std::endl;
             }
 
             // Prepare arguments
@@ -1633,8 +1742,11 @@ void HIRGenerator::visit(NewExpr& node) {
 
             lastValue_ = builder_->createCall(func, args, "error_obj");
             lastValue_->type = ptrType;
-            std::cerr << "  DEBUG: Created " << className << " via " << runtimeFunc << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Created " << className << " via " << runtimeFunc << std::endl;
             lastWasError_ = true;  // Track for variable declaration
+            // Remember class name so subsequent variable declarations record
+            // this as an Error-derived instance for instanceof resolution.
+            lastClassName_ = className;
             return;
         }
 
@@ -1652,7 +1764,7 @@ void HIRGenerator::visit(NewExpr& node) {
 
         // Evaluate arguments
         std::vector<HIRValue*> args;
-        std::cerr << "  DEBUG NEW: Evaluating " << node.arguments.size() << " constructor arguments" << std::endl;
+        if (NOVA_DEBUG) std::cerr << "  DEBUG NEW: Evaluating " << node.arguments.size() << " constructor arguments" << std::endl;
         for (size_t i = 0; i < node.arguments.size(); ++i) {
             node.arguments[i]->accept(*this);
             if (lastValue_ && lastValue_->type) {
@@ -1706,12 +1818,12 @@ void HIRGenerator::visit(NewExpr& node) {
         // Call constructor function
         auto constructorFunc = module_->getFunction(constructorName);
         if (!constructorFunc) {
-            std::cerr << "  ERROR: Constructor function not found: " << constructorName << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  ERROR: Constructor function not found: " << constructorName << std::endl;
             lastValue_ = builder_->createIntConstant(0);
             return;
         }
 
-        std::cerr << "  DEBUG CALL: Calling constructor " << constructorName << " with " << args.size() << " args" << std::endl;
+        if (NOVA_DEBUG) std::cerr << "  DEBUG CALL: Calling constructor " << constructorName << " with " << args.size() << " args" << std::endl;
         for (size_t i = 0; i < args.size(); ++i) {
             if (args[i] && args[i]->type) {
                 std::cerr << "    call_arg[" << i << "] type->kind = " << static_cast<int>(args[i]->type->kind) << std::endl;
@@ -1719,7 +1831,11 @@ void HIRGenerator::visit(NewExpr& node) {
         }
 
         lastValue_ = builder_->createCall(constructorFunc.get(), args, "new_instance");
-        std::cerr << "  DEBUG: Created call to constructor: " << constructorName << std::endl;
+        if (NOVA_DEBUG) std::cerr << "  DEBUG: Created call to constructor: " << constructorName << std::endl;
+
+        // Remember this class name for instanceof resolution when this value
+        // is assigned to a variable.
+        lastClassName_ = className;
 
         // Find and attach the struct type to the result
         hir::HIRStructType* structType = nullptr;
@@ -1728,7 +1844,7 @@ void HIRGenerator::visit(NewExpr& node) {
                 auto* candidateStruct = static_cast<hir::HIRStructType*>(type);
                 if (candidateStruct->name == actualClassName) {
                     structType = candidateStruct;
-                    std::cerr << "  DEBUG: Found struct type for class: " << actualClassName << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "  DEBUG: Found struct type for class: " << actualClassName << std::endl;
                     break;
                 }
             }
@@ -1737,9 +1853,9 @@ void HIRGenerator::visit(NewExpr& node) {
         // Attach the struct type to the instance value
         if (structType && lastValue_) {
             lastValue_->type = std::make_shared<hir::HIRStructType>(*structType);
-            std::cerr << "  DEBUG: Attached struct type to new instance" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Attached struct type to new instance" << std::endl;
         } else {
-            std::cerr << "  WARNING: Could not find struct type for class: " << actualClassName << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  WARNING: Could not find struct type for class: " << actualClassName << std::endl;
         }
     }
     
@@ -1755,24 +1871,11 @@ void HIRGenerator::visit(ThisExpr& node) {
             visit(lexicalThis);
             return;
         }
-        std::cerr << "\n=== TRACE: ThisExpr visitor ===" << std::endl;
-        std::cerr << "  currentThis_ pointer: " << currentThis_ << std::endl;
 
         if (currentThis_) {
             currentOrdinaryFunctionUsesThis_ = true;
             lastValue_ = currentThis_;
-            std::cerr << "  TRACE: Set lastValue_ = currentThis_" << std::endl;
-            std::cerr << "  TRACE: lastValue_ pointer: " << lastValue_ << std::endl;
-            if (lastValue_->type) {
-                std::cerr << "  TRACE: lastValue_->type->kind = " << static_cast<int>(lastValue_->type->kind) << std::endl;
-                std::cerr << "  TRACE: lastValue_->type pointer: " << lastValue_->type.get() << std::endl;
-            } else {
-                std::cerr << "  TRACE ERROR: lastValue_->type is NULL!" << std::endl;
-            }
-            std::cerr << "=== END TRACE ===" << std::endl;
         } else {
-            std::cerr << "  TRACE ERROR: 'this' used outside of method context!" << std::endl;
-            std::cerr << "=== END TRACE ===" << std::endl;
             // Create placeholder to avoid crash
             lastValue_ = builder_->createIntConstant(0);
         }
@@ -1820,7 +1923,7 @@ void HIRGenerator::visit(ClassDecl& node) {
 
         // INHERITANCE: If this class extends another, include parent fields first
         if (!node.superclass.empty()) {
-            std::cerr << "  DEBUG: Class " << node.name << " extends " << node.superclass << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Class " << node.name << " extends " << node.superclass << std::endl;
 
             // Store inheritance relationship
             classInheritance_[node.name] = node.superclass;
@@ -1829,16 +1932,46 @@ void HIRGenerator::visit(ClassDecl& node) {
             auto parentStructIt = classStructTypes_.find(node.superclass);
             if (parentStructIt != classStructTypes_.end()) {
                 hir::HIRStructType* parentStruct = parentStructIt->second;
-                std::cerr << "  DEBUG: Found parent struct with " << parentStruct->fields.size() << " fields" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  DEBUG: Found parent struct with " << parentStruct->fields.size() << " fields" << std::endl;
 
                 // Copy all parent fields to derived class
                 for (const auto& parentField : parentStruct->fields) {
                     fields.push_back(parentField);
                     fieldNames.insert(parentField.name);
-                    std::cerr << "  DEBUG: Inherited field: " << parentField.name << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "  DEBUG: Inherited field: " << parentField.name << std::endl;
                 }
             } else {
-                std::cerr << "  WARNING: Parent class " << node.superclass << " not found! Define parent before child." << std::endl;
+                // Builtin Error types don't have a user-defined ClassDecl, so
+                // there's no parent struct in classStructTypes_. Inject the
+                // standard Error fields (message, name, stack) so subclasses
+                // have well-known slots for these properties.
+                static const std::unordered_set<std::string> builtinErrors = {
+                    "Error", "TypeError", "RangeError", "ReferenceError",
+                    "SyntaxError", "URIError", "InternalError", "EvalError",
+                    "AggregateError"
+                };
+                if (builtinErrors.count(node.superclass)) {
+                    auto strType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::String);
+                    auto ptrType = std::make_shared<hir::HIRType>(hir::HIRType::Kind::Pointer);
+                    if (!fieldNames.count("message")) {
+                        fields.push_back({"message", strType, true});
+                        fieldNames.insert("message");
+                    }
+                    if (!fieldNames.count("name")) {
+                        fields.push_back({"name", strType, true});
+                        fieldNames.insert("name");
+                    }
+                    if (!fieldNames.count("stack")) {
+                        fields.push_back({"stack", ptrType, true});
+                        fieldNames.insert("stack");
+                    }
+                    if (!fieldNames.count("cause")) {
+                        fields.push_back({"cause", ptrType, true});
+                        fieldNames.insert("cause");
+                    }
+                } else {
+                    if (NOVA_DEBUG) std::cerr << "  WARNING: Parent class " << node.superclass << " not found! Define parent before child." << std::endl;
+                }
             }
         }
 
@@ -1847,7 +1980,6 @@ void HIRGenerator::visit(ClassDecl& node) {
             if (prop.isStatic) {
                 // Handle static property - store initial value
                 std::string propKey = node.name + "_" + prop.name;
-                std::cerr << "  DEBUG: Creating static property: " << propKey << std::endl;
 
                 // Evaluate initializer if present
                 int64_t initValue = 0;
@@ -1857,11 +1989,16 @@ void HIRGenerator::visit(ClassDecl& node) {
                     }
                 }
 
-                // Store static property value
+                // Store static property value (used as compile-time fallback and lazy-init default).
                 staticPropertyValues_[propKey] = initValue;
 
                 // Track which properties are static for this class
                 classStaticProps_[node.name].insert(prop.name);
+
+                // Defer the static initialization to first access (lazy init).
+                // The runtime `nova_class_static_get_i64` returns 0 for missing keys,
+                // which matches the common default; non-zero defaults are inlined
+                // directly at the get-site via nova_class_static_get_or_init_i64.
             } else {
                 // Instance property - add to struct fields
                 hir::HIRType::Kind typeKind = hir::HIRType::Kind::I64;
@@ -1871,7 +2008,7 @@ void HIRGenerator::visit(ClassDecl& node) {
                 auto fieldType = std::make_shared<hir::HIRType>(typeKind);
                 fields.push_back({prop.name, fieldType, true});
                 fieldNames.insert(prop.name);
-                std::cerr << "  DEBUG: Added field: " << prop.name << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  DEBUG: Added field: " << prop.name << std::endl;
             }
         }
 
@@ -1899,20 +2036,20 @@ void HIRGenerator::visit(ClassDecl& node) {
                                                 // Check what's being assigned
                                                 if (auto* stringLit = dynamic_cast<StringLiteral*>(assignExpr->right.get())) {
                                                     typeKind = hir::HIRType::Kind::String;
-                                                    std::cerr << "  DEBUG: Field '" << propName << "' inferred as String from string literal" << std::endl;
+                                                    if (NOVA_DEBUG) std::cerr << "  DEBUG: Field '" << propName << "' inferred as String from string literal" << std::endl;
                                                 } else if (auto* numLit = dynamic_cast<NumberLiteral*>(assignExpr->right.get())) {
                                                     typeKind = hir::HIRType::Kind::I64;
                                                 } else if (auto* ident = dynamic_cast<Identifier*>(assignExpr->right.get())) {
                                                     // Constructor parameter - use Any for dynamic typing
                                                     // Any type can hold numbers, strings, objects, etc.
                                                     typeKind = hir::HIRType::Kind::Any;
-                                                    std::cerr << "  DEBUG: Field '" << propName << "' inferred as Any from parameter '" << ident->name << "'" << std::endl;
+                                                    if (NOVA_DEBUG) std::cerr << "  DEBUG: Field '" << propName << "' inferred as Any from parameter '" << ident->name << "'" << std::endl;
                                                 }
 
                                                 auto fieldType = std::make_shared<hir::HIRType>(typeKind);
                                                 fields.push_back({propName, fieldType, true});
                                                 fieldNames.insert(propName);
-                                                std::cerr << "  DEBUG: Auto-added field '" << propName << "' from constructor" << std::endl;
+                                                if (NOVA_DEBUG) std::cerr << "  DEBUG: Auto-added field '" << propName << "' from constructor" << std::endl;
                                             }
                                         }
                                     }
@@ -1926,7 +2063,7 @@ void HIRGenerator::visit(ClassDecl& node) {
 
         auto structType = module_->createStructType(node.name);
         structType->fields = fields;
-        std::cerr << "  DEBUG: Created struct type with " << fields.size() << " fields" << std::endl;
+        if (NOVA_DEBUG) std::cerr << "  DEBUG: Created struct type with " << fields.size() << " fields" << std::endl;
 
         // Store struct type for inheritance lookups
         classStructTypes_[node.name] = structType;
@@ -1941,33 +2078,41 @@ void HIRGenerator::visit(ClassDecl& node) {
         }
 
         if (constructor) {
-            std::cerr << "  DEBUG: Generating constructor function" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Generating constructor function" << std::endl;
             generateConstructorFunction(node.name, *constructor, structType, convertTypeKind);
         } else {
             // Generate default constructor if none is defined
-            std::cerr << "  DEBUG: Generating default constructor" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Generating default constructor" << std::endl;
             generateDefaultConstructor(node.name, structType);
         }
 
         // 3. Generate method functions (including static, getters, setters)
         for (const auto& method : node.methods) {
-            if (method.kind == ClassDecl::Method::Kind::Method) {
-                if (method.isStatic) {
-                    std::cerr << "  DEBUG: Generating static method: " << method.name << std::endl;
-                    generateStaticMethodFunction(node.name, method, convertTypeKind);
+            // Resolve the method's effective name (handles computed keys).
+            // We const_cast to patch the name in-place: HIRGen is a single pass
+            // and the operation is idempotent, so this is safe.
+            std::string resolvedName = resolveMemberName(
+                method.name, method.isComputed, method.computedKey.get());
+            const_cast<ClassDecl::Method&>(method).name = resolvedName;
+            const auto& M = method;
+
+            if (M.kind == ClassDecl::Method::Kind::Method) {
+                if (M.isStatic) {
+                    if(NOVA_DEBUG) std::cerr << "  DEBUG: Generating static method: " << M.name << std::endl;
+                    generateStaticMethodFunction(node.name, M, convertTypeKind);
                 } else {
-                    std::cerr << "  DEBUG: Generating method: " << method.name << std::endl;
-                    generateMethodFunction(node.name, method, structType, convertTypeKind);
-                    classOwnMethods_[node.name].insert(method.name);
+                    if(NOVA_DEBUG) std::cerr << "  DEBUG: Generating method: " << M.name << std::endl;
+                    generateMethodFunction(node.name, M, structType, convertTypeKind);
+                    classOwnMethods_[node.name].insert(M.name);
                 }
-            } else if (method.kind == ClassDecl::Method::Kind::Get) {
-                std::cerr << "  DEBUG: Generating getter: " << method.name << std::endl;
-                generateGetterFunction(node.name, method, structType, convertTypeKind);
-                classGetters_[node.name].insert(method.name);
-            } else if (method.kind == ClassDecl::Method::Kind::Set) {
-                std::cerr << "  DEBUG: Generating setter: " << method.name << std::endl;
-                generateSetterFunction(node.name, method, structType, convertTypeKind);
-                classSetters_[node.name].insert(method.name);
+            } else if (M.kind == ClassDecl::Method::Kind::Get) {
+                if(NOVA_DEBUG) std::cerr << "  DEBUG: Generating getter: " << M.name << std::endl;
+                generateGetterFunction(node.name, M, structType, convertTypeKind);
+                classGetters_[node.name].insert(M.name);
+            } else if (M.kind == ClassDecl::Method::Kind::Set) {
+                if(NOVA_DEBUG) std::cerr << "  DEBUG: Generating setter: " << M.name << std::endl;
+                generateSetterFunction(node.name, M, structType, convertTypeKind);
+                classSetters_[node.name].insert(M.name);
             }
         }
 
@@ -2085,7 +2230,10 @@ void HIRGenerator::generateConstructorFunction(const std::string& className,
             currentThis_ = instancePtr;
         }
 
-        // NEW: Apply parent field initializations first (if this is a derived class)
+        // NEW: Apply parent field initializations (skip when hasSuperCall —
+        // super() will run parent's constructor which sets these fields, and
+        // instancePtr is nullptr until super() returns).
+        if (!hasSuperCall) {
         auto inheritIt = classInheritance_.find(className);
         if (inheritIt != classInheritance_.end()) {
             std::string parentClass = inheritIt->second;
@@ -2139,6 +2287,7 @@ void HIRGenerator::generateConstructorFunction(const std::string& className,
                     }
                 }
             }
+        }
         }
 
         // Process constructor body
@@ -2233,7 +2382,7 @@ void HIRGenerator::generateDefaultConstructor(const std::string& className,
         auto inheritIt = classInheritance_.find(className);
         if (inheritIt != classInheritance_.end()) {
             parentClass = inheritIt->second;
-            std::cerr << "  DEBUG: Generating default constructor for " << className << " (extends " << parentClass << ")" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "  DEBUG: Generating default constructor for " << className << " (extends " << parentClass << ")" << std::endl;
 
             // Look up parent constructor to match its parameters
             std::string parentInitName = parentClass + "_constructor";
@@ -2243,9 +2392,9 @@ void HIRGenerator::generateDefaultConstructor(const std::string& className,
                 for (size_t i = 1; i < parentInit.get()->parameters.size(); ++i) {
                     paramTypes.push_back(parentInit.get()->parameters[i]->type);
                 }
-                std::cerr << "  DEBUG: Parent constructor takes " << (parentInit.get()->parameters.size() - 1) << " params" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  DEBUG: Parent constructor takes " << (parentInit.get()->parameters.size() - 1) << " params" << std::endl;
             } else {
-                std::cerr << "  WARNING: Parent constructor " << parentInitName << " not found!" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  WARNING: Parent constructor " << parentInitName << " not found!" << std::endl;
             }
         }
 

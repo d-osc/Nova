@@ -107,6 +107,25 @@ void HIRGenerator::visit(CallExpr& node) {
             return;
         }
 
+        // When inside a try block, every call must poll nova_exception_pending()
+        // afterwards so a throw inside the callee transfers control to the
+        // catch block instead of silently resuming normal control flow.
+        struct PollGuard {
+            HIRGenerator* self;
+            HIRBasicBlock* savedCatch;
+            bool engaged;
+            ~PollGuard() {
+                if (engaged) {
+                    self->pollExceptionAfterCall();
+                }
+            }
+        };
+        // Only engage the guard when there is an active try. The guard's
+        // destructor runs at every return point of visit(CallExpr&), so we
+        // must be careful not to re-engage after manually emitting a branch.
+        PollGuard guard{this, currentCatchBlock_,
+            currentCatchBlock_ != nullptr};
+
         auto recordReturnedClosure = [&](const std::string& functionName) {
             auto returned = module_->closureReturnedBy.find(functionName);
             if (returned != module_->closureReturnedBy.end()) {
@@ -422,7 +441,86 @@ void HIRGenerator::visit(CallExpr& node) {
             if (!parentClass.empty()) {
                 // Call parent constructor: ParentClass_constructor(this, ...args)
                 std::string parentConstructorName = parentClass + "_constructor";
-                auto parentConstructor = module_->getFunction(parentConstructorName);
+                HIRFunction* parentConstructor = module_->getFunction(parentConstructorName).get();
+
+                // Special handling when extending a builtin Error type. There's
+                // no real Error_constructor to call. Instead, we treat super()
+                // as: set this.message = arg[0] and this.name = parentClass on
+                // the already-allocated user struct.
+                static const std::unordered_set<std::string> builtinErrors = {
+                    "Error", "TypeError", "RangeError", "ReferenceError",
+                    "SyntaxError", "URIError", "InternalError", "EvalError",
+                    "AggregateError"
+                };
+                if (!parentConstructor && builtinErrors.count(parentClass)) {
+                    // Evaluate super() arguments
+                    std::vector<HIRValue*> args;
+                    for (auto& arg : node.arguments) {
+                        arg->accept(*this);
+                        args.push_back(lastValue_);
+                    }
+
+                    // Allocate the user struct on the heap so subclass field
+                    // writes are valid. The struct type is the current class's
+                    // struct (currentClassStructType_).
+                    if (currentClassStructType_) {
+                        // Compute allocation size from struct field count. Each
+                        // field is an i64 slot; plus the 24-byte NovaObject
+                        // header that the runtime expects.
+                        size_t fieldCount = currentClassStructType_->fields.size();
+                        int64_t allocSize = static_cast<int64_t>(24 + fieldCount * 8);
+
+                        HIRFunction* mallocFunc = module_->getFunction("malloc").get();
+                        if (!mallocFunc) {
+                            auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            HIRFunctionType* mft = new HIRFunctionType({i64Type}, ptrType);
+                            auto mfp = module_->createFunction("malloc", mft);
+                            mfp->linkage = HIRFunction::Linkage::External;
+                            mallocFunc = mfp.get();
+                        }
+                        auto* sizeVal = builder_->createIntConstant(allocSize);
+                        HIRValue* newInstance = builder_->createCall(mallocFunc, {sizeVal}, "super_alloc");
+
+                        // Zero the header region so subsequent SetField writes
+                        // don't see garbage ObjectHeader bits. Then set the
+                        // 'message' and 'name' fields by name.
+                        HIRValue* thisPtr = newInstance;
+
+                        // Set message = args[0] if provided
+                        if (!args.empty()) {
+                            // Find 'message' field index
+                            for (size_t i = 0; i < currentClassStructType_->fields.size(); ++i) {
+                                const auto& f = currentClassStructType_->fields[i];
+                                if (f.name == "message") {
+                                    builder_->createSetField(thisPtr,
+                                        static_cast<uint32_t>(i), args[0], "message");
+                                    break;
+                                }
+                            }
+                        }
+                        // Set name = parentClass (Error, TypeError, etc.)
+                        for (size_t i = 0; i < currentClassStructType_->fields.size(); ++i) {
+                            const auto& f = currentClassStructType_->fields[i];
+                            if (f.name == "name") {
+                                builder_->createSetField(thisPtr,
+                                    static_cast<uint32_t>(i),
+                                    builder_->createStringConstant(parentClass),
+                                    "name");
+                                break;
+                            }
+                        }
+
+                        lastValue_ = thisPtr;
+                        currentThis_ = thisPtr;
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: super() to builtin Error allocated user struct and inited message/name" << std::endl;
+                        return;
+                    }
+                    // Fallback if no currentClassStructType_
+                    lastValue_ = builder_->createIntConstant(0);
+                    currentThis_ = lastValue_;
+                    return;
+                }
 
                 if (parentConstructor) {
                     // Evaluate arguments (constructors don't take 'this', they allocate it)
@@ -434,13 +532,13 @@ void HIRGenerator::visit(CallExpr& node) {
                     }
 
                     // Call parent constructor - it returns a new instance
-                    lastValue_ = builder_->createCall(parentConstructor.get(), args, "super_init");
+                    lastValue_ = builder_->createCall(parentConstructor, args, "super_init");
                     // Set currentThis_ to the instance returned by super() so subsequent this.field assignments work
                     currentThis_ = lastValue_;
                     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Called parent constructor " << parentConstructorName << " with " << args.size() << " args, set currentThis_=" << currentThis_ << std::endl;
                     return;
                 } else {
-                    std::cerr << "WARNING: Parent constructor " << parentConstructorName << " not found!" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "WARNING: Parent constructor " << parentConstructorName << " not found!" << std::endl;
                 }
             }
 
@@ -499,7 +597,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             recordReturnedClosure(mangledName);
                             return;
                         } else {
-                            std::cerr << "WARNING: super method " << mangledName << " not found!" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "WARNING: super method " << mangledName << " not found!" << std::endl;
                         }
                     }
                     lastValue_ = builder_->createIntConstant(0);
@@ -646,7 +744,7 @@ void HIRGenerator::visit(CallExpr& node) {
             if (ident->name == "parseInt") {
                 // parseInt() - for integer type system, just returns the argument value
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: parseInt() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: parseInt() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -657,7 +755,7 @@ void HIRGenerator::visit(CallExpr& node) {
             } else if (ident->name == "parseFloat") {
                 // parseFloat() - for integer type system, just returns the argument value
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: parseFloat() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: parseFloat() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -669,7 +767,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // isNaN() global function - tests if value is NaN after coercing to number
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: isNaN()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: isNaN() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: isNaN() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -710,7 +808,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // isFinite() global function - tests if value is finite after coercing to number
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: isFinite()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: isFinite() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: isFinite() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -751,7 +849,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // parseInt() global function - parses string to integer with optional radix
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: parseInt()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: parseInt() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: parseInt() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -802,7 +900,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // parseFloat() global function - parses string to floating-point number
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: parseFloat()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: parseFloat() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: parseFloat() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createFloatConstant(0.0);
                     return;
                 }
@@ -843,7 +941,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // encodeURIComponent() global function - encodes a URI component (ES3)
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: encodeURIComponent()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: encodeURIComponent() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: encodeURIComponent() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -884,7 +982,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // decodeURIComponent() global function - decodes a URI component (ES3)
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: decodeURIComponent()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: decodeURIComponent() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: decodeURIComponent() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -925,7 +1023,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // btoa() global function - encodes a string to base64 (Web API)
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: btoa()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: btoa() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: btoa() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -966,7 +1064,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // atob() global function - decodes a base64 string (Web API)
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: atob()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: atob() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: atob() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1007,7 +1105,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // setTimeout(callback, delay) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: setTimeout()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: setTimeout() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: setTimeout() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1055,7 +1153,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // setInterval(callback, delay) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: setInterval()" << std::endl;
                 if (node.arguments.size() < 2) {
-                    std::cerr << "ERROR: setInterval() expects at least 2 arguments" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: setInterval() expects at least 2 arguments" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1094,7 +1192,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // clearTimeout(id) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: clearTimeout()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: clearTimeout() expects 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: clearTimeout() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1130,7 +1228,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // clearInterval(id) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: clearInterval()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: clearInterval() expects 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: clearInterval() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1166,7 +1264,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // queueMicrotask(callback) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: queueMicrotask()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: queueMicrotask() expects 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: queueMicrotask() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1202,7 +1300,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // requestAnimationFrame(callback) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: requestAnimationFrame()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: requestAnimationFrame() expects 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: requestAnimationFrame() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1238,7 +1336,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // cancelAnimationFrame(id) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: cancelAnimationFrame()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: cancelAnimationFrame() expects 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: cancelAnimationFrame() expects 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1274,7 +1372,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // fetch(url, init?) - Web API
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: fetch()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: fetch() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: fetch() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1311,7 +1409,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // encodeURI() global function - encodes a full URI (ES3)
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: encodeURI()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: encodeURI() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: encodeURI() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1352,7 +1450,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 // decodeURI() global function - decodes a full URI (ES3)
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected global function call: decodeURI()" << std::endl;
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: decodeURI() expects at least 1 argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: decodeURI() expects at least 1 argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -1632,7 +1730,7 @@ void HIRGenerator::visit(CallExpr& node) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected BigInt() constructor call" << std::endl;
 
                 if (node.arguments.size() < 1) {
-                    std::cerr << "ERROR: BigInt() requires an argument" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "ERROR: BigInt() requires an argument" << std::endl;
                     lastValue_ = builder_->createIntConstant(0);
                     return;
                 }
@@ -2133,7 +2231,7 @@ void HIRGenerator::visit(CallExpr& node) {
                                 auto* arg = lastValue_;
 
                                 if(NOVA_DEBUG) {
-                                    std::cerr << "DEBUG HIRGen: console.log arg " << i << ": ";
+                                    if (NOVA_DEBUG) std::cerr << "DEBUG HIRGen: console.log arg " << i << ": ";
                                     if (arg && arg->type) {
                                         std::cerr << "type=" << static_cast<int>(arg->type->kind);
                                     } else {
@@ -2347,7 +2445,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     if (objIdent->name == "Math" && propIdent->name == "abs") {
                         // Generate inline absolute value: abs(x) = (x < 0) ? -x : x
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.abs() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.abs() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -2392,45 +2490,56 @@ void HIRGenerator::visit(CallExpr& node) {
                         bool isMax = (propIdent->name == "max");
                         std::string opName = isMax ? "max" : "min";
 
-                        // Generate inline max/min: max(a, b) = (a > b) ? a : b, min(a, b) = (a < b) ? a : b
-                        if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Math." << opName << "() expects exactly 2 arguments" << std::endl;
+                        // Math.min/max are variadic in JavaScript. The runtime
+                        // exposes a 2-arg helper; for n>2 we fold left-to-right.
+                        if (node.arguments.empty()) {
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math." << opName << "() expects at least 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
 
-                        // Evaluate both arguments
-                        node.arguments[0]->accept(*this);
-                        auto* arg1 = lastValue_;
-                        node.arguments[1]->accept(*this);
-                        auto* arg2 = lastValue_;
+                        // Pre-evaluate all arguments first
+                        std::vector<HIRValue*> argValues;
+                        argValues.reserve(node.arguments.size());
+                        for (const auto& arg : node.arguments) {
+                            arg->accept(*this);
+                            argValues.push_back(lastValue_);
+                        }
 
-                        // Create temporary variable to store result
+                        // Single arg: return as-is
+                        if (argValues.size() == 1) {
+                            return;
+                        }
+
+                        // Fold: acc = acc OP next for each subsequent arg
                         auto i64Type = new HIRType(HIRType::Kind::I64);
                         auto* resultAlloca = builder_->createAlloca(i64Type, opName + ".result");
+                        auto* accValue = argValues[0];
 
-                        // Create blocks for conditional
-                        auto* trueBlock = currentFunction_->createBasicBlock(opName + ".true").get();
-                        auto* falseBlock = currentFunction_->createBasicBlock(opName + ".false").get();
-                        auto* endBlock = currentFunction_->createBasicBlock(opName + ".end").get();
+                        for (size_t i = 1; i < argValues.size(); i++) {
+                            auto* nextValue = argValues[i];
+                            auto* condition = isMax
+                                ? builder_->createGt(accValue, nextValue)
+                                : builder_->createLt(accValue, nextValue);
 
-                        // Compare: arg1 > arg2 for max, arg1 < arg2 for min
-                        auto* condition = isMax ? builder_->createGt(arg1, arg2) : builder_->createLt(arg1, arg2);
-                        builder_->createCondBr(condition, trueBlock, falseBlock);
+                            auto* trueBlock = currentFunction_->createBasicBlock(opName + ".true").get();
+                            auto* falseBlock = currentFunction_->createBasicBlock(opName + ".false").get();
+                            auto* endBlock = currentFunction_->createBasicBlock(opName + ".end").get();
 
-                        // True block: store arg1
-                        builder_->setInsertPoint(trueBlock);
-                        builder_->createStore(arg1, resultAlloca);
-                        builder_->createBr(endBlock);
+                            builder_->createCondBr(condition, trueBlock, falseBlock);
 
-                        // False block: store arg2
-                        builder_->setInsertPoint(falseBlock);
-                        builder_->createStore(arg2, resultAlloca);
-                        builder_->createBr(endBlock);
+                            builder_->setInsertPoint(trueBlock);
+                            builder_->createStore(accValue, resultAlloca);
+                            builder_->createBr(endBlock);
 
-                        // End block: load and return result
-                        builder_->setInsertPoint(endBlock);
-                        lastValue_ = builder_->createLoad(resultAlloca);
+                            builder_->setInsertPoint(falseBlock);
+                            builder_->createStore(nextValue, resultAlloca);
+                            builder_->createBr(endBlock);
+
+                            builder_->setInsertPoint(endBlock);
+                            accValue = builder_->createLoad(resultAlloca);
+                        }
+                        lastValue_ = accValue;
                         return;
                     }
 
@@ -2438,7 +2547,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     if (objIdent->name == "Math" && propIdent->name == "pow") {
                         // Generate inline power: pow(base, exponent) using createPow
                         if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Math.pow() expects exactly 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.pow() expects exactly 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -2458,7 +2567,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     if (objIdent->name == "Math" && propIdent->name == "sign") {
                         // Generate inline sign: sign(x) = x < 0 ? -1 : (x > 0 ? 1 : 0)
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.sign() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.sign() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -2516,7 +2625,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.imul() performs C-like 32-bit multiplication
                         // For our integer type system, it's just regular multiplication
                         if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Math.imul() expects exactly 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.imul() expects exactly 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -2537,7 +2646,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.clz32() counts leading zero bits in 32-bit representation
                         // Implementation: use simple conditional approach for common cases
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.clz32() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.clz32() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -2622,23 +2731,157 @@ void HIRGenerator::visit(CallExpr& node) {
                     // Check if this is Math.trunc()
                     if (objIdent->name == "Math" && propIdent->name == "trunc") {
                         // Math.trunc() truncates to integer
-                        // For integer type system, it's a pass-through operation
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.trunc() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.trunc() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
 
-                        // Just return the argument value (already an integer)
                         node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // If input is already integer, return as-is
+                        if (value->type && value->type->kind != HIRType::Kind::F64 &&
+                            value->type->kind != HIRType::Kind::F32) {
+                            return;
+                        }
+
+                        // Float input: call nova_math_trunc(double) -> i64
+                        std::vector<HIRTypePtr> paramTypes = {std::make_shared<HIRType>(HIRType::Kind::F64)};
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        HIRFunction* runtimeFunc = nullptr;
+                        for (auto& func : module_->functions) {
+                            if (func->name == "nova_math_trunc") {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("nova_math_trunc", funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                        }
+                        lastValue_ = builder_->createCall(runtimeFunc, {value}, "math_trunc");
+                        lastValue_->type = returnType;
+                        return;
+                    }
+
+                    // Check if this is Math.round()
+                    if (objIdent->name == "Math" && propIdent->name == "round") {
+                        if (node.arguments.size() != 1) {
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.round() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        // If input is already integer, return as-is
+                        if (value->type && value->type->kind != HIRType::Kind::F64 &&
+                            value->type->kind != HIRType::Kind::F32) {
+                            return;
+                        }
+
+                        // Float input: call nova_math_round(double) -> i64
+                        std::vector<HIRTypePtr> paramTypes = {std::make_shared<HIRType>(HIRType::Kind::F64)};
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        HIRFunction* runtimeFunc = nullptr;
+                        for (auto& func : module_->functions) {
+                            if (func->name == "nova_math_round") {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("nova_math_round", funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                        }
+                        lastValue_ = builder_->createCall(runtimeFunc, {value}, "math_round");
+                        lastValue_->type = returnType;
+                        return;
+                    }
+
+                    // Check if this is Math.floor()
+                    if (objIdent->name == "Math" && propIdent->name == "floor") {
+                        if (node.arguments.size() != 1) {
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.floor() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        if (value->type && value->type->kind != HIRType::Kind::F64 &&
+                            value->type->kind != HIRType::Kind::F32) {
+                            return;
+                        }
+
+                        std::vector<HIRTypePtr> paramTypes = {std::make_shared<HIRType>(HIRType::Kind::F64)};
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        HIRFunction* runtimeFunc = nullptr;
+                        for (auto& func : module_->functions) {
+                            if (func->name == "nova_math_floor") {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("nova_math_floor", funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                        }
+                        lastValue_ = builder_->createCall(runtimeFunc, {value}, "math_floor");
+                        lastValue_->type = returnType;
+                        return;
+                    }
+
+                    // Check if this is Math.ceil()
+                    if (objIdent->name == "Math" && propIdent->name == "ceil") {
+                        if (node.arguments.size() != 1) {
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.ceil() expects exactly 1 argument" << std::endl;
+                            lastValue_ = builder_->createIntConstant(0);
+                            return;
+                        }
+
+                        node.arguments[0]->accept(*this);
+                        auto* value = lastValue_;
+
+                        if (value->type && value->type->kind != HIRType::Kind::F64 &&
+                            value->type->kind != HIRType::Kind::F32) {
+                            return;
+                        }
+
+                        std::vector<HIRTypePtr> paramTypes = {std::make_shared<HIRType>(HIRType::Kind::F64)};
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        HIRFunction* runtimeFunc = nullptr;
+                        for (auto& func : module_->functions) {
+                            if (func->name == "nova_math_ceil") {
+                                runtimeFunc = func.get();
+                                break;
+                            }
+                        }
+                        if (!runtimeFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("nova_math_ceil", funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            runtimeFunc = funcPtr.get();
+                        }
+                        lastValue_ = builder_->createCall(runtimeFunc, {value}, "math_ceil");
+                        lastValue_->type = returnType;
                         return;
                     }
 
                     // Check if this is Math.sqrt()
                     if (objIdent->name == "Math" && propIdent->name == "sqrt") {
-                        // Math.sqrt() - integer square root using Newton's method
+                        // Math.sqrt() - square root (IEEE 754 double)
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.sqrt() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.sqrt() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -2647,578 +2890,196 @@ void HIRGenerator::visit(CallExpr& node) {
                         node.arguments[0]->accept(*this);
                         auto* value = lastValue_;
 
-                        // For integer square root, we'll use Newton's method
-                        // Algorithm: x_{n+1} = (x_n + value/x_n) / 2
-                        auto i64Type = new HIRType(HIRType::Kind::I64);
-
-                        // Allocate result variable
-                        auto* resultAlloca = builder_->createAlloca(i64Type, "sqrt.result");
-                        auto* xAlloca = builder_->createAlloca(i64Type, "sqrt.x");
-                        auto* prevAlloca = builder_->createAlloca(i64Type, "sqrt.prev");
-
-                        // Check if value is 0 or 1 (special cases)
-                        auto* zero = builder_->createIntConstant(0);
-                        auto* one = builder_->createIntConstant(1);
-                        auto* isZero = builder_->createEq(value, zero);
-                        auto* isOne = builder_->createEq(value, one);
-
-                        auto* zeroBlock = currentFunction_->createBasicBlock("sqrt.zero").get();
-                        auto* oneCheckBlock = currentFunction_->createBasicBlock("sqrt.onecheck").get();
-                        auto* oneBlock = currentFunction_->createBasicBlock("sqrt.one").get();
-                        auto* initBlock = currentFunction_->createBasicBlock("sqrt.init").get();
-                        auto* loopBlock = currentFunction_->createBasicBlock("sqrt.loop").get();
-                        auto* endBlock = currentFunction_->createBasicBlock("sqrt.end").get();
-
-                        builder_->createCondBr(isZero, zeroBlock, oneCheckBlock);
-
-                        // Zero block: return 0
-                        builder_->setInsertPoint(zeroBlock);
-                        builder_->createStore(zero, resultAlloca);
-                        builder_->createBr(endBlock);
-
-                        // One check block
-                        builder_->setInsertPoint(oneCheckBlock);
-                        builder_->createCondBr(isOne, oneBlock, initBlock);
-
-                        // One block: return 1
-                        builder_->setInsertPoint(oneBlock);
-                        builder_->createStore(one, resultAlloca);
-                        builder_->createBr(endBlock);
-
-                        // Init block: initialize x = value / 2
-                        builder_->setInsertPoint(initBlock);
-                        auto* two = builder_->createIntConstant(2);
-                        auto* initialX = builder_->createDiv(value, two);
-                        builder_->createStore(initialX, xAlloca);
-                        builder_->createStore(zero, prevAlloca);  // prev = 0
-                        builder_->createBr(loopBlock);
-
-                        // Loop block: iterate Newton's method
-                        builder_->setInsertPoint(loopBlock);
-                        auto* x = builder_->createLoad(xAlloca);
-                        auto* prev = builder_->createLoad(prevAlloca);
-
-                        // Check if x == prev (converged)
-                        auto* converged = builder_->createEq(x, prev);
-                        auto* updateBlock = currentFunction_->createBasicBlock("sqrt.update").get();
-                        builder_->createCondBr(converged, endBlock, updateBlock);
-
-                        // Update block: compute next iteration
-                        builder_->setInsertPoint(updateBlock);
-                        builder_->createStore(x, prevAlloca);  // prev = x
-                        auto* valueByX = builder_->createDiv(value, x);
-                        auto* sum = builder_->createAdd(x, valueByX);
-                        auto* nextX = builder_->createDiv(sum, two);
-                        builder_->createStore(nextX, xAlloca);
-                        builder_->createStore(nextX, resultAlloca);
-                        builder_->createBr(loopBlock);
-
-                        // End block: load and return result
-                        builder_->setInsertPoint(endBlock);
-                        lastValue_ = builder_->createLoad(resultAlloca);
-                        return;
-                    }
-
-                    // Check if this is Math.log()
-                    if (objIdent->name == "Math" && propIdent->name == "log") {
-                        // Math.log() - natural logarithm (base e)
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.log() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
+                        // sqrt takes a double in C; convert integer args to f64.
+                        HIRValue* f64Arg = value;
+                        if (value && value->type &&
+                            value->type->kind != HIRType::Kind::F64 &&
+                            value->type->kind != HIRType::Kind::F32) {
+                            auto* f64Type = new HIRType(HIRType::Kind::F64);
+                            f64Arg = builder_->createCast(value, f64Type, "sqrt.arg_f64");
                         }
 
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to log() C library function
-                        std::string runtimeFuncName = "log";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
+                        // Declare and call C library sqrt(double) -> double
+                        std::vector<HIRTypePtr> paramTypes = {std::make_shared<HIRType>(HIRType::Kind::F64)};
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
                         HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
+                        for (auto& func : module_->functions) {
+                            if (func->name == "sqrt") {
                                 runtimeFunc = func.get();
                                 break;
                             }
                         }
-
                         if (!runtimeFunc) {
                             HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("sqrt", funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "log_result");
+                        lastValue_ = builder_->createCall(runtimeFunc, {f64Arg}, "math_sqrt");
+                        lastValue_->type = returnType;
                         return;
                     }
 
-                    // Check if this is Math.exp()
-                    if (objIdent->name == "Math" && propIdent->name == "exp") {
-                        // Math.exp() - exponential function (e^x)
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.exp() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.exp() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
+                    // ------------------------------------------------------------------------
+                    // Math transcendentals (unary): log, exp, log10, log2, sin, cos, tan,
+                    // atan, asin, acos, sinh, cosh, tanh, cbrt, exp2, expm1, log1p.
+                    //
+                    // These all map 1:1 to a C library function of the same name taking
+                    // and returning double. We evaluate the argument, promote i64 -> f64
+                    // when needed, declare the extern, and call it. The result is F64.
+                    // ------------------------------------------------------------------------
+                    if (objIdent->name == "Math") {
+                        static const std::unordered_set<std::string> unaryF64Math = {
+                            "log", "exp", "log10", "log2",
+                            "sin", "cos", "tan",
+                            "atan", "asin", "acos",
+                            "sinh", "cosh", "tanh",
+                            "asinh", "acosh", "atanh",
+                            "cbrt", "exp2", "expm1", "log1p"
+                        };
+                        if (unaryF64Math.count(propIdent->name) && node.arguments.size() == 1) {
+                            node.arguments[0]->accept(*this);
+                            auto* value = lastValue_;
+
+                            // Promote integer argument to f64.
+                            HIRValue* f64Arg = value;
+                            if (value && value->type &&
+                                value->type->kind != HIRType::Kind::F64 &&
+                                value->type->kind != HIRType::Kind::F32) {
+                                auto* f64Type = new HIRType(HIRType::Kind::F64);
+                                f64Arg = builder_->createCast(value, f64Type,
+                                                              std::string("math_") + propIdent->name + "_arg_f64");
+                            }
+
+                            std::vector<HIRTypePtr> paramTypes = {
+                                std::make_shared<HIRType>(HIRType::Kind::F64)
+                            };
+                            auto returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
+
+                            HIRFunction* runtimeFunc = module_->getFunction(propIdent->name).get();
+                            if (!runtimeFunc) {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(propIdent->name, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                runtimeFunc = funcPtr.get();
+                            }
+
+                            std::vector<HIRValue*> args = {f64Arg};
+                            std::string callName = "math_" + propIdent->name + "_result";
+                            lastValue_ = builder_->createCall(runtimeFunc, args, callName);
+                            lastValue_->type = returnType;
                             return;
                         }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to exp() C library function
-                        std::string runtimeFuncName = "exp";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "exp_result");
-                        return;
                     }
 
-                    // Check if this is Math.log10()
-                    if (objIdent->name == "Math" && propIdent->name == "log10") {
-                        // Math.log10() - base 10 logarithm
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log10() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.log10() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to log10() C library function
-                        std::string runtimeFuncName = "log10";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "log10_result");
-                        return;
-                    }
-
-                    // Check if this is Math.log2()
-                    if (objIdent->name == "Math" && propIdent->name == "log2") {
-                        // Math.log2() - base 2 logarithm
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log2() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.log2() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to log2() C library function
-                        std::string runtimeFuncName = "log2";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "log2_result");
-                        return;
-                    }
-
-                    // Check if this is Math.sin()
-                    if (objIdent->name == "Math" && propIdent->name == "sin") {
-                        // Math.sin() - sine function (radians)
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.sin() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.sin() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to sin() C library function
-                        std::string runtimeFuncName = "sin";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "sin_result");
-                        return;
-                    }
-
-                    // Check if this is Math.cos()
-                    if (objIdent->name == "Math" && propIdent->name == "cos") {
-                        // Math.cos() - cosine function (radians)
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.cos() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.cos() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to cos() C library function
-                        std::string runtimeFuncName = "cos";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "cos_result");
-                        return;
-                    }
-
-                    // Check if this is Math.tan()
-                    if (objIdent->name == "Math" && propIdent->name == "tan") {
-                        // Math.tan() - tangent function (radians)
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.tan() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.tan() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to tan() C library function
-                        std::string runtimeFuncName = "tan";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "tan_result");
-                        return;
-                    }
-
-                    // Check if this is Math.atan()
-                    if (objIdent->name == "Math" && propIdent->name == "atan") {
-                        // Math.atan() - arctangent (inverse tangent) function
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.atan() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.atan() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to atan() C library function
-                        std::string runtimeFuncName = "atan";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "atan_result");
-                        return;
-                    }
-
-                    // Check if this is Math.asin()
-                    if (objIdent->name == "Math" && propIdent->name == "asin") {
-                        // Math.asin() - arcsine (inverse sine) function
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.asin() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.asin() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to asin() C library function
-                        std::string runtimeFuncName = "asin";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "asin_result");
-                        return;
-                    }
-
-                    // Check if this is Math.acos()
-                    if (objIdent->name == "Math" && propIdent->name == "acos") {
-                        // Math.acos() - arccosine (inverse cosine) function
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.acos() call" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.acos() expects exactly 1 argument" << std::endl;
-                            lastValue_ = builder_->createIntConstant(0);
-                            return;
-                        }
-
-                        // Evaluate the argument
-                        node.arguments[0]->accept(*this);
-                        auto* value = lastValue_;
-
-                        // Create call to acos() C library function
-                        std::string runtimeFuncName = "acos";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
-                            }
-                        }
-
-                        if (!runtimeFunc) {
-                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
-                            funcPtr->linkage = HIRFunction::Linkage::External;
-                            runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
-                        }
-
-                        std::vector<HIRValue*> args = {value};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "acos_result");
-                        return;
-                    }
-
-                    // Check if this is Math.atan2()
+                    // ------------------------------------------------------------------------
+                    // Math.atan2(y, x) — binary atan2, both args promoted to f64, returns f64.
+                    // ------------------------------------------------------------------------
                     if (objIdent->name == "Math" && propIdent->name == "atan2") {
-                        // Math.atan2(y, x) - two-argument arctangent function
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.atan2() call" << std::endl;
                         if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Math.atan2() expects exactly 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.atan2() expects exactly 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
-
-                        // Evaluate the arguments (y, x)
                         node.arguments[0]->accept(*this);
                         auto* yValue = lastValue_;
                         node.arguments[1]->accept(*this);
                         auto* xValue = lastValue_;
 
-                        // Create call to atan2() C library function
-                        std::string runtimeFuncName = "atan2";
-                        std::vector<HIRTypePtr> paramTypes;
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
-                        HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
-                            if (func->name == runtimeFuncName) {
-                                runtimeFunc = func.get();
-                                break;
+                        auto toF64 = [&](HIRValue* v) -> HIRValue* {
+                            if (v && v->type &&
+                                v->type->kind != HIRType::Kind::F64 &&
+                                v->type->kind != HIRType::Kind::F32) {
+                                auto* f64Type = new HIRType(HIRType::Kind::F64);
+                                return builder_->createCast(v, f64Type, "atan2.arg_f64");
                             }
-                        }
+                            return v;
+                        };
 
+                        std::vector<HIRTypePtr> paramTypes = {
+                            std::make_shared<HIRType>(HIRType::Kind::F64),
+                            std::make_shared<HIRType>(HIRType::Kind::F64)
+                        };
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
+
+                        HIRFunction* runtimeFunc = module_->getFunction("atan2").get();
                         if (!runtimeFunc) {
                             HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
-                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("atan2", funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                        }
+                        std::vector<HIRValue*> args = {toF64(yValue), toF64(xValue)};
+                        lastValue_ = builder_->createCall(runtimeFunc, args, "atan2_result");
+                        lastValue_->type = returnType;
+                        return;
+                    }
+
+                    // ------------------------------------------------------------------------
+                    // Math.hypot(...values) — variadic, all args promoted to f64. Folds
+                    // squared-sum then sqrt. Returns f64.
+                    // ------------------------------------------------------------------------
+                    if (objIdent->name == "Math" && propIdent->name == "hypot") {
+                        if (node.arguments.empty()) {
+                            lastValue_ = builder_->createFloatConstant(0.0);
+                            return;
+                        }
+                        // Promote all args and compute sum of squares in f64.
+                        auto* f64Type = new HIRType(HIRType::Kind::F64);
+                        auto toF64 = [&](HIRValue* v) -> HIRValue* {
+                            if (v && v->type &&
+                                v->type->kind != HIRType::Kind::F64 &&
+                                v->type->kind != HIRType::Kind::F32) {
+                                return builder_->createCast(v, f64Type, "hypot.arg_f64");
+                            }
+                            return v;
+                        };
+
+                        node.arguments[0]->accept(*this);
+                        auto* acc = toF64(lastValue_);
+                        auto* accSq = builder_->createMul(acc, acc, "hypot.sq");
+
+                        for (size_t i = 1; i < node.arguments.size(); ++i) {
+                            node.arguments[i]->accept(*this);
+                            auto* v = toF64(lastValue_);
+                            auto* sq = builder_->createMul(v, v, "hypot.sq");
+                            accSq = builder_->createAdd(accSq, sq, "hypot.acc");
                         }
 
-                        std::vector<HIRValue*> args = {yValue, xValue};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "atan2_result");
+                        // Call C sqrt() on the f64 sum-of-squares.
+                        std::vector<HIRTypePtr> paramTypes = {
+                            std::make_shared<HIRType>(HIRType::Kind::F64)
+                        };
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
+                        HIRFunction* sqrtFunc = module_->getFunction("sqrt").get();
+                        if (!sqrtFunc) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
+                            HIRFunctionPtr funcPtr = module_->createFunction("sqrt", funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            sqrtFunc = funcPtr.get();
+                        }
+                        lastValue_ = builder_->createCall(sqrtFunc, {accSq}, "hypot_result");
+                        lastValue_->type = returnType;
                         return;
                     }
 
                     // Check if this is Math.min()
                     if (objIdent->name == "Math" && propIdent->name == "min") {
-                        // Math.min(a, b) - returns the smaller of two values (ES1)
+                        // Math.min(...values) - variadic minimum (ES1)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.min() call" << std::endl;
-                        if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Math.min() expects exactly 2 arguments" << std::endl;
+                        if (node.arguments.empty()) {
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.min() expects at least 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
 
-                        // Evaluate the arguments
-                        node.arguments[0]->accept(*this);
-                        auto* aValue = lastValue_;
-                        node.arguments[1]->accept(*this);
-                        auto* bValue = lastValue_;
-
-                        // Create call to nova_math_min runtime function
+                        // Setup runtime function
                         std::string runtimeFuncName = "nova_math_min";
                         std::vector<HIRTypePtr> paramTypes;
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
 
-                        // Find or create runtime function
                         HIRFunction* runtimeFunc = nullptr;
                         auto& functions = module_->functions;
                         for (auto& func : functions) {
@@ -3227,63 +3088,128 @@ void HIRGenerator::visit(CallExpr& node) {
                                 break;
                             }
                         }
-
                         if (!runtimeFunc) {
                             HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
-                        std::vector<HIRValue*> args = {aValue, bValue};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "min_result");
+                        // Pre-evaluate all arguments first
+                        std::vector<HIRValue*> argValues;
+                        argValues.reserve(node.arguments.size());
+                        for (const auto& arg : node.arguments) {
+                            arg->accept(*this);
+                            argValues.push_back(lastValue_);
+                        }
+
+                        // If only one arg, return it directly
+                        if (argValues.size() == 1) {
+                            return;
+                        }
+
+                        // Inline: min(a, b) = a < b ? a : b
+                        auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto* resultAlloca = builder_->createAlloca(i64Type.get(), "min_result");
+                        auto* accValue = argValues[0];
+
+                        for (size_t i = 1; i < argValues.size(); i++) {
+                            auto* nextValue = argValues[i];
+                            auto* isLess = builder_->createLt(accValue, nextValue);
+
+                            auto* takeAccBlock = currentFunction_->createBasicBlock("min.take_acc").get();
+                            auto* takeNextBlock = currentFunction_->createBasicBlock("min.take_next").get();
+                            auto* mergeBlock = currentFunction_->createBasicBlock("min.merge").get();
+
+                            builder_->createCondBr(isLess, takeAccBlock, takeNextBlock);
+
+                            // take_acc: store accValue
+                            builder_->setInsertPoint(takeAccBlock);
+                            builder_->createStore(accValue, resultAlloca);
+                            builder_->createBr(mergeBlock);
+
+                            // take_next: store nextValue
+                            builder_->setInsertPoint(takeNextBlock);
+                            builder_->createStore(nextValue, resultAlloca);
+                            builder_->createBr(mergeBlock);
+
+                            // merge: load result into accValue for next iteration
+                            builder_->setInsertPoint(mergeBlock);
+                            accValue = builder_->createLoad(resultAlloca);
+                        }
+                        lastValue_ = accValue;
                         return;
                     }
 
                     // Check if this is Math.max()
                     if (objIdent->name == "Math" && propIdent->name == "max") {
-                        // Math.max(a, b) - returns the larger of two values (ES1)
+                        // Math.max(...values) - variadic maximum (ES1)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.max() call" << std::endl;
-                        if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Math.max() expects exactly 2 arguments" << std::endl;
+                        if (node.arguments.empty()) {
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.max() expects at least 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
 
-                        // Evaluate the arguments
-                        node.arguments[0]->accept(*this);
-                        auto* aValue = lastValue_;
-                        node.arguments[1]->accept(*this);
-                        auto* bValue = lastValue_;
-
-                        // Create call to nova_math_max runtime function
+                        // Setup runtime function (kept for backward compat)
                         std::string runtimeFuncName = "nova_math_max";
                         std::vector<HIRTypePtr> paramTypes;
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
-
-                        // Find or create runtime function
                         HIRFunction* runtimeFunc = nullptr;
-                        auto& functions = module_->functions;
-                        for (auto& func : functions) {
+                        for (auto& func : module_->functions) {
                             if (func->name == runtimeFuncName) {
                                 runtimeFunc = func.get();
                                 break;
                             }
                         }
-
                         if (!runtimeFunc) {
                             HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
-                        std::vector<HIRValue*> args = {aValue, bValue};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "max_result");
+                        // Pre-evaluate all arguments first
+                        std::vector<HIRValue*> argValues;
+                        argValues.reserve(node.arguments.size());
+                        for (const auto& arg : node.arguments) {
+                            arg->accept(*this);
+                            argValues.push_back(lastValue_);
+                        }
+
+                        if (argValues.size() == 1) {
+                            return;
+                        }
+
+                        // Inline: max(a, b) = a > b ? a : b
+                        auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto* resultAlloca = builder_->createAlloca(i64Type.get(), "max_result");
+                        auto* accValue = argValues[0];
+
+                        for (size_t i = 1; i < argValues.size(); i++) {
+                            auto* nextValue = argValues[i];
+                            auto* isGreater = builder_->createGt(accValue, nextValue);
+
+                            auto* takeAccBlock = currentFunction_->createBasicBlock("max.take_acc").get();
+                            auto* takeNextBlock = currentFunction_->createBasicBlock("max.take_next").get();
+                            auto* mergeBlock = currentFunction_->createBasicBlock("max.merge").get();
+
+                            builder_->createCondBr(isGreater, takeAccBlock, takeNextBlock);
+
+                            builder_->setInsertPoint(takeAccBlock);
+                            builder_->createStore(accValue, resultAlloca);
+                            builder_->createBr(mergeBlock);
+
+                            builder_->setInsertPoint(takeNextBlock);
+                            builder_->createStore(nextValue, resultAlloca);
+                            builder_->createBr(mergeBlock);
+
+                            builder_->setInsertPoint(mergeBlock);
+                            accValue = builder_->createLoad(resultAlloca);
+                        }
+                        lastValue_ = accValue;
                         return;
                     }
 
@@ -3292,7 +3218,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // JSON.stringify(value) - converts a value to a JSON string (ES5)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected JSON.stringify() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: JSON.stringify() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: JSON.stringify() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3454,7 +3380,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // JSON.parse(text) - parses a JSON string (ES5)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected JSON.parse() call" << std::endl;
                         if (node.arguments.size() < 1) {
-                            std::cerr << "ERROR: JSON.parse() expects at least 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: JSON.parse() expects at least 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3487,7 +3413,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.sinh() - hyperbolic sine function
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.sinh() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.sinh() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.sinh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3530,7 +3456,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.cosh() - hyperbolic cosine function
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.cosh() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.cosh() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.cosh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3573,7 +3499,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.tanh() - hyperbolic tangent function
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.tanh() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.tanh() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.tanh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3616,7 +3542,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.asinh() - inverse hyperbolic sine function
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.asinh() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.asinh() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.asinh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3659,7 +3585,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.acosh() - inverse hyperbolic cosine function
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.acosh() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.acosh() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.acosh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3702,7 +3628,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.atanh() - inverse hyperbolic tangent function
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.atanh() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.atanh() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.atanh() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3745,7 +3671,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.expm1() - returns e^x - 1
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.expm1() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.expm1() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.expm1() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3788,7 +3714,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.log1p() - returns ln(1 + x)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.log1p() call" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.log1p() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.log1p() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3830,7 +3756,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     if (objIdent->name == "Math" && propIdent->name == "hypot") {
                         // Math.hypot() - compute sqrt(x^2 + y^2 + ...)
                         if (node.arguments.size() < 2) {
-                            std::cerr << "ERROR: Math.hypot() expects at least 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.hypot() expects at least 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -3914,7 +3840,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.cbrt() - integer cube root using Newton's method
                         // Formula: x_{n+1} = (2*x_n + value/x_n^2) / 3
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.cbrt() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.cbrt() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -4014,7 +3940,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.fround() returns nearest 32-bit single precision float
                         // For integer type system, it's a pass-through operation
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.fround() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.fround() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -4029,7 +3955,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.random() returns a pseudo-random number between 0.0 and 1.0
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected Math.random() call" << std::endl;
                         if (node.arguments.size() != 0) {
-                            std::cerr << "ERROR: Math.random() expects no arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.random() expects no arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -4037,7 +3963,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Create call to nova_random() runtime function
                         std::string runtimeFuncName = "nova_random";
                         std::vector<HIRTypePtr> paramTypes;  // No parameters
-                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto returnType = std::make_shared<HIRType>(HIRType::Kind::F64);
 
                         // Find or create runtime function
                         HIRFunction* runtimeFunc = nullptr;
@@ -4059,6 +3985,7 @@ void HIRGenerator::visit(CallExpr& node) {
 
                         std::vector<HIRValue*> args;  // Empty args vector
                         lastValue_ = builder_->createCall(runtimeFunc, args, "random_result");
+                        lastValue_->type = returnType;
                         return;
                     }
 
@@ -4067,7 +3994,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.sign() returns the sign of a number
                         // Returns 1 for positive, -1 for negative, 0 for zero
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.sign() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.sign() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -4130,7 +4057,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Math.trunc() removes decimal part
                         // For integer type system, it's a pass-through operation
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Math.trunc() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.trunc() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -4144,7 +4071,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     if (objIdent->name == "Math" && propIdent->name == "imul") {
                         // Math.imul() performs 32-bit integer multiplication
                         if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Math.imul() expects exactly 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Math.imul() expects exactly 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -4174,7 +4101,7 @@ void HIRGenerator::visit(CallExpr& node) {
                     if (objIdent->name == "Array" && propIdent->name == "isArray") {
                         // Array.isArray() - compile-time type check
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Array.isArray() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Array.isArray() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -4207,7 +4134,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Array.from" << std::endl;
 
                         if (node.arguments.size() < 1 || node.arguments.size() > 2) {
-                            std::cerr << "ERROR: Array.from() expects 1 or 2 arguments (arrayLike, mapFn?)" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Array.from() expects 1 or 2 arguments (arrayLike, mapFn?)" << std::endl;
                             lastValue_ = nullptr;
                             return;
                         }
@@ -4349,7 +4276,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: " << objIdent->name << ".from" << std::endl;
 
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: " << objIdent->name << ".from() expects 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: " << objIdent->name << ".from() expects 1 argument" << std::endl;
                             lastValue_ = nullptr;
                             return;
                         }
@@ -4501,7 +4428,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             // Number.parseInt(string, radix) - parses a string and returns an integer
                             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Number.parseInt" << std::endl;
                             if (node.arguments.size() != 2) {
-                                std::cerr << "ERROR: Number.parseInt() expects exactly 2 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Number.parseInt() expects exactly 2 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -4545,7 +4472,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             // Number.parseFloat(string) - parse string to floating point
                             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Number.parseFloat" << std::endl;
                             if (node.arguments.size() != 1) {
-                                std::cerr << "ERROR: Number.parseFloat() expects exactly 1 argument" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Number.parseFloat() expects exactly 1 argument" << std::endl;
                                 lastValue_ = builder_->createFloatConstant(0.0);
                                 return;
                             }
@@ -4593,25 +4520,22 @@ void HIRGenerator::visit(CallExpr& node) {
             if (auto* objIdent = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                 if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
                     if (objIdent->name == "String" && propIdent->name == "fromCharCode") {
-                        // String.fromCharCode(code) - create string from character code
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCharCode" << std::endl;
-                        if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: String.fromCharCode() expects exactly 1 argument" << std::endl;
+                        // String.fromCharCode(...codes) — concat char(s) from each code.
+                        // JS spec accepts any number of arguments; we build a string
+                        // by emitting one nova_string_fromCharCode call per arg and
+                        // concatenating. (Nova has no varargs at the LLVM level.)
+                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCharCode (argc=" << node.arguments.size() << ")" << std::endl;
+                        if (node.arguments.empty()) {
                             lastValue_ = builder_->createStringConstant("");
                             return;
                         }
 
-                        // Evaluate the argument (character code)
-                        node.arguments[0]->accept(*this);
-                        auto* charCode = lastValue_;
-
-                        // Setup function signature
+                        // Setup function signature for the per-code runtime helper.
                         std::string runtimeFuncName = "nova_string_fromCharCode";
                         std::vector<HIRTypePtr> paramTypes;
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         auto returnType = std::make_shared<HIRType>(HIRType::Kind::String);
 
-                        // Find or create runtime function
                         HIRFunction* runtimeFunc = nullptr;
                         auto& functions = module_->functions;
                         for (auto& func : functions) {
@@ -4620,17 +4544,49 @@ void HIRGenerator::visit(CallExpr& node) {
                                 break;
                             }
                         }
-
                         if (!runtimeFunc) {
                             HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
                             HIRFunctionPtr funcPtr = module_->createFunction(runtimeFuncName, funcType);
                             funcPtr->linkage = HIRFunction::Linkage::External;
                             runtimeFunc = funcPtr.get();
-                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
                         }
 
-                        std::vector<HIRValue*> args = {charCode};
-                        lastValue_ = builder_->createCall(runtimeFunc, args, "fromCharCode_result");
+                        // Also resolve nova_string_concat (strcat(str, str)) for joining.
+                        std::string concatName = "nova_string_concat";
+                        HIRFunction* concatFunc = nullptr;
+                        for (auto& func : functions) {
+                            if (func->name == concatName) {
+                                concatFunc = func.get();
+                                break;
+                            }
+                        }
+                        if (!concatFunc) {
+                            std::vector<HIRTypePtr> concatParams;
+                            concatParams.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            concatParams.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            HIRFunctionType* concatType = new HIRFunctionType(concatParams, returnType);
+                            HIRFunctionPtr concatPtr = module_->createFunction(concatName, concatType);
+                            concatPtr->linkage = HIRFunction::Linkage::External;
+                            concatFunc = concatPtr.get();
+                        }
+
+                        // Evaluate first arg and convert via fromCharCode.
+                        node.arguments[0]->accept(*this);
+                        auto* firstCode = lastValue_;
+                        HIRValue* accumulated = builder_->createCall(
+                            runtimeFunc, {firstCode}, "fromCharCode_result");
+
+                        // Append remaining codes via nova_string_concat.
+                        for (size_t i = 1; i < node.arguments.size(); ++i) {
+                            node.arguments[i]->accept(*this);
+                            auto* code = lastValue_;
+                            auto* oneChar = builder_->createCall(
+                                runtimeFunc, {code}, "fromCharCode_part");
+                            accumulated = builder_->createCall(
+                                concatFunc, {accumulated, oneChar}, "fromCharCode_acc");
+                        }
+
+                        lastValue_ = accumulated;
                         return;
                     }
 
@@ -4638,7 +4594,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // String.fromCodePoint(codePoint) - create string from Unicode code point (ES2015)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: String.fromCodePoint" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: String.fromCodePoint() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: String.fromCodePoint() expects exactly 1 argument" << std::endl;
                             lastValue_ = builder_->createStringConstant("");
                             return;
                         }
@@ -4782,7 +4738,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.values(obj) - returns array of object's property values (ES2017)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.values" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Object.values() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.values() expects exactly 1 argument" << std::endl;
                             return;
                         }
 
@@ -4856,7 +4812,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.keys(obj) - returns array of object's property keys (ES2015)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.keys" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Object.keys() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.keys() expects exactly 1 argument" << std::endl;
                             return;
                         }
 
@@ -4928,7 +4884,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.entries(obj) - returns array of [key, value] pairs (ES2017)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.entries" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Object.entries() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.entries() expects exactly 1 argument" << std::endl;
                             return;
                         }
 
@@ -5006,7 +4962,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.assign(target, source) - copies properties from source to target (ES2015)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.assign" << std::endl;
                         if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Object.assign() expects exactly 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.assign() expects exactly 2 arguments" << std::endl;
                             return;
                         }
 
@@ -5125,7 +5081,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.hasOwn(obj, key) - checks if object has own property (ES2022)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.hasOwn" << std::endl;
                         if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Object.hasOwn() expects exactly 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.hasOwn() expects exactly 2 arguments" << std::endl;
                             return;
                         }
 
@@ -5190,7 +5146,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.freeze(obj) - makes object immutable (ES5)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.freeze" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Object.freeze() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.freeze() expects exactly 1 argument" << std::endl;
                             return;
                         }
 
@@ -5243,7 +5199,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.isFrozen(obj) - checks if object is frozen (ES5)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.isFrozen" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Object.isFrozen() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.isFrozen() expects exactly 1 argument" << std::endl;
                             return;
                         }
 
@@ -5293,7 +5249,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.seal(obj) - seals object, prevents add/delete properties (ES5)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.seal" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Object.seal() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.seal() expects exactly 1 argument" << std::endl;
                             return;
                         }
 
@@ -5345,7 +5301,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.isSealed(obj) - checks if object is sealed (ES5)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.isSealed" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Object.isSealed() expects exactly 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.isSealed() expects exactly 1 argument" << std::endl;
                             return;
                         }
 
@@ -5396,7 +5352,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Object.is(value1, value2) - determines if two values are the same (ES2015)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Object.is" << std::endl;
                         if (node.arguments.size() != 2) {
-                            std::cerr << "ERROR: Object.is() expects exactly 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Object.is() expects exactly 2 arguments" << std::endl;
                             return;
                         }
 
@@ -7144,7 +7100,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Date.now() - returns current timestamp in milliseconds since Unix epoch (ES5)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Date.now" << std::endl;
                         if (node.arguments.size() != 0) {
-                            std::cerr << "ERROR: Date.now() expects no arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Date.now() expects no arguments" << std::endl;
                             return;
                         }
 
@@ -7182,7 +7138,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Date.parse(dateString) - parse date string to timestamp (ES1)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Date.parse" << std::endl;
                         if (node.arguments.size() != 1) {
-                            std::cerr << "ERROR: Date.parse() expects 1 argument" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Date.parse() expects 1 argument" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -7214,7 +7170,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Date.UTC(year, month, day?, hour?, minute?, second?, ms?) - create UTC timestamp (ES1)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: Date.UTC" << std::endl;
                         if (node.arguments.size() < 2) {
-                            std::cerr << "ERROR: Date.UTC() expects at least 2 arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Date.UTC() expects at least 2 arguments" << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -7354,7 +7310,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         // performance.now() - returns high-resolution timestamp in milliseconds (Web Performance API)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected static method call: performance.now" << std::endl;
                         if (node.arguments.size() != 0) {
-                            std::cerr << "ERROR: performance.now() expects no arguments" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: performance.now() expects no arguments" << std::endl;
                             return;
                         }
 
@@ -7398,7 +7354,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "isLockFree") {
                             // Atomics.isLockFree(size)
                             if (node.arguments.size() != 1) {
-                                std::cerr << "ERROR: Atomics.isLockFree() expects 1 argument" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.isLockFree() expects 1 argument" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7429,7 +7385,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "load") {
                             // Atomics.load(typedArray, index)
                             if (node.arguments.size() != 2) {
-                                std::cerr << "ERROR: Atomics.load() expects 2 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.load() expects 2 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7466,7 +7422,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "store") {
                             // Atomics.store(typedArray, index, value)
                             if (node.arguments.size() != 3) {
-                                std::cerr << "ERROR: Atomics.store() expects 3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.store() expects 3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7505,7 +7461,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "add") {
                             // Atomics.add(typedArray, index, value)
                             if (node.arguments.size() != 3) {
-                                std::cerr << "ERROR: Atomics.add() expects 3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.add() expects 3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7544,7 +7500,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "sub") {
                             // Atomics.sub(typedArray, index, value)
                             if (node.arguments.size() != 3) {
-                                std::cerr << "ERROR: Atomics.sub() expects 3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.sub() expects 3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7583,7 +7539,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "and") {
                             // Atomics.and(typedArray, index, value)
                             if (node.arguments.size() != 3) {
-                                std::cerr << "ERROR: Atomics.and() expects 3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.and() expects 3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7622,7 +7578,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "or") {
                             // Atomics.or(typedArray, index, value)
                             if (node.arguments.size() != 3) {
-                                std::cerr << "ERROR: Atomics.or() expects 3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.or() expects 3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7661,7 +7617,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "xor") {
                             // Atomics.xor(typedArray, index, value)
                             if (node.arguments.size() != 3) {
-                                std::cerr << "ERROR: Atomics.xor() expects 3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.xor() expects 3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7700,7 +7656,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "exchange") {
                             // Atomics.exchange(typedArray, index, value)
                             if (node.arguments.size() != 3) {
-                                std::cerr << "ERROR: Atomics.exchange() expects 3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.exchange() expects 3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7739,7 +7695,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "compareExchange") {
                             // Atomics.compareExchange(typedArray, index, expectedValue, replacementValue)
                             if (node.arguments.size() != 4) {
-                                std::cerr << "ERROR: Atomics.compareExchange() expects 4 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.compareExchange() expects 4 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7781,7 +7737,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "wait") {
                             // Atomics.wait(typedArray, index, value, timeout?)
                             if (node.arguments.size() < 3 || node.arguments.size() > 4) {
-                                std::cerr << "ERROR: Atomics.wait() expects 3-4 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.wait() expects 3-4 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7829,7 +7785,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "notify") {
                             // Atomics.notify(typedArray, index, count?)
                             if (node.arguments.size() < 2 || node.arguments.size() > 3) {
-                                std::cerr << "ERROR: Atomics.notify() expects 2-3 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.notify() expects 2-3 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7874,7 +7830,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "waitAsync") {
                             // Atomics.waitAsync(typedArray, index, value, timeout?)
                             if (node.arguments.size() < 3 || node.arguments.size() > 4) {
-                                std::cerr << "ERROR: Atomics.waitAsync() expects 3-4 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Atomics.waitAsync() expects 3-4 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7919,7 +7875,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             return;
                         }
 
-                        std::cerr << "ERROR: Unknown Atomics method: " << methodName << std::endl;
+                        if (NOVA_DEBUG) std::cerr << "ERROR: Unknown Atomics method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
                         return;
                     }
@@ -7938,7 +7894,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "asIntN") {
                             // BigInt.asIntN(bits, bigint)
                             if (node.arguments.size() != 2) {
-                                std::cerr << "ERROR: BigInt.asIntN() expects 2 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: BigInt.asIntN() expects 2 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -7975,7 +7931,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (methodName == "asUintN") {
                             // BigInt.asUintN(bits, bigint)
                             if (node.arguments.size() != 2) {
-                                std::cerr << "ERROR: BigInt.asUintN() expects 2 arguments" << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: BigInt.asUintN() expects 2 arguments" << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -8009,7 +7965,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             return;
                         }
 
-                        std::cerr << "ERROR: Unknown BigInt static method: " << methodName << std::endl;
+                        if (NOVA_DEBUG) std::cerr << "ERROR: Unknown BigInt static method: " << methodName << std::endl;
                         lastValue_ = builder_->createIntConstant(0);
                         return;
                     }
@@ -8046,7 +8002,7 @@ void HIRGenerator::visit(CallExpr& node) {
                                 recordReturnedClosure(mangledName);
                                 return;
                             } else {
-                                std::cerr << "ERROR HIRGen: Static method not found: " << mangledName << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR HIRGen: Static method not found: " << mangledName << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -8118,14 +8074,26 @@ void HIRGenerator::visit(CallExpr& node) {
                                 node.arguments[0]->accept(*this);
                                 keyArg = lastValue_;
                             } else { keyArg = builder_->createIntConstant(0); }
-                            std::string runtimeFunc = keyIsString ? "nova_map_get_str_num" : "nova_map_get_num";
+
+                            // Use the runtime JSValue-returning variant: it handles missing keys
+                            // (returns JS_VALUE_UNDEFINED) and value-type polymorphism (number/string)
+                            // in one call. Tagged as JSValue so equality checks against undefined / null
+                            // go through the proper JSValue path.
+                            auto jsType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                            std::string runtimeFunc = keyIsString ? "nova_map_get_str_jsvalue" : "nova_map_get_num_jsvalue";
                             std::vector<HIRTypePtr> paramTypes = keyIsString ? std::vector<HIRTypePtr>{ptrType, ptrType} : std::vector<HIRTypePtr>{ptrType, intType};
                             HIRFunction* func = nullptr;
                             auto existingFunc = module_->getFunction(runtimeFunc);
                             if (existingFunc) func = existingFunc.get();
-                            else { HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType); HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
+                            else {
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, jsType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                                funcPtr->linkage = HIRFunction::Linkage::External;
+                                func = funcPtr.get();
+                            }
                             std::vector<HIRValue*> args = {mapObj, keyArg};
                             lastValue_ = builder_->createCall(func, args, "map_get");
+                            lastValue_->type = jsType;
                             return;
                         } else if (methodName == "has") {
                             HIRValue* keyArg = nullptr;
@@ -8219,7 +8187,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             setObj = lastValue_;
                         }
                         if(NOVA_DEBUG) {
-                            std::cerr << "DEBUG HIRGen Set: setObj HIR = " << (setObj ? setObj->toString() : "nullptr") << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "DEBUG HIRGen Set: setObj HIR = " << (setObj ? setObj->toString() : "nullptr") << std::endl;
                         }
                         if (methodName == "add") {
                             HIRValue* valueArg = nullptr;
@@ -8301,12 +8269,36 @@ void HIRGenerator::visit(CallExpr& node) {
                         } else if (methodName == "get") {
                             HIRValue* keyArg = nullptr;
                             if (node.arguments.size() >= 1) { node.arguments[0]->accept(*this); keyArg = lastValue_; } else { keyArg = builder_->createIntConstant(0); }
+                            // has() check first to detect missing keys (so we can return undefined).
+                            HIRFunction* hasFunc = nullptr;
+                            auto existingHas = module_->getFunction("nova_weakmap_has");
+                            if (existingHas) hasFunc = existingHas.get();
+                            else { HIRFunctionType* ft = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr fp = module_->createFunction("nova_weakmap_has", ft); fp->linkage = HIRFunction::Linkage::External; hasFunc = fp.get(); }
+                            HIRValue* hasResult = builder_->createCall(hasFunc, {weakMapObj, keyArg}, "weakmap_has");
+
                             HIRFunction* func = nullptr;
                             auto existingFunc = module_->getFunction("nova_weakmap_get_num");
                             if (existingFunc) func = existingFunc.get();
                             else { HIRFunctionType* funcType = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr funcPtr = module_->createFunction("nova_weakmap_get_num", funcType); funcPtr->linkage = HIRFunction::Linkage::External; func = funcPtr.get(); }
                             std::vector<HIRValue*> args = {weakMapObj, keyArg};
-                            lastValue_ = builder_->createCall(func, args, "weakmap_get");
+                            HIRValue* getValue = builder_->createCall(func, args, "weakmap_get");
+
+                            auto jsType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                            HIRValue* undefBits = builder_->createIntConstant(
+                                static_cast<int64_t>(0x7ff9000000000000ULL));
+                            HIRValue* undefBoxed = builder_->createCast(undefBits, jsType.get(), "undef_as_js");
+                            HIRValue* boxedGet = toJSValue(getValue);
+                            auto* resultSlot = builder_->createAlloca(jsType.get(), "weakmap_get.result");
+                            builder_->createStore(boxedGet, resultSlot);
+                            auto* elseBlock = currentFunction_->createBasicBlock("weakmap_get.undef").get();
+                            auto* mergeBlock = currentFunction_->createBasicBlock("weakmap_get.merge").get();
+                            builder_->createCondBr(hasResult, mergeBlock, elseBlock);
+                            builder_->setInsertPoint(elseBlock);
+                            builder_->createStore(undefBoxed, resultSlot);
+                            builder_->createBr(mergeBlock);
+                            builder_->setInsertPoint(mergeBlock);
+                            lastValue_ = builder_->createLoad(resultSlot, "weakmap_get.value");
+                            lastValue_->type = jsType;
                             return;
                         } else if (methodName == "has") {
                             HIRValue* keyArg = nullptr;
@@ -8403,6 +8395,21 @@ void HIRGenerator::visit(CallExpr& node) {
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    } else if (methodName == "substr") {
+                        // substr(start, length) — legacy but supported.
+                        // Dispatch on argument count: 2 args → substr(start,len);
+                        // 1 arg → substr_from(start) (start to end of string).
+                        if (node.arguments.size() >= 2) {
+                            runtimeFuncName = "nova_string_substr";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        } else {
+                            runtimeFuncName = "nova_string_substr_from";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        }
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "indexOf") {
                         runtimeFuncName = "nova_string_indexOf";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
@@ -8440,12 +8447,12 @@ void HIRGenerator::visit(CallExpr& node) {
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // Returns code point as i64
                     } else if (methodName == "at") {
                         // str.at(index)
-                        // Returns character code at index (supports negative indices)
+                        // Returns single-character string at index (supports negative indices)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: at" << std::endl;
                         runtimeFuncName = "nova_string_at";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // Returns character code as i64
+                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);  // Returns single-char string
                     } else if (methodName == "concat") {
                         // str.concat(otherStr)
                         // Concatenates two strings together
@@ -8501,16 +8508,43 @@ void HIRGenerator::visit(CallExpr& node) {
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
                     } else if (methodName == "slice") {
-                        runtimeFuncName = "nova_string_slice";
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        // Dispatch on argument count: 2 args → slice(start, end);
+                        // 1 arg → slice_from(start) (start to end of string).
+                        if (node.arguments.size() >= 2) {
+                            runtimeFuncName = "nova_string_slice";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        } else {
+                            runtimeFuncName = "nova_string_slice_from";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));
+                        }
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "replace") {
-                        runtimeFuncName = "nova_string_replace";
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        // Dispatch on first-arg shape: regex → nova_string_replace_regex,
+                        // plain string → nova_string_replace.
+                        bool patIsRegex = false;
+                        if (node.arguments.size() >= 1 &&
+                            dynamic_cast<RegexLiteralExpr*>(node.arguments[0].get())) {
+                            patIsRegex = true;
+                        }
+                        // NOTE: do not re-evaluate the argument here to inspect
+                        // its HIR type. The caller already populated `args` with
+                        // [object, arg0, arg1, ...]; re-visiting arg0 would emit
+                        // its code twice and the prior implementation also wiped
+                        // `args`, dropping the call arguments entirely.
+                        if (patIsRegex) {
+                            runtimeFuncName = "nova_string_replace_regex";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        } else {
+                            runtimeFuncName = "nova_string_replace";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                        }
                         returnType = std::make_shared<HIRType>(HIRType::Kind::String);
                     } else if (methodName == "replaceAll") {
                         // str.replaceAll(search, replace) - ES2021
@@ -8537,17 +8571,54 @@ void HIRGenerator::visit(CallExpr& node) {
                         runtimeFuncName = "nova_string_split";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        // Return pointer to array of strings so .length and
+                        // element access use the string-array code paths.
+                        {
+                            auto elemType = std::make_shared<HIRType>(HIRType::Kind::String);
+                            auto arrTy = std::make_shared<hir::HIRArrayType>(elemType, 0);
+                            returnType = std::make_shared<hir::HIRPointerType>(arrTy, true);
+                        }
                     } else if (methodName == "match") {
-                        // str.match(substring)
-                        // Simplified implementation: returns count of matches
-                        // Note: Use nova_string_match_substring for plain string patterns
-                        // Use nova_string_match (in Regex.cpp) for regex patterns
-                        if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected string method call: match" << std::endl;
-                        runtimeFuncName = "nova_string_match_substring";
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        // str.match(pattern) — dispatch on pattern shape:
+                        //   regex literal/object → nova_string_match (returns match string)
+                        //   plain string         → nova_string_match_substring (count)
+                        bool patternIsRegex = false;
+                        if (node.arguments.size() >= 1 &&
+                            dynamic_cast<RegexLiteralExpr*>(node.arguments[0].get())) {
+                            patternIsRegex = true;
+                        }
+                        // Heuristic: nova regex literals surface as pointer-typed
+                        // temporaries. Inspect the evaluated argument's type when
+                        // the AST node isn't a RegexLiteral (e.g. parenthesized).
+                        if (!patternIsRegex && node.arguments.size() >= 1) {
+                            node.arguments[0]->accept(*this);
+                            if (lastValue_ && lastValue_->type &&
+                                lastValue_->type->kind == hir::HIRType::Kind::Pointer) {
+                                patternIsRegex = true;
+                            }
+                            // Reset args so the generic builder below re-evaluates
+                            // the argument cleanly (the prior accept may have side
+                            // effects on lastValue_ but not on node.arguments).
+                            args.clear();
+                            args.push_back(object);
+                        }
+                        if (patternIsRegex) {
+                            runtimeFuncName = "nova_string_match_array";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));
+                            // Pointer to string array so .length and element
+                            // access use the string-array code paths.
+                            {
+                                auto elemType = std::make_shared<HIRType>(HIRType::Kind::String);
+                                auto arrTy = std::make_shared<hir::HIRArrayType>(elemType, 0);
+                                returnType = std::make_shared<hir::HIRPointerType>(arrTy, true);
+                            }
+                        } else {
+                            runtimeFuncName = "nova_string_match_substring";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String));
+                            returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        }
                     } else if (methodName == "localeCompare") {
                         // str.localeCompare(other) - compare strings
                         // Returns: -1 if str < other, 0 if equal, 1 if str > other
@@ -8629,6 +8700,20 @@ void HIRGenerator::visit(CallExpr& node) {
                         funcPtr->linkage = HIRFunction::Linkage::External;
                         runtimeFunc = funcPtr.get();
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
+                    }
+
+                    // Special-case str.concat(...) which is variadic in JS but
+                    // the C runtime helper is binary (str, str). Fold over the
+                    // arguments left-to-right.
+                    if (methodName == "concat" && args.size() >= 2) {
+                        HIRValue* acc = args[0];
+                        for (size_t i = 1; i < args.size(); ++i) {
+                            std::vector<HIRValue*> pair = {acc, args[i]};
+                            acc = builder_->createCall(runtimeFunc, pair,
+                                                       "str_concat_fold");
+                        }
+                        lastValue_ = acc;
+                        return;
                     }
 
                     // Create call to runtime function
@@ -8830,7 +8915,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             paramTypes.push_back(intType);  // radix (default 10)
                             returnType = strType;
                         } else {
-                            std::cerr << "ERROR: Unknown BigInt method: " << methodName << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Unknown BigInt method: " << methodName << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -8841,7 +8926,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (varIt != symbolTable_.end()) {
                             bigintObj = builder_->createLoad(varIt->second, objIdent->name);
                         } else {
-                            std::cerr << "ERROR: BigInt variable not found: " << objIdent->name << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: BigInt variable not found: " << objIdent->name << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -9093,7 +9178,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             paramTypes.push_back(ptrType);
                             returnType = intType;
                         } else {
-                            std::cerr << "ERROR: Unknown Date method: " << methodName << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Unknown Date method: " << methodName << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -9104,7 +9189,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (varIt != symbolTable_.end()) {
                             dateObj = builder_->createLoad(varIt->second, objIdent->name);
                         } else {
-                            std::cerr << "ERROR: Date variable not found: " << objIdent->name << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Date variable not found: " << objIdent->name << std::endl;
                             lastValue_ = builder_->createIntConstant(0);
                             return;
                         }
@@ -9156,7 +9241,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             if (varIt != symbolTable_.end()) {
                                 errorObj = builder_->createLoad(varIt->second, objIdent->name);
                             } else {
-                                std::cerr << "ERROR: Error variable not found: " << objIdent->name << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Error variable not found: " << objIdent->name << std::endl;
                                 lastValue_ = builder_->createStringConstant("Error");
                                 return;
                             }
@@ -9178,7 +9263,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             lastValue_ = builder_->createCall(runtimeFunc, args, "error_toString");
                             return;
                         } else {
-                            std::cerr << "ERROR: Unknown Error method: " << methodName << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Unknown Error method: " << methodName << std::endl;
                             lastValue_ = builder_->createStringConstant("Error");
                             return;
                         }
@@ -9199,7 +9284,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (varIt != symbolTable_.end()) {
                             errObj = builder_->createLoad(varIt->second, objIdent->name);
                         } else {
-                            std::cerr << "ERROR: SuppressedError variable not found: " << objIdent->name << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: SuppressedError variable not found: " << objIdent->name << std::endl;
                             lastValue_ = builder_->createStringConstant("SuppressedError");
                             return;
                         }
@@ -9211,7 +9296,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             runtimeFuncName = "nova_suppressederror_toString";
                             returnType = strType;
                         } else {
-                            std::cerr << "ERROR: Unknown SuppressedError method: " << methodName << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Unknown SuppressedError method: " << methodName << std::endl;
                             lastValue_ = builder_->createStringConstant("SuppressedError");
                             return;
                         }
@@ -9249,7 +9334,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         if (varIt != symbolTable_.end()) {
                             symObj = builder_->createLoad(varIt->second, objIdent->name);
                         } else {
-                            std::cerr << "ERROR: Symbol variable not found: " << objIdent->name << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Symbol variable not found: " << objIdent->name << std::endl;
                             lastValue_ = builder_->createStringConstant("Symbol()");
                             return;
                         }
@@ -9264,7 +9349,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             runtimeFuncName = "nova_symbol_valueOf";
                             returnType = ptrType;
                         } else {
-                            std::cerr << "ERROR: Unknown Symbol method: " << methodName << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "ERROR: Unknown Symbol method: " << methodName << std::endl;
                             lastValue_ = builder_->createStringConstant("Symbol()");
                             return;
                         }
@@ -10316,7 +10401,9 @@ void HIRGenerator::visit(CallExpr& node) {
                                 keyArg = builder_->createIntConstant(0);
                             }
 
-                            std::string runtimeFunc = keyIsString ? "nova_map_get_str_num" : "nova_map_get_num";
+                            auto jsType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                            std::string runtimeFunc = keyIsString ?
+                                "nova_map_get_str_jsvalue" : "nova_map_get_num_jsvalue";
                             std::vector<HIRTypePtr> paramTypes = keyIsString ?
                                 std::vector<HIRTypePtr>{ptrType, ptrType} :
                                 std::vector<HIRTypePtr>{ptrType, intType};
@@ -10326,7 +10413,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             if (existingFunc) {
                                 func = existingFunc.get();
                             } else {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, jsType);
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 func = funcPtr.get();
@@ -10334,6 +10421,7 @@ void HIRGenerator::visit(CallExpr& node) {
 
                             std::vector<HIRValue*> args = {mapObj, keyArg};
                             lastValue_ = builder_->createCall(func, args, "map_get");
+                            lastValue_->type = jsType;
                             return;
                         } else if (methodName == "has") {
                             // map.has(key) - returns boolean
@@ -10929,6 +11017,14 @@ void HIRGenerator::visit(CallExpr& node) {
                                 keyArg = builder_->createNullConstant(ptrType.get());
                             }
 
+                            // has() check first.
+                            std::string hasFunc = "nova_weakmap_has";
+                            HIRFunction* hasHandle = nullptr;
+                            auto existingHas = module_->getFunction(hasFunc);
+                            if (existingHas) hasHandle = existingHas.get();
+                            else { HIRFunctionType* ft = new HIRFunctionType(std::vector<HIRTypePtr>{ptrType, ptrType}, intType); HIRFunctionPtr fp = module_->createFunction(hasFunc, ft); fp->linkage = HIRFunction::Linkage::External; hasHandle = fp.get(); }
+                            HIRValue* hasResult = builder_->createCall(hasHandle, {weakMapObj, keyArg}, "weakmap_has");
+
                             std::string runtimeFunc = "nova_weakmap_get_num";
                             std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType};
 
@@ -10944,7 +11040,24 @@ void HIRGenerator::visit(CallExpr& node) {
                             }
 
                             std::vector<HIRValue*> args = {weakMapObj, keyArg};
-                            lastValue_ = builder_->createCall(func, args, "weakmap_get");
+                            HIRValue* getValue = builder_->createCall(func, args, "weakmap_get");
+
+                            auto jsType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                            HIRValue* undefBits = builder_->createIntConstant(
+                                static_cast<int64_t>(0x7ff9000000000000ULL));
+                            HIRValue* undefBoxed = builder_->createCast(undefBits, jsType.get(), "undef_as_js");
+                            HIRValue* boxedGet = toJSValue(getValue);
+                            auto* resultSlot = builder_->createAlloca(jsType.get(), "weakmap_get.result");
+                            builder_->createStore(boxedGet, resultSlot);
+                            auto* elseBlock = currentFunction_->createBasicBlock("weakmap_get.undef").get();
+                            auto* mergeBlock = currentFunction_->createBasicBlock("weakmap_get.merge").get();
+                            builder_->createCondBr(hasResult, mergeBlock, elseBlock);
+                            builder_->setInsertPoint(elseBlock);
+                            builder_->createStore(undefBoxed, resultSlot);
+                            builder_->createBr(mergeBlock);
+                            builder_->setInsertPoint(mergeBlock);
+                            lastValue_ = builder_->createLoad(resultSlot, "weakmap_get.value");
+                            lastValue_->type = jsType;
                             return;
                         } else if (methodName == "has") {
                             // weakmap.has(key) - returns boolean
@@ -12619,7 +12732,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             // Get function pointer
                             auto existingFunc = module_->getFunction(objIdent->name);
                             if (!existingFunc) {
-                                std::cerr << "ERROR: Function not found: " << objIdent->name << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Function not found: " << objIdent->name << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -12640,7 +12753,7 @@ void HIRGenerator::visit(CallExpr& node) {
                             // func.apply(thisArg, argsArray)
                             auto existingFunc = module_->getFunction(objIdent->name);
                             if (!existingFunc) {
-                                std::cerr << "ERROR: Function not found: " << objIdent->name << std::endl;
+                                if (NOVA_DEBUG) std::cerr << "ERROR: Function not found: " << objIdent->name << std::endl;
                                 lastValue_ = builder_->createIntConstant(0);
                                 return;
                             }
@@ -13033,10 +13146,18 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Callback: (accumulator, currentValue) => result (2 parameters!)
                         // Returns the final accumulated value
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: reduce" << std::endl;
-                        runtimeFuncName = "nova_value_array_reduce";
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // initial value
+                        // If no initial value provided, use the no-init variant
+                        // which seeds the accumulator with the first element.
+                        if (node.arguments.size() < 2) {
+                            runtimeFuncName = "nova_value_array_reduce_no_init";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        } else {
+                            runtimeFuncName = "nova_value_array_reduce";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // initial value
+                        }
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns accumulated value
                         hasReturnValue = true;
                     } else if (methodName == "reduceRight") {
@@ -13044,10 +13165,16 @@ void HIRGenerator::visit(CallExpr& node) {
                         // Callback: (accumulator, currentValue) => result (2 parameters!)
                         // Processes from RIGHT to LEFT (backwards)
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected array method call: reduceRight" << std::endl;
-                        runtimeFuncName = "nova_value_array_reduceRight";
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
-                        paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // initial value
+                        if (node.arguments.size() < 2) {
+                            runtimeFuncName = "nova_value_array_reduceRight_no_init";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                        } else {
+                            runtimeFuncName = "nova_value_array_reduceRight";
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // ValueArray*
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Pointer)); // callback function pointer
+                            paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64)); // initial value
+                        }
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);  // returns accumulated value
                         hasReturnValue = true;
                     } else {
@@ -13107,6 +13234,15 @@ void HIRGenerator::visit(CallExpr& node) {
                               << ", args.size=" << args.size() << std::endl;
                     if (hasReturnValue) {
                         lastValue_ = builder_->createCall(runtimeFunc, args, "array_method");
+                        // Methods that return a new heap-allocated runtime array
+                        // need to be recognized as such so subsequent property
+                        // accesses (e.g. .length) dispatch to nova_value_array_length.
+                        if (methodName == "map" || methodName == "filter" ||
+                            methodName == "flatMap" || methodName == "flat" ||
+                            methodName == "slice" || methodName == "reverse" ||
+                            methodName == "concat") {
+                            lastWasRuntimeArray_ = true;
+                        }
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created call with return value" << std::endl;
                     } else {
                         builder_->createCall(runtimeFunc, args, "array_method");
@@ -13144,11 +13280,17 @@ void HIRGenerator::visit(CallExpr& node) {
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String)); // string to test
                         returnType = std::make_shared<HIRType>(HIRType::Kind::I64);             // returns int64 (0 or 1)
                     } else if (methodName == "exec") {
-                        // regex.exec(str) - returns match string or null
-                        runtimeFuncName = "nova_regex_exec";
+                        // regex.exec(str) - returns StringArray (match + capture groups) or null
+                        runtimeFuncName = "nova_regex_exec_array";
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::Any));    // regex object
                         paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::String)); // string to match
-                        returnType = std::make_shared<HIRType>(HIRType::Kind::String);          // returns string (match result)
+                        // Return pointer to string array so .length and element
+                        // access use the string-array code paths.
+                        {
+                            auto elemType = std::make_shared<HIRType>(HIRType::Kind::String);
+                            auto arrTy = std::make_shared<hir::HIRArrayType>(elemType, 0);
+                            returnType = std::make_shared<hir::HIRPointerType>(arrTy, true);
+                        }
                     } else if (methodName == "toString") {
                         // regex.toString() - returns "/pattern/flags"
                         runtimeFuncName = "nova_regex_toString";
@@ -13260,6 +13402,24 @@ void HIRGenerator::visit(CallExpr& node) {
                         className = structType->name;
                         isClassMethod = true;
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected class method call: " << className << "::" << methodName << std::endl;
+                    } else if (object->type->kind == hir::HIRType::Kind::Pointer) {
+                        // `this` arrives as a pointer-to-struct; unwrap to find the struct name.
+                        auto* ptrType = dynamic_cast<hir::HIRPointerType*>(object->type.get());
+                        if (ptrType && ptrType->pointeeType &&
+                            ptrType->pointeeType->kind == hir::HIRType::Kind::Struct) {
+                            auto* structType = static_cast<hir::HIRStructType*>(ptrType->pointeeType.get());
+                            className = structType->name;
+                            isClassMethod = true;
+                            if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected class method call via pointer: " << className << "::" << methodName << std::endl;
+                        } else if (ptrType && ptrType->pointeeType &&
+                                   ptrType->pointeeType->kind == hir::HIRType::Kind::Any) {
+                            // Fall back to currentClassStructType_ if we're inside a method.
+                            if (currentClassStructType_ && !currentClassStructType_->name.empty()) {
+                                className = currentClassStructType_->name;
+                                isClassMethod = true;
+                                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Detected class method call via currentClassStructType_: " << className << "::" << methodName << std::endl;
+                            }
+                        }
                     }
                 }
 
@@ -13379,24 +13539,24 @@ void HIRGenerator::visit(CallExpr& node) {
 
                 // If fewer arguments provided than parameters, use defaults for missing ones
                 if (providedArgs < totalParams) {
-                    std::cerr << "DEBUG: Applying default parameters: provided=" << providedArgs << ", total=" << totalParams << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "DEBUG: Applying default parameters: provided=" << providedArgs << ", total=" << totalParams << std::endl;
                     for (size_t i = providedArgs; i < totalParams; ++i) {
-                        std::cerr << "DEBUG: Checking param " << i << std::endl;
+                        if (NOVA_DEBUG) std::cerr << "DEBUG: Checking param " << i << std::endl;
                         const auto& defaultValue = (*defaultValues)[i];
                         if (defaultValue) {
-                            std::cerr << "DEBUG: About to evaluate default value for param " << i << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "DEBUG: About to evaluate default value for param " << i << std::endl;
                             // Evaluate the default value expression
                             defaultValue->accept(*this);
-                            std::cerr << "DEBUG: Evaluated default value for param " << i << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "DEBUG: Evaluated default value for param " << i << std::endl;
                             args.push_back(lastValue_);
                         } else {
-                            std::cerr << "DEBUG: No default value for param " << i << ", breaking" << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "DEBUG: No default value for param " << i << ", breaking" << std::endl;
                             // No default for this parameter - this is an error case
                             // But we'll let it proceed and let LLVM catch the mismatch
                             break;
                         }
                     }
-                    std::cerr << "DEBUG: Finished applying default parameters" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "DEBUG: Finished applying default parameters" << std::endl;
                 }
             }
 
@@ -13437,9 +13597,23 @@ void HIRGenerator::visit(CallExpr& node) {
                         // CRITICAL: Load the closure pointer from the variable
                         // lastValue_ currently points to the closure variable (from identifier visitor)
                         // We need to load it to get the actual closure/environment pointer
-                        HIRValue* closurePtr = lastValue_;
+                        HIRValue* closurePtr = nullptr;
                         if (auto* varAlloca = symbolTable_[id->name]) {
+                            // Function assigned to a variable: load env pointer from
+                            // the variable (this is the materialized env stored when
+                            // the initializer was processed).
                             closurePtr = builder_->createLoad(varAlloca, id->name + "_ptr");
+                        } else if (id->name == funcName) {
+                            // Direct call to a FunctionDecl that captures variables:
+                            // there is no enclosing variable holding the env pointer,
+                            // so materialize the environment on the fly in the
+                            // caller's scope.
+                            closurePtr = materializeClosureEnvironment(funcName);
+                        }
+                        if (!closurePtr) {
+                            // Fallback: previous behavior — pass lastValue_ through
+                            // even though it is unlikely to be valid.
+                            closurePtr = lastValue_;
                         }
 
                         // IMPORTANT: Function signature is [user_params..., __env]
@@ -13453,7 +13627,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         lastWasPromise_ = func->isAsync;
                         return;
                     } else {
-                        std::cerr << "ERROR HIRGen: Closure function '" << funcName << "' not found" << std::endl;
+                        if (NOVA_DEBUG) std::cerr << "ERROR HIRGen: Closure function '" << funcName << "' not found" << std::endl;
                         lastValue_ = nullptr;
                         return;
                     }
@@ -13477,7 +13651,7 @@ void HIRGenerator::visit(CallExpr& node) {
                         lastWasPromise_ = func->isAsync;
                         return;
                     } else {
-                        std::cerr << "ERROR HIRGen: Function '" << funcName << "' not found" << std::endl;
+                        if (NOVA_DEBUG) std::cerr << "ERROR HIRGen: Function '" << funcName << "' not found" << std::endl;
                         lastValue_ = nullptr;
                         return;
                     }
@@ -13638,12 +13812,12 @@ void HIRGenerator::visit(CallExpr& node) {
                                 const auto& varName = fieldNames[i];
 
                                 if(NOVA_DEBUG) {
-                                    std::cerr << "DEBUG HIRGen: Looking up captured variable '" << varName << "' at call site" << std::endl;
-                                    std::cerr << "DEBUG HIRGen: Current symbolTable_ has " << symbolTable_.size() << " entries" << std::endl;
+                                    if (NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Looking up captured variable '" << varName << "' at call site" << std::endl;
+                                    if (NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Current symbolTable_ has " << symbolTable_.size() << " entries" << std::endl;
                                     for (const auto& entry : symbolTable_) {
                                         std::cerr << "  - " << entry.first << std::endl;
                                     }
-                                    std::cerr << "DEBUG HIRGen: scopeStack_ has " << scopeStack_.size() << " levels" << std::endl;
+                                    if (NOVA_DEBUG) std::cerr << "DEBUG HIRGen: scopeStack_ has " << scopeStack_.size() << " levels" << std::endl;
                                 }
 
                                 // Look up the variable in the current scope (call site)

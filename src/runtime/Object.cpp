@@ -576,4 +576,69 @@ void* nova_create_keys_array(int64_t count, const char** keys) {
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
+// ============================================================================
+// Class static property storage (mutable runtime backing).
+// Static class properties need a runtime home because their values can change
+// at runtime (e.g. a private static counter incremented in the constructor).
+// Keyed by (className, fieldName) - both strings.
+// ============================================================================
+} // extern "C"
+
+#include <mutex>
+#include <unordered_map>
+
+static std::unordered_map<std::string, int64_t>& classStaticStore() {
+    static std::unordered_map<std::string, int64_t> store;
+    return store;
+}
+
+static std::string classStaticKey(const char* className, const char* fieldName) {
+    return std::string(className ? className : "") + "::" +
+           std::string(fieldName ? fieldName : "");
+}
+
+extern "C" {
+
+// Initialize a static property if it hasn't been initialized yet.
+// Idempotent - safe to call on every class declaration encounter.
+void nova_class_static_init_i64(const char* className, const char* fieldName, int64_t value) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+    auto& store = classStaticStore();
+    std::string key = classStaticKey(className, fieldName);
+    if (store.find(key) == store.end()) {
+        store[key] = value;
+    }
+}
+
+int64_t nova_class_static_get_i64(const char* className, const char* fieldName) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+    auto& store = classStaticStore();
+    std::string key = classStaticKey(className, fieldName);
+    auto it = store.find(key);
+    if (it == store.end()) return 0;
+    return it->second;
+}
+
+// Lazy init variant: returns the current value, initializing to defaultValue if not yet set.
+int64_t nova_class_static_get_or_init_i64(const char* className, const char* fieldName, int64_t defaultValue) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+    auto& store = classStaticStore();
+    std::string key = classStaticKey(className, fieldName);
+    auto it = store.find(key);
+    if (it == store.end()) {
+        store[key] = defaultValue;
+        return defaultValue;
+    }
+    return it->second;
+}
+
+void nova_class_static_set_i64(const char* className, const char* fieldName, int64_t value) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+    classStaticStore()[classStaticKey(className, fieldName)] = value;
+}
+
 } // extern "C"

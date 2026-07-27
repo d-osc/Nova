@@ -102,7 +102,12 @@ bool LLVMCodeGen::generate(const mir::MIRModule& mirModule) {
             llvm::Type* retType = convertType(mirFunc->returnType.get());
             if (retType->isVoidTy()) {
                 retType = llvm::Type::getInt64Ty(*context);
-            } else if (!retType->isPointerTy() && !retType->isIntegerTy(1)) {
+            } else if (!retType->isPointerTy() && !retType->isIntegerTy(1) &&
+                       !retType->isFloatingPointTy()) {
+                // Preserve double/float return types (needed for C library
+                // functions like sqrt, sin, cos, ... that return double).
+                // Anything else (i8/i16/i32/i64/struct/...) collapses to i64
+                // because the Nova runtime ABI passes everything as i64.
                 retType = llvm::Type::getInt64Ty(*context);
             }
             
@@ -2445,10 +2450,10 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                         }
 
                         if (!callee && funcName == "nova_string_at") {
-                            // i64 @nova_string_at(ptr, i64) - returns character code at index (supports negative)
+                            // ptr @nova_string_at(ptr, i64) - returns single-char string at index (supports negative)
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_string_at declaration" << std::endl;
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
-                                llvm::Type::getInt64Ty(*context),  // Returns i64 (character code)
+                                llvm::PointerType::getUnqual(*context),  // Returns single-char string
                                 {llvm::PointerType::getUnqual(*context),
                                  llvm::Type::getInt64Ty(*context)},
                                 false
@@ -5088,6 +5093,70 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             );
                         }
 
+                        if (!callee && funcName == "sqrt") {
+                            // double @sqrt(double) - C library square root function
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external sqrt declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "sqrt",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "cbrt") {
+                            // double @cbrt(double) - C library cube root function
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external cbrt declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "cbrt",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "exp2") {
+                            // double @exp2(double) - C library function returns 2^x
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external exp2 declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context)},  // Takes double
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "exp2",
+                                module.get()
+                            );
+                        }
+
+                        if (!callee && funcName == "hypot") {
+                            // double @hypot(double, double) - C library Euclidean distance function
+                            if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external hypot declaration" << std::endl;
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getDoubleTy(*context),  // Returns double
+                                {llvm::Type::getDoubleTy(*context), llvm::Type::getDoubleTy(*context)},  // Takes two doubles
+                                false
+                            );
+                            callee = llvm::Function::Create(
+                                funcType,
+                                llvm::Function::ExternalLinkage,
+                                "hypot",
+                                module.get()
+                            );
+                        }
+
                         if (!callee && funcName == "nova_random") {
                             // double @nova_random() - Nova runtime function returns random number [0, 1)
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Creating external nova_random declaration" << std::endl;
@@ -5393,12 +5462,14 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                     std::cerr << std::endl;
                 }
 
-                // Handle return value type conversion (e.g., double to I64 for Math functions)
-                // Use fptosi to properly convert floating point values to integers (truncation)
-                if (result && result->getType()->isFloatingPointTy()) {
-                    if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Converting floating point return value to i64 via fptosi" << std::endl;
-                    result = builder->CreateFPToSI(result, llvm::Type::getInt64Ty(*context), "fp_to_int");
-                }
+                // Note: do NOT blanket-convert floating-point call results to
+                // i64. C library functions (sqrt, sin, cos, log, ...) genuinely
+                // return double, and the HIR/MIR function signatures now reflect
+                // that. Truncating their results corrupts the value (the bit
+                // pattern of the resulting integer gets reinterpreted downstream
+                // as a tiny denormalized double). If a specific call site needs
+                // an i64 result, it must be expressed at the HIR level via an
+                // explicit cast, not papered over here.
 
                 // Special handling for array functions that return new arrays
                 // calleeName already declared above at line 1658
@@ -5465,7 +5536,14 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             funcName == "nova_value_array_flatMap" ||
                             funcName == "nova_array_from" ||
                             funcName == "nova_array_from_map" ||
-                            funcName == "nova_array_of") {
+                            funcName == "nova_array_of" ||
+                            funcName == "nova_string_split" ||
+                            funcName == "nova_string_split_regex" ||
+                            funcName == "nova_string_match_array" ||
+                            funcName == "nova_regex_split" ||
+                            funcName == "nova_regex_match" ||
+                            funcName == "nova_string_match_all" ||
+                            funcName == "nova_regex_matchAll") {
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Detected array-returning function: " << funcName << std::endl;
                             // Create ValueArrayMeta type and register it for the result
                             // ValueArrayMeta = { [24 x i8], i64 length, i64 capacity, ptr elements }
@@ -6154,9 +6232,22 @@ llvm::Value* LLVMCodeGen::generateCast(mir::MIRCastRValue::CastKind kind,
             return builder->CreateFPToSI(value, targetType, "cast");
         case mir::MIRCastRValue::CastKind::FloatToFloat:
             return builder->CreateFPCast(value, targetType, "cast");
-        case mir::MIRCastRValue::CastKind::PtrToPtr:
-            // Pointer to pointer cast
+        case mir::MIRCastRValue::CastKind::PtrToPtr: {
+            // Pointer<->pointer bitcast OR int<->pointer cast.
+            // LLVM forbids bitcast between int and ptr; route those
+            // through IntToPtr/PtrToInt instead.
+            llvm::Type* srcType = value->getType();
+            if (srcType->isPointerTy() && targetType->isPointerTy()) {
+                return builder->CreateBitCast(value, targetType, "ptrcast");
+            }
+            if (srcType->isIntegerTy() && targetType->isPointerTy()) {
+                return builder->CreateIntToPtr(value, targetType, "int2ptr");
+            }
+            if (srcType->isPointerTy() && targetType->isIntegerTy()) {
+                return builder->CreatePtrToInt(value, targetType, "ptr2int");
+            }
             return builder->CreateBitCast(value, targetType, "ptrcast");
+        }
         case mir::MIRCastRValue::CastKind::Bitcast:
             return builder->CreateBitCast(value, targetType, "cast");
         case mir::MIRCastRValue::CastKind::Unsize:
@@ -7021,7 +7112,18 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             }
         }
 
-        // If still no type, fall back to array metadata inference
+        // If still no type, fall back to array metadata inference.
+        // Class field accesses (named class instances) should always resolve
+        // to the unified %struct.NovaObject — never to array metadata, even
+        // when we couldn't find the alloca (e.g., constructor result used
+        // directly without being spilled to a variable).
+        if (!arrayType) {
+            if (getElemOp->isClassFieldAccess) {
+                arrayType = llvm::StructType::getTypeByName(*context, "struct.NovaObject");
+                if (arrayType && allocaInst) arrayTypeMap[allocaInst] = arrayType;
+            }
+        }
+
         if (!arrayType) {
             // Fallback: Infer type from loadedArrayPtr
             // If loadedArrayPtr is a pointer to a struct, and that struct looks like array metadata,
@@ -7095,7 +7197,11 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
     // particular, arr.length is represented as a field access and must use
     // metadata field 1 directly. Treating it as a regular object field adds an
     // ObjectHeader offset a second time and reads capacity (field 2) instead.
-    if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
+    // Skip detection for class field access — those use HIR field indices and
+    // need the regular-struct path (which adds the ObjectHeader offset).
+    auto* candidateStructType = llvm::dyn_cast<llvm::StructType>(arrayType);
+    if (!getElemOp->isClassFieldAccess && candidateStructType) {
+        auto* structType = candidateStructType;
         if (structType->getNumElements() == 4) {
             llvm::Type* firstField = structType->getElementType(0);
             if (auto* arrayTypeField = llvm::dyn_cast<llvm::ArrayType>(firstField)) {

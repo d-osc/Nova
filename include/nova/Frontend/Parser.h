@@ -27,6 +27,10 @@ private:
     bool match(TokenType type);
     bool check(TokenType type);
     Token consume(TokenType type, const std::string& message);
+    bool checkIdentifierName() const;
+    bool checkBindingIdentifier() const;
+    Token consumeIdentifierName(const std::string& message);
+    Token consumeBindingIdentifier(const std::string& message);
     
     // Statement parsing
     std::unique_ptr<Stmt> parseStatement();
@@ -123,6 +127,11 @@ private:
     void synchronize();
     void reportError(const std::string& message);
     SourceLocation getCurrentLocation() const;
+
+    // Attempts to parse `<T, U, ...>` as type arguments. Returns true and
+    // consumes the tokens on success; returns false and restores position
+    // on failure (so callers can treat `<` as a comparison operator).
+    bool tryParseTypeArguments();
     
     Lexer& lexer_;
     std::vector<Token> tokens_;

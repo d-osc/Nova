@@ -169,9 +169,10 @@ int64_t nova_string_codePointAt(const char* str, int64_t index) {
     return static_cast<int64_t>(byte);
 }
 
-// Get character code at index (supports negative indices)
-int64_t nova_string_at(const char* str, int64_t index) {
-    if (!str) return 0;
+// Get character at index (supports negative indices).
+// Per JS spec: String.prototype.at returns a single-character string, not a char code.
+const char* nova_string_at(const char* str, int64_t index) {
+    if (!str) return "";
 
     size_t len = std::strlen(str);
 
@@ -182,11 +183,15 @@ int64_t nova_string_at(const char* str, int64_t index) {
 
     // Check bounds after conversion
     if (index < 0 || static_cast<size_t>(index) >= len) {
-        return 0; // Out of bounds
+        return ""; // Out of bounds
     }
 
-    // Cast to unsigned char first to avoid sign extension issues
-    return static_cast<int64_t>(static_cast<unsigned char>(str[index]));
+    // Return single-character string
+    char* result = static_cast<char*>(malloc(2));
+    if (!result) return "";
+    result[0] = str[index];
+    result[1] = 0;
+    return result;
 }
 
 // Create string from character code (static method)
@@ -308,6 +313,41 @@ const char* nova_string_substring(const char* str, int64_t start, int64_t end) {
     std::memcpy(result, str + start, substr_len);
     result[substr_len] = '\0';
 
+    return result;
+}
+
+// substr(start, length) — legacy but supported. Differs from substring:
+// second arg is LENGTH, not end index. Negative start is treated as 0.
+const char* nova_string_substr(const char* str, int64_t start, int64_t length) {
+    if (!str) return "";
+    size_t len = std::strlen(str);
+    if (start < 0) start = 0;
+    if (static_cast<size_t>(start) > len) start = len;
+    if (length < 0) length = 0;
+    // Clamp length so we don't read past end of string.
+    if (static_cast<size_t>(start) + static_cast<size_t>(length) > len) {
+        length = static_cast<int64_t>(len - static_cast<size_t>(start));
+    }
+    if (length <= 0) return "";
+
+    char* result = static_cast<char*>(malloc(length + 1));
+    if (!result) return "";
+    std::memcpy(result, str + start, length);
+    result[length] = '\0';
+    return result;
+}
+
+// substr(start) — single-argument form: from start to end of string.
+const char* nova_string_substr_from(const char* str, int64_t start) {
+    if (!str) return "";
+    size_t len = std::strlen(str);
+    if (start < 0) start = 0;
+    if (static_cast<size_t>(start) > len) start = len;
+    int64_t length = static_cast<int64_t>(len - static_cast<size_t>(start));
+    char* result = static_cast<char*>(malloc(length + 1));
+    if (!result) return "";
+    std::memcpy(result, str + start, length);
+    result[length] = '\0';
     return result;
 }
 
@@ -539,6 +579,21 @@ const char* nova_string_slice(const char* str, int64_t start, int64_t end) {
     return result;
 }
 
+// slice(start) — single-argument form: from start to end of string.
+const char* nova_string_slice_from(const char* str, int64_t start) {
+    if (!str) return "";
+    int64_t len = static_cast<int64_t>(std::strlen(str));
+    if (start < 0) start = std::max(len + start, static_cast<int64_t>(0));
+    if (start > len) start = len;
+    int64_t slice_len = len - start;
+    if (slice_len <= 0) return "";
+    char* result = static_cast<char*>(malloc(slice_len + 1));
+    if (!result) return "";
+    std::memcpy(result, str + start, slice_len);
+    result[slice_len] = '\0';
+    return result;
+}
+
 // Replace first occurrence of search string with replacement
 const char* nova_string_replace(const char* str, const char* search, const char* replace) {
     if (!str) return "";
@@ -736,9 +791,18 @@ void* nova_string_split(const char* str, const char* delimiter) {
     size_t delim_len = std::strlen(delimiter);
 
     if (delim_len == 0) {
-        auto* array = nova_string_array_create(1);
-        array->length = 1;
-        array->elements[0] = str;
+        // Per JS spec: "".split() splits into individual UTF-8 bytes.
+        // (Full grapheme/UTF-8 codepoint splitting is out of scope.)
+        auto* array = nova_string_array_create(static_cast<int64_t>(str_len));
+        array->length = static_cast<int64_t>(str_len);
+        for (size_t i = 0; i < str_len; ++i) {
+            char* part = static_cast<char*>(malloc(2));
+            if (part) {
+                part[0] = str[i];
+                part[1] = 0;
+                array->elements[i] = part;
+            }
+        }
         return array;
     }
 

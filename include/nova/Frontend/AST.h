@@ -39,16 +39,29 @@ public:
         Void, Any, Unknown, Never,
         Number, String, Boolean, BigInt, Symbol, Null, Undefined,
         Object, Array, Function, Union, Intersection,
-        Tuple, Literal, TypeParameter, IndexedAccess
+        Tuple, Literal, TypeParameter, IndexedAccess,
+        // TypeScript advanced type-only constructs. Treated as `Any`
+        // at runtime via type erasure.
+        Keyof, Conditional, Mapped, Infer
     };
-    
+
     Kind kind;
     std::string name;  // For named types
     std::vector<TypePtr> types;  // Union/intersection/tuple members
     TypePtr elementType;         // Array element type
     std::unordered_map<std::string, TypePtr> properties; // Structural object members
     std::unordered_set<std::string> optionalProperties;
-    
+    // Conditional: T extends U ? X : Y
+    TypePtr checkType;     // T
+    TypePtr extendsType;   // U
+    TypePtr trueType;      // X
+    TypePtr falseType;     // Y
+    // Mapped: { [K in keyof T]: V }
+    TypePtr mappedSource;  // T
+    std::string mappedVar;  // K
+    // Infer: infer T (stored in `name`)
+    // Keyof: keyof T (stored in `elementType`)
+
     explicit Type(Kind k, const std::string& n = "") : kind(k), name(n) {}
     void accept(ASTVisitor& visitor) override { (void)visitor; }
 };
@@ -849,8 +862,10 @@ public:
         bool isAbstract = false;
         TypePtr returnType;
         std::vector<std::unique_ptr<Decorator>> decorators;
+        bool isComputed = false;
+        ExprPtr computedKey;
     };
-    
+
     struct Property {
         std::string name;
         ExprPtr initializer;
@@ -858,6 +873,8 @@ public:
         bool isStatic = false;
         bool isReadonly = false;
         std::vector<std::unique_ptr<Decorator>> decorators;
+        bool isComputed = false;
+        ExprPtr computedKey;
     };
     
     std::string name;

@@ -1769,8 +1769,48 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         auto operand = translateOperand(hirInst->operands[0].get());
         auto targetType = translateType(hirInst->type.get());
 
-        // Determine cast kind based on types
+        // Determine cast kind based on source and target types
         MIRCastRValue::CastKind castKind = MIRCastRValue::CastKind::IntToInt;
+
+        // Inspect source HIR type if possible
+        hir::HIRType::Kind srcKind = hir::HIRType::Kind::I64;
+        if (hirInst->operands[0] && hirInst->operands[0]->type) {
+            srcKind = hirInst->operands[0]->type->kind;
+        }
+        hir::HIRType::Kind dstKind = hir::HIRType::Kind::I64;
+        if (hirInst->type) {
+            dstKind = hirInst->type->kind;
+        }
+
+        bool srcIsFloat = (srcKind == hir::HIRType::Kind::F64 || srcKind == hir::HIRType::Kind::F32);
+        bool dstIsFloat = (dstKind == hir::HIRType::Kind::F64 || dstKind == hir::HIRType::Kind::F32);
+        bool srcIsInt = (srcKind == hir::HIRType::Kind::I64 || srcKind == hir::HIRType::Kind::I32 ||
+                         srcKind == hir::HIRType::Kind::Bool || srcKind == hir::HIRType::Kind::I8 ||
+                         srcKind == hir::HIRType::Kind::I16);
+        bool dstIsInt = (dstKind == hir::HIRType::Kind::I64 || dstKind == hir::HIRType::Kind::I32 ||
+                         dstKind == hir::HIRType::Kind::Bool || dstKind == hir::HIRType::Kind::I8 ||
+                         dstKind == hir::HIRType::Kind::I16);
+
+        if (srcIsFloat && dstIsFloat) {
+            castKind = MIRCastRValue::CastKind::FloatToFloat;
+        } else if (srcIsFloat && dstIsInt) {
+            castKind = MIRCastRValue::CastKind::FloatToInt;
+        } else if (srcIsInt && dstIsFloat) {
+            castKind = MIRCastRValue::CastKind::IntToFloat;
+        } else if (srcKind == hir::HIRType::Kind::Pointer && dstKind == hir::HIRType::Kind::Pointer) {
+            castKind = MIRCastRValue::CastKind::PtrToPtr;
+        } else if (srcKind == hir::HIRType::Kind::Pointer &&
+                   (dstIsInt || dstKind == hir::HIRType::Kind::String)) {
+            // Pointer to integer or to string (still a pointer at the LLVM level)
+            castKind = MIRCastRValue::CastKind::PtrToPtr;
+        } else if (srcIsInt &&
+                   (dstKind == hir::HIRType::Kind::Pointer ||
+                    dstKind == hir::HIRType::Kind::String)) {
+            // Integer to pointer or string (pointer at the LLVM level)
+            castKind = MIRCastRValue::CastKind::PtrToPtr;
+        } else {
+            castKind = MIRCastRValue::CastKind::IntToInt;
+        }
 
         auto rvalue = builder_->createCast(castKind, operand, targetType);
         auto dest = getOrCreatePlace(hirInst);
@@ -1967,9 +2007,31 @@ void generateBr(hir::HIRInstruction* hirInst, [[maybe_unused]] MIRBasicBlock* mi
         // This preserves whether it's a Pointer (for strings/mixed) or I64 (for numbers)
         if(NOVA_DEBUG) std::cerr << "DEBUG MIRGen: GetField dest type = " << static_cast<int>(dest->type->kind) << std::endl;
 
-        // Create GetElement rvalue for field access with isFieldAccess=true
+        // Create GetElement rvalue for field access with isFieldAccess=true.
+        // Class field accesses (objects of named class type) need the regular
+        // struct GEP path that adds +1 for the ObjectHeader. Array metadata
+        // accesses (arr.length) already encode the post-header index, so they
+        // need the metadata path that uses the index verbatim. We distinguish
+        // them by checking whether the HIR struct operand has a non-empty name
+        // (named structs are class types; anonymous ones are array metadata).
+        bool isClassField = false;
+        if (hirInst->operands[0] && hirInst->operands[0]->type) {
+            if (auto* stDirect = dynamic_cast<hir::HIRStructType*>(
+                    hirInst->operands[0]->type.get())) {
+                isClassField = !stDirect->name.empty();
+            } else if (auto* pt = dynamic_cast<hir::HIRPointerType*>(
+                    hirInst->operands[0]->type.get())) {
+                if (pt->pointeeType) {
+                    if (auto* stPtr = dynamic_cast<hir::HIRStructType*>(
+                            pt->pointeeType.get())) {
+                        isClassField = !stPtr->name.empty();
+                    }
+                }
+            }
+        }
         auto getFieldRValue = std::make_shared<MIRGetElementRValue>(
             structPtr, fieldIndex, true, dest->type);
+        getFieldRValue->isClassFieldAccess = isClassField;
 
         builder_->createAssign(dest, getFieldRValue);
     }

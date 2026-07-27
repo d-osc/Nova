@@ -58,8 +58,10 @@ void HIRGenerator::visit(IfStmt& node) {
 void HIRGenerator::visit(WhileStmt& node) {
         if(NOVA_DEBUG) std::cerr << "DEBUG: Entering WhileStmt generation" << std::endl;
 
+        // Capture any label from enclosing LabeledStmt before clearing.
+        const std::string labelForThisLoop = currentLabel_;
         // Include label in block names if we're inside a labeled statement
-        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        std::string labelSuffix = labelForThisLoop.empty() ? "" : "#" + labelForThisLoop;
         // Clear label after using it - label only applies to this loop, not nested loops
         currentLabel_.clear();
 
@@ -69,9 +71,15 @@ void HIRGenerator::visit(WhileStmt& node) {
 
         if(NOVA_DEBUG) std::cerr << "DEBUG: Created while loop blocks: cond=" << condBlock << ", body=" << bodyBlock << ", end=" << endBlock << std::endl;
 
-        // Push break and continue targets onto stacks
+        // Push break and continue targets onto stacks. Also capture the current
+        // label (possibly empty) so labeled break/continue can find this loop.
+        // The label is "consumed" here — any nested unlabeled loop sees "" and
+        // doesn't wrongly inherit our label.
         breakTargetStack_.push_back(endBlock);
         continueTargetStack_.push_back(condBlock);
+        breakTargetLabels_.push_back(labelForThisLoop);
+        continueTargetLabels_.push_back(labelForThisLoop);
+        currentLabel_.clear();
 
         // Jump to condition
         builder_->createBr(condBlock);
@@ -100,6 +108,8 @@ void HIRGenerator::visit(WhileStmt& node) {
         // Pop break and continue targets from stacks
         breakTargetStack_.pop_back();
         continueTargetStack_.pop_back();
+        breakTargetLabels_.pop_back();
+        continueTargetLabels_.pop_back();
 
         // End block
         builder_->setInsertPoint(endBlock);
@@ -108,8 +118,10 @@ void HIRGenerator::visit(WhileStmt& node) {
     
 void HIRGenerator::visit(DoWhileStmt& node) {
         // Create basic blocks for the do-while loop
+        // Capture any label from enclosing LabeledStmt before clearing.
+        const std::string labelForThisLoop = currentLabel_;
         // Include label in block names if we're inside a labeled statement
-        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        std::string labelSuffix = labelForThisLoop.empty() ? "" : "#" + labelForThisLoop;
         // Clear label after using it - label only applies to this loop, not nested loops
         currentLabel_.clear();
 
@@ -144,9 +156,11 @@ void HIRGenerator::visit(DoWhileStmt& node) {
 void HIRGenerator::visit(ForStmt& node) {
         if(NOVA_DEBUG) std::cerr << "DEBUG: Entering ForStmt generation" << std::endl;
 
+        // Capture any label set by an enclosing LabeledStmt before clearing.
+        // The label only applies to THIS loop; nested unlabeled loops inherit "".
+        const std::string labelForThisLoop = currentLabel_;
         // Include label in block names if we're inside a labeled statement
-        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
-        // Clear label after using it - label only applies to this loop, not nested loops
+        std::string labelSuffix = labelForThisLoop.empty() ? "" : "#" + labelForThisLoop;
         currentLabel_.clear();
 
         // Create basic blocks for the for loop
@@ -155,13 +169,16 @@ void HIRGenerator::visit(ForStmt& node) {
         auto* bodyBlock = currentFunction_->createBasicBlock("for.body" + labelSuffix).get();
         auto* updateBlock = currentFunction_->createBasicBlock("for.update" + labelSuffix).get();
         auto* endBlock = currentFunction_->createBasicBlock("for.end" + labelSuffix).get();
-        
+
         if(NOVA_DEBUG) std::cerr << "DEBUG: Created for loop blocks: init=" << initBlock << ", cond=" << condBlock
                   << ", body=" << bodyBlock << ", update=" << updateBlock << ", end=" << endBlock << std::endl;
 
-        // Push break and continue targets onto stacks
+        // Push break and continue targets onto stacks. The captured label is
+        // recorded so labeled break/continue can find this loop later.
         breakTargetStack_.push_back(endBlock);
         continueTargetStack_.push_back(updateBlock);
+        breakTargetLabels_.push_back(labelForThisLoop);
+        continueTargetLabels_.push_back(labelForThisLoop);
 
         // Branch to init block
         builder_->createBr(initBlock);
@@ -240,6 +257,8 @@ void HIRGenerator::visit(ForStmt& node) {
         // Pop break and continue targets from stacks
         breakTargetStack_.pop_back();
         continueTargetStack_.pop_back();
+        breakTargetLabels_.pop_back();
+        continueTargetLabels_.pop_back();
 
         if(NOVA_DEBUG) std::cerr << "DEBUG: For loop generation completed" << std::endl;
     }
@@ -256,7 +275,8 @@ void HIRGenerator::visit(ForInStmt& node) {
         bool hasCompileTimeKeys = !iterableName.empty() && objectFieldNames_.count(iterableName) > 0;
 
         // Create basic blocks (with label suffix if inside labeled statement)
-        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        const std::string labelForThisLoop = currentLabel_;
+        std::string labelSuffix = labelForThisLoop.empty() ? "" : "#" + labelForThisLoop;
         currentLabel_.clear();
 
         auto* endBlock = currentFunction_->createBasicBlock("forin.end" + labelSuffix).get();
@@ -359,11 +379,15 @@ void HIRGenerator::visit(ForInStmt& node) {
 
             breakTargetStack_.push_back(endBlock);
             continueTargetStack_.push_back(updateBlock);
+            breakTargetLabels_.push_back(labelForThisLoop);
+            continueTargetLabels_.push_back(labelForThisLoop);
 
             node.body->accept(*this);
 
             breakTargetStack_.pop_back();
             continueTargetStack_.pop_back();
+            breakTargetLabels_.pop_back();
+            continueTargetLabels_.pop_back();
 
             bool needsBranch = true;
             if (!bodyBlock->instructions.empty()) {
@@ -425,7 +449,8 @@ void HIRGenerator::visit(ForOfStmt& node) {
             //       result = gen.next(0);
             //   }
 
-            std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+            const std::string labelForThisLoop = currentLabel_;
+            std::string labelSuffix = labelForThisLoop.empty() ? "" : "#" + labelForThisLoop;
             currentLabel_.clear();
 
             auto* initBlock = currentFunction_->createBasicBlock("forof_gen.init" + labelSuffix).get();
@@ -532,8 +557,20 @@ void HIRGenerator::visit(ForOfStmt& node) {
             builder_->createStore(itemValue, loopVar);
             symbolTable_[node.left] = loopVar;
 
+            // Push break/continue targets for the generator-style for-of.
+            breakTargetStack_.push_back(endBlock);
+            continueTargetStack_.push_back(updateBlock);
+            breakTargetLabels_.push_back(labelForThisLoop);
+            continueTargetLabels_.push_back(labelForThisLoop);
+
             // Execute loop body
             node.body->accept(*this);
+
+            // Pop break/continue targets.
+            breakTargetStack_.pop_back();
+            continueTargetStack_.pop_back();
+            breakTargetLabels_.pop_back();
+            continueTargetLabels_.pop_back();
 
             // Check if body ends with terminator
             bool needsBranch = true;
@@ -582,7 +619,8 @@ void HIRGenerator::visit(ForOfStmt& node) {
         //   }
 
         // Create basic blocks (with label suffix if inside labeled statement)
-        std::string labelSuffix = currentLabel_.empty() ? "" : "#" + currentLabel_;
+        const std::string labelForThisLoop = currentLabel_;
+        std::string labelSuffix = labelForThisLoop.empty() ? "" : "#" + labelForThisLoop;
         // Clear label after using it - label only applies to this loop, not nested loops
         currentLabel_.clear();
 
@@ -662,6 +700,16 @@ void HIRGenerator::visit(ForOfStmt& node) {
         builder_->setInsertPoint(bodyBlock);
         if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - executing body" << std::endl;
 
+        // Push break/continue targets so `break` and `continue` inside the
+        // for-of body have somewhere to go (break → endBlock, continue →
+        // updateBlock). Without this, nested break/continue fall through
+        // to whatever enclosing loop is on the stack — or fail entirely.
+        breakTargetStack_.push_back(endBlock);
+        continueTargetStack_.push_back(updateBlock);
+        breakTargetLabels_.push_back(labelForThisLoop);
+        continueTargetLabels_.push_back(labelForThisLoop);
+        currentLabel_.clear();
+
         // Load current index for array access
         auto* indexForAccess = builder_->createLoad(indexVar);
 
@@ -731,6 +779,12 @@ void HIRGenerator::visit(ForOfStmt& node) {
         if (needsBranch) {
             builder_->createBr(updateBlock);
         }
+
+        // Pop break/continue targets now that the body has been emitted.
+        breakTargetStack_.pop_back();
+        continueTargetStack_.pop_back();
+        breakTargetLabels_.pop_back();
+        continueTargetLabels_.pop_back();
 
         // Update block: __iter_idx = __iter_idx + 1
         builder_->setInsertPoint(updateBlock);
@@ -854,13 +908,29 @@ void HIRGenerator::visit(BreakStmt& node) {
         }
         std::cerr << std::endl;
 
-        // Get the break target from the stack
         if (breakTargetStack_.empty()) {
-            std::cerr << "ERROR: break statement outside of loop/switch" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "ERROR: break statement outside of loop/switch" << std::endl;
             return;
         }
 
-        auto* breakTarget = breakTargetStack_.back();
+        // If the break has a label, walk the target stack from the top to find
+        // the matching label. If no label, use the top of the stack.
+        HIRBasicBlock* breakTarget = nullptr;
+        if (!node.label.empty()) {
+            for (size_t i = breakTargetStack_.size(); i-- > 0; ) {
+                if (breakTargetLabels_[i] == node.label) {
+                    breakTarget = breakTargetStack_[i];
+                    break;
+                }
+            }
+            if (!breakTarget) {
+                std::cerr << "ERROR: break label '" << node.label
+                          << "' not found in enclosing loops" << std::endl;
+                return;
+            }
+        } else {
+            breakTarget = breakTargetStack_.back();
+        }
         builder_->createBr(breakTarget);
 
         auto* currentBlock = builder_->getInsertBlock();
@@ -875,13 +945,28 @@ void HIRGenerator::visit(ContinueStmt& node) {
         }
         std::cerr << std::endl;
 
-        // Get the continue target from the stack
         if (continueTargetStack_.empty()) {
-            std::cerr << "ERROR: continue statement outside of loop" << std::endl;
+            if (NOVA_DEBUG) std::cerr << "ERROR: continue statement outside of loop" << std::endl;
             return;
         }
 
-        auto* continueTarget = continueTargetStack_.back();
+        // Same label lookup as break.
+        HIRBasicBlock* continueTarget = nullptr;
+        if (!node.label.empty()) {
+            for (size_t i = continueTargetStack_.size(); i-- > 0; ) {
+                if (continueTargetLabels_[i] == node.label) {
+                    continueTarget = continueTargetStack_[i];
+                    break;
+                }
+            }
+            if (!continueTarget) {
+                std::cerr << "ERROR: continue label '" << node.label
+                          << "' not found in enclosing loops" << std::endl;
+                return;
+            }
+        } else {
+            continueTarget = continueTargetStack_.back();
+        }
         builder_->createBr(continueTarget);
 
         auto* currentBlock = builder_->getInsertBlock();
@@ -892,9 +977,55 @@ void HIRGenerator::visit(ThrowStmt& node) {
         // throw statement - call nova_throw runtime function
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing throw statement" << std::endl;
 
+        // Detect `throw new ClassName(...)` and tag the exception with the
+        // class name so instanceof checks in catch blocks can resolve at
+        // runtime (the static instanceof resolver cannot see catch params,
+        // which carry no class kind info).
+        std::string thrownClassName;
+        NewExpr* asNew = dynamic_cast<NewExpr*>(node.argument.get());
+        if (asNew) {
+            if (auto* id = dynamic_cast<Identifier*>(asNew->callee.get())) {
+                thrownClassName = id->name;
+            }
+        }
+        // Also handle `throw identifier` where identifier is a known class instance
+        if (thrownClassName.empty()) {
+            if (auto* id = dynamic_cast<Identifier*>(node.argument.get())) {
+                auto kindIt = variableKinds_.find(id->name);
+                if (kindIt != variableKinds_.end()) {
+                    thrownClassName = kindIt->second;
+                }
+            }
+        }
+
         // Evaluate the exception value
         node.argument->accept(*this);
         auto* exceptionValue = lastValue_;
+
+        // Wrap as a JSValue so the catch block can recover the original type
+        // (string pointer, object pointer, etc.) via the NaN-boxed tag bits.
+        // Without this, the raw i64/ptr passed to nova_throw loses its type
+        // tag and `e === thrownValue` comparisons in catch fail silently.
+        HIRValue* boxedValue = toJSValue(exceptionValue);
+
+        // If we know the class name, call nova_set_thrown_class_name first so
+        // the catch-side instanceof resolver can match it.
+        if (!thrownClassName.empty()) {
+            std::string setFuncName = "nova_set_thrown_class_name";
+            HIRFunction* setFunc = module_->getFunction(setFuncName).get();
+            if (!setFunc) {
+                auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+                HIRFunctionType* ft = new HIRFunctionType({ptrType}, voidType);
+                auto fp = module_->createFunction(setFuncName, ft);
+                fp->linkage = HIRFunction::Linkage::External;
+                setFunc = fp.get();
+            }
+            std::vector<HIRValue*> setNameArgs = {
+                static_cast<HIRValue*>(builder_->createStringConstant(thrownClassName))
+            };
+            builder_->createCall(setFunc, setNameArgs, "");
+        }
 
         // Setup function signature for nova_throw(int64_t)
         std::string runtimeFuncName = "nova_throw";
@@ -920,8 +1051,8 @@ void HIRGenerator::visit(ThrowStmt& node) {
             if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created external function: " << runtimeFuncName << std::endl;
         }
 
-        // Create call to nova_throw
-        std::vector<HIRValue*> args = {exceptionValue};
+        // Create call to nova_throw with the boxed JSValue
+        std::vector<HIRValue*> args = {boxedValue};
         builder_->createCall(runtimeFunc, args, "");
         // If we are inside a try block, jump to the catch block
         if (currentCatchBlock_) {
@@ -929,6 +1060,33 @@ void HIRGenerator::visit(ThrowStmt& node) {
             builder_->createBr(currentCatchBlock_);
         }
         // If no catch block, nova_throw will handle uncaught exception and exit
+    }
+
+bool HIRGenerator::pollExceptionAfterCall() {
+        if (!currentCatchBlock_ || !currentFunction_) return true;
+
+        // Get or create declaration for nova_exception_pending().
+        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+        HIRFunction* pollFunc = nullptr;
+        const std::string runtimeName = "nova_exception_pending";
+        if (auto existing = module_->getFunction(runtimeName)) {
+            pollFunc = existing.get();
+        } else {
+            auto* funcType = new HIRFunctionType({}, intType);
+            auto funcPtr = module_->createFunction(runtimeName, funcType);
+            funcPtr->linkage = HIRFunction::Linkage::External;
+            pollFunc = funcPtr.get();
+        }
+
+        auto* pending = builder_->createCall(pollFunc, {}, "exn.pending");
+        pending->type = intType;
+        auto* zero = builder_->createIntConstant(0);
+        auto* threw = builder_->createNe(pending, zero, "exn.threw");
+
+        auto* continueBlock = currentFunction_->createBasicBlock("exn.continue").get();
+        builder_->createCondBr(threw, currentCatchBlock_, continueBlock);
+        builder_->setInsertPoint(continueBlock);
+        return true;
     }
     
 void HIRGenerator::visit(TryStmt& node) {
@@ -990,6 +1148,11 @@ void HIRGenerator::visit(TryStmt& node) {
         if (catchBlock) {
             builder_->setInsertPoint(catchBlock.get());
 
+            // A `throw` inside the catch must propagate to the enclosing
+            // catch (the prevCatchBlock saved on entry), not to this same
+            // catch — otherwise rethrows loop back infinitely.
+            currentCatchBlock_ = prevCatchBlock;
+
             // Get exception value via nova_get_exception()
             HIRValue* exceptionValue = nullptr;
             {
@@ -1004,7 +1167,12 @@ void HIRGenerator::visit(TryStmt& node) {
                 }
                 if (!runtimeFunc) {
                     std::vector<HIRTypePtr> paramTypes;
-                    auto returnType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    // The return is already a NaN-boxed JSValue (because
+                    // visit(ThrowStmt) now boxes the value via toJSValue before
+                    // calling nova_throw). Declaring the return type as JSValue
+                    // prevents downstream codegen from re-wrapping it with
+                    // nova_value_from_i64 and losing the string/object tag bits.
+                    auto returnType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
                     HIRFunctionType* funcType = new HIRFunctionType(paramTypes, returnType);
                     HIRFunctionPtr funcPtr = module_->createFunction(funcName, funcType);
                     funcPtr->linkage = HIRFunction::Linkage::External;
@@ -1053,76 +1221,93 @@ void HIRGenerator::visit(TryStmt& node) {
     }
     
 void HIRGenerator::visit(SwitchStmt& node) {
-        // For now, implement switch as a series of if-else statements
-        // Evaluate discriminant once
+        // Switch implementation with C-style fallthrough.
+        //
+        // Strategy: pre-create one entry basic block per case (preserving source
+        // order, including `default`), then emit a dispatch chain that compares
+        // the discriminant to each non-default test. After a case body runs, if
+        // it did not break, control falls through to the NEXT entry block (not
+        // to endBlock) — that's what makes case 1 → case 2 → case 3 work when
+        // no `break` separates them. If no case test matches, control jumps to
+        // the default entry (wherever it is in source order) or to endBlock if
+        // there's no default.
         node.discriminant->accept(*this);
         auto discriminantValue = lastValue_;
 
-        // Create end block
+        // Capture any label from enclosing LabeledStmt for this switch.
+        const std::string labelForThisSwitch = currentLabel_;
+        currentLabel_.clear();
+
         auto endBlock = currentFunction_->createBasicBlock("switch.end");
-
-        // Push end block onto break target stack so break statements know where to jump
         breakTargetStack_.push_back(endBlock.get());
+        breakTargetLabels_.push_back(labelForThisSwitch);
 
-        // Find default case if it exists
-        size_t defaultCaseIndex = node.cases.size();
-        for (size_t i = 0; i < node.cases.size(); ++i) {
+        const size_t n = node.cases.size();
+
+        // Locate default (if any). Index n means "no default".
+        size_t defaultIndex = n;
+        for (size_t i = 0; i < n; ++i) {
             if (!node.cases[i]->test) {
-                defaultCaseIndex = i;
+                defaultIndex = i;
                 break;
             }
         }
 
-        // Generate if-else chain for each case
-        for (size_t i = 0; i < node.cases.size(); ++i) {
-            if (node.cases[i]->test) {  // Regular case (not default)
-                // Evaluate test value
-                node.cases[i]->test->accept(*this);
-                auto testValue = lastValue_;
-
-                // Compare
-                auto cmp = builder_->createEq(discriminantValue, testValue);
-
-                // Create then and else blocks
-                auto thenBlock = currentFunction_->createBasicBlock("case.then");
-                auto elseBlock = currentFunction_->createBasicBlock("case.else");
-
-                builder_->createCondBr(cmp, thenBlock.get(), elseBlock.get());
-
-                // Generate then block (case body)
-                builder_->setInsertPoint(thenBlock.get());
-                for (auto& stmt : node.cases[i]->consequent) {
-                    stmt->accept(*this);
-                }
-
-                // Jump to end if no break
-                if (!builder_->getInsertBlock()->hasBreakOrContinue) {
-                    builder_->createBr(endBlock.get());
-                }
-
-                // Continue with else block
-                builder_->setInsertPoint(elseBlock.get());
-            }
+        // Pre-create one entry block per case so we can branch to "the next case"
+        // for fallthrough, and to default from the dispatch chain.
+        std::vector<HIRBasicBlock*> entryBlocks;
+        entryBlocks.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+            std::string label = "case." + std::to_string(i);
+            // createBasicBlock returns shared_ptr<HIRBasicBlock>; the function
+            // keeps the block alive. We hold only the raw pointer for branches.
+            entryBlocks.push_back(
+                currentFunction_->createBasicBlock(label).get());
         }
 
-        // Generate default case if it exists
-        if (defaultCaseIndex < node.cases.size()) {
-            for (auto& stmt : node.cases[defaultCaseIndex]->consequent) {
+        // Emit the dispatch chain. For each case (in source order), if it has a
+        // test, compare; if equal, jump to its entry. Otherwise (no test), skip
+        // — default is handled when no test matches.
+        //
+        // After all comparisons, if no test matched: jump to default entry (if
+        // any) or endBlock.
+        auto* noMatchBlock = (defaultIndex < n)
+            ? entryBlocks[defaultIndex]
+            : endBlock.get();
+
+        for (size_t i = 0; i < n; ++i) {
+            if (!node.cases[i]->test) continue;  // default — skip in dispatch
+
+            node.cases[i]->test->accept(*this);
+            auto testValue = lastValue_;
+            auto cmp = builder_->createEq(discriminantValue, testValue);
+
+            auto* nextCmpBlock = currentFunction_->createBasicBlock("switch.cmp.next").get();
+            builder_->createCondBr(cmp, entryBlocks[i], nextCmpBlock);
+            builder_->setInsertPoint(nextCmpBlock);
+        }
+        // No case matched — go to default (or end).
+        builder_->createBr(noMatchBlock);
+
+        // Now emit each case body. After the body, if no break was emitted,
+        // fall through to the next entry (or endBlock if this is the last).
+        for (size_t i = 0; i < n; ++i) {
+            builder_->setInsertPoint(entryBlocks[i]);
+            for (auto& stmt : node.cases[i]->consequent) {
                 stmt->accept(*this);
             }
-
             if (!builder_->getInsertBlock()->hasBreakOrContinue) {
-                builder_->createBr(endBlock.get());
+                if (i + 1 < n) {
+                    builder_->createBr(entryBlocks[i + 1]);
+                } else {
+                    builder_->createBr(endBlock.get());
+                }
             }
-        } else {
-            // No default case, just jump to end
-            builder_->createBr(endBlock.get());
         }
 
-        // Pop break target from stack
+        // Pop break target and continue at end.
         breakTargetStack_.pop_back();
-
-        // Continue with end block
+        breakTargetLabels_.pop_back();
         builder_->setInsertPoint(endBlock.get());
     }
 

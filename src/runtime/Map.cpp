@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <vector>
 #include <string>
+#include "nova/runtime/Value.h"
 
 // Forward declarations for Nova runtime functions
 extern "C" {
@@ -249,6 +250,36 @@ char* nova_map_get_str_str(void* mapPtr, const char* key) {
         return strdup((*map->entries)[idx].strValue);
     }
     return strdup("undefined");
+}
+
+// =========================================
+// Map.prototype.get(key) - returns a NaN-boxed JSValue (or JS_VALUE_UNDEFINED).
+// These variants remove the HIR's compile-time guesswork about the value type
+// when the static argument types are ambiguous (e.g. `numMap.get(1)` where
+// the stored value happens to be a string).
+// =========================================
+int64_t nova_map_get_num_jsvalue(void* mapPtr, int64_t key) {
+    if (!mapPtr) return static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED);
+    NovaMap* map = static_cast<NovaMap*>(mapPtr);
+    int64_t idx = findEntry(map, NovaMapEntry::KeyType::Number, key, nullptr);
+    if (idx < 0) return static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED);
+    const auto& entry = (*map->entries)[idx];
+    if (entry.valueType == NovaMapEntry::ValueType::String) {
+        return static_cast<int64_t>(nova_value_from_string(entry.strValue));
+    }
+    return static_cast<int64_t>(nova_value_from_i64(entry.numValue));
+}
+
+int64_t nova_map_get_str_jsvalue(void* mapPtr, const char* key) {
+    if (!mapPtr) return static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED);
+    NovaMap* map = static_cast<NovaMap*>(mapPtr);
+    int64_t idx = findEntry(map, NovaMapEntry::KeyType::String, 0, key);
+    if (idx < 0) return static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED);
+    const auto& entry = (*map->entries)[idx];
+    if (entry.valueType == NovaMapEntry::ValueType::String) {
+        return static_cast<int64_t>(nova_value_from_string(entry.strValue));
+    }
+    return static_cast<int64_t>(nova_value_from_i64(entry.numValue));
 }
 
 // =========================================

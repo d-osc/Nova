@@ -1,0 +1,67 @@
+  DEBUG: Added field: name
+  DEBUG: Created struct type with 1 fields
+  DEBUG: Generating constructor function
+    DEBUG: Allocating memory for class instance: Animal
+    DEBUG: Created external malloc function declaration
+    DEBUG: Struct size: 88 bytes (24-byte ObjectHeader + 8 fields max, actual=1)
+    DEBUG: Created malloc call for instance allocation
+
+=== TRACE: ThisExpr visitor ===
+  currentThis_ pointer: 0000021AA88929F0
+  TRACE: Set lastValue_ = currentThis_
+  TRACE: lastValue_ pointer: 0000021AA88929F0
+  TRACE: lastValue_->type->kind = 18
+  TRACE: lastValue_->type pointer: 0000021AA88743C0
+=== END TRACE ===
+  DEBUG: Using currentClassStructType_ for 'this' property assignment
+  DEBUG: Found field 'name' at index 0
+  DEBUG: Created SetField for property 'name'
+    DEBUG: Adding implicit return of instancePtr: 0000021AA88929F0
+    DEBUG: Created constructor function: Animal_constructor
+  DEBUG: Class Dog extends Animal
+  DEBUG: Found parent struct with 1 fields
+  DEBUG: Inherited field: name
+  DEBUG: Created struct type with 1 fields
+  DEBUG: Generating default constructor
+  DEBUG: Generating default constructor for Dog (extends Animal)
+  DEBUG: Parent constructor takes 0 params
+    DEBUG: Created default constructor function: Dog_constructor
+    DEBUG: Created method function: Dog_bark
+  DEBUG: Class Cat extends Animal
+  DEBUG: Found parent struct with 1 fields
+  DEBUG: Inherited field: name
+  DEBUG: Created struct type with 1 fields
+  DEBUG: Generating default constructor
+  DEBUG: Generating default constructor for Cat (extends Animal)
+  DEBUG: Parent constructor takes 0 params
+    DEBUG: Created default constructor function: Cat_constructor
+    DEBUG: Created method function: Cat_meow
+  DEBUG NEW: Evaluating 1 constructor arguments
+    arg[0] type->kind = 17
+  DEBUG CALL: Calling constructor Animal_constructor with 1 args
+    call_arg[0] type->kind = 17
+  DEBUG: Created call to constructor: Animal_constructor
+  DEBUG: Found struct type for class: Animal
+  DEBUG: Attached struct type to new instance
+  DEBUG NEW: Evaluating 1 constructor arguments
+    arg[0] type->kind = 17
+  DEBUG CALL: Calling constructor Dog_constructor with 1 args
+    call_arg[0] type->kind = 17
+  DEBUG: Created call to constructor: Dog_constructor
+  DEBUG: Found struct type for class: Dog
+  DEBUG: Attached struct type to new instance
+  DEBUG NEW: Evaluating 1 constructor arguments
+    arg[0] type->kind = 17
+  DEBUG CALL: Calling constructor Cat_constructor with 1 args
+    call_arg[0] type->kind = 17
+  DEBUG: Created call to constructor: Cat_constructor
+  DEBUG: Found struct type for class: Cat
+  DEBUG: Attached struct type to new instance
+  DEBUG: Handling builtin error type: Error
+  DEBUG: Created external function: nova_error_create
+  DEBUG: Created Error via nova_error_create
+novacore.lib(String.obj) : MSIL .netmodule or module compiled with /GL found; restarting link with /LTCG; add /LTCG to the link command line to improve linker performance
+LINK : warning LNK4098: defaultlib 'libcmt' conflicts with use of other libs; use /NODEFAULTLIB:library
+Generating code
+Finished generating code
+

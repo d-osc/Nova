@@ -3,6 +3,7 @@
 
 #include "nova/runtime/Runtime.h"
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <random>
 #include <ctime>
@@ -48,6 +49,27 @@ double nova_random() {
     double random_value = dist(rng);
 
     return random_value;
+}
+
+// Math.ceil(x) - Smallest integer greater than or equal to x
+int64_t nova_math_ceil(double x) {
+    return static_cast<int64_t>(std::ceil(x));
+}
+
+// Math.floor(x) - Largest integer less than or equal to x
+int64_t nova_math_floor(double x) {
+    return static_cast<int64_t>(std::floor(x));
+}
+
+// Math.round(x) - Round to nearest integer; halfway cases round toward +Infinity
+// Per JavaScript spec: Math.round(-3.5) = -3, Math.round(3.5) = 4
+int64_t nova_math_round(double x) {
+    return static_cast<int64_t>(std::floor(x + 0.5));
+}
+
+// Math.trunc(x) - Integer part of x (truncate toward 0)
+int64_t nova_math_trunc(double x) {
+    return static_cast<int64_t>(std::trunc(x));
 }
 
 } // extern "C"

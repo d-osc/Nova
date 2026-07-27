@@ -149,6 +149,181 @@ HIRValue* HIRGenerator::toBoolean(HIRValue* value) {
 void HIRGenerator::visit(BinaryExpr& node) {
         using Op = BinaryExpr::Op;
 
+        // Handle instanceof operator - resolve statically when possible
+        if (node.op == Op::Instanceof) {
+            std::string rhsClassName;
+            if (auto* rhsIdent = dynamic_cast<Identifier*>(node.right.get())) {
+                rhsClassName = rhsIdent->name;
+            }
+
+            // Try to determine left side's class statically
+            std::string lhsClassName;
+            // Case 1: lhs is `new ClassName(...)` - inspect AST directly
+            if (auto* lhsNew = dynamic_cast<NewExpr*>(node.left.get())) {
+                if (auto* id = dynamic_cast<Identifier*>(lhsNew->callee.get())) {
+                    lhsClassName = id->name;
+                }
+            }
+            // Case 2: lhs is an Identifier - look up classReferences_ and variableKinds_
+            if (lhsClassName.empty()) {
+                if (auto* lhsIdent = dynamic_cast<Identifier*>(node.left.get())) {
+                    auto it = classReferences_.find(lhsIdent->name);
+                    if (it != classReferences_.end()) {
+                        lhsClassName = it->second;
+                    }
+                    if (lhsClassName.empty()) {
+                        auto kindIt = variableKinds_.find(lhsIdent->name);
+                        if (kindIt != variableKinds_.end()) {
+                            lhsClassName = kindIt->second;
+                        }
+                    }
+                }
+            }
+            // Case 3: lhs is an Array literal -> Array
+            if (lhsClassName.empty()) {
+                if (dynamic_cast<ArrayExpr*>(node.left.get())) {
+                    lhsClassName = "Array";
+                }
+            }
+            // Case 4: lhs is an Object literal -> Object
+            if (lhsClassName.empty()) {
+                if (dynamic_cast<ObjectExpr*>(node.left.get())) {
+                    lhsClassName = "Object";
+                }
+            }
+            // Case 5: lhs is a Function/ArrowFunction -> Function
+            if (lhsClassName.empty()) {
+                if (dynamic_cast<ArrowFunctionExpr*>(node.left.get()) ||
+                    dynamic_cast<FunctionExpr*>(node.left.get())) {
+                    lhsClassName = "Function";
+                }
+            }
+            // Case 6: function references via identifier
+            if (lhsClassName.empty()) {
+                if (auto* lhsIdent = dynamic_cast<Identifier*>(node.left.get())) {
+                    if (functionReferences_.count(lhsIdent->name)) {
+                        lhsClassName = "Function";
+                    }
+                }
+            }
+
+            // If we know both classes, resolve at compile time
+            if (!lhsClassName.empty() && !rhsClassName.empty()) {
+                // Special: everything is an instance of Object
+                static const std::unordered_set<std::string> objectLike = {
+                    "Array", "Function", "Object", "Error",
+                    "TypeError", "RangeError", "ReferenceError",
+                    "SyntaxError", "URIError", "EvalError", "InternalError"
+                };
+                if (rhsClassName == "Object" &&
+                    (objectLike.count(lhsClassName) || classInheritance_.count(lhsClassName))) {
+                    lastValue_ = builder_->createBoolConstant(true);
+                    return;
+                }
+                // Error subclass checks: all builtin error types extend Error
+                if (rhsClassName == "Error" && objectLike.count(lhsClassName) &&
+                    lhsClassName != "Array" && lhsClassName != "Function" &&
+                    lhsClassName != "Object") {
+                    lastValue_ = builder_->createBoolConstant(true);
+                    return;
+                }
+                bool result = false;
+                std::string current = lhsClassName;
+                std::unordered_set<std::string> visited;
+                while (!current.empty() && visited.count(current) == 0) {
+                    if (current == rhsClassName) {
+                        result = true;
+                        break;
+                    }
+                    visited.insert(current);
+                    auto it = classInheritance_.find(current);
+                    if (it == classInheritance_.end()) break;
+                    current = it->second;
+                }
+                lastValue_ = builder_->createBoolConstant(result);
+                return;
+            }
+
+            // Dynamic path: LHS class unknown statically (e.g. caught exception
+            // value). When RHS is a known class, walk the inheritance chain at
+            // compile time and emit one runtime comparison per candidate name
+            // (the RHS plus each known ancestor), OR-ed together.
+            if (lhsClassName.empty() && !rhsClassName.empty()) {
+                auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                // Get the runtime class-name tag (set at throw time)
+                std::string getFuncName = "nova_get_thrown_class_name";
+                HIRFunction* getFunc = module_->getFunction(getFuncName).get();
+                if (!getFunc) {
+                    HIRFunctionType* ft = new HIRFunctionType({}, ptrType);
+                    auto fp = module_->createFunction(getFuncName, ft);
+                    fp->linkage = HIRFunction::Linkage::External;
+                    getFunc = fp.get();
+                }
+                auto* thrownName = builder_->createCall(getFunc, {}, "thrown.class");
+
+                std::string eqFuncName = "nova_string_equals";
+                HIRFunction* eqFunc = module_->getFunction(eqFuncName).get();
+                if (!eqFunc) {
+                    HIRFunctionType* ft = new HIRFunctionType({ptrType, ptrType}, intType);
+                    auto fp = module_->createFunction(eqFuncName, ft);
+                    fp->linkage = HIRFunction::Linkage::External;
+                    eqFunc = fp.get();
+                }
+
+                // Build candidate list: RHS plus every class whose ancestor
+                // chain includes RHS (i.e. all transitive subclasses). This
+                // lets `e instanceof Parent` match a child instance.
+                std::vector<std::string> candidates;
+                candidates.push_back(rhsClassName);
+
+                // Repeatedly scan classInheritance_ for new child classes until
+                // a fixed point is reached. This handles multi-level chains
+                // (C extends B extends A extends Error).
+                std::unordered_set<std::string> known;
+                known.insert(rhsClassName);
+                bool changed = true;
+                while (changed) {
+                    changed = false;
+                    for (const auto& kv : classInheritance_) {
+                        // If the parent is already known, then the child is a
+                        // (transitive) subclass of rhs.
+                        if (known.count(kv.second) && !known.count(kv.first)) {
+                            known.insert(kv.first);
+                            candidates.push_back(kv.first);
+                            changed = true;
+                        }
+                    }
+                }
+
+                // OR-ed runtime checks: result = eq(thrown, c0) | eq(thrown, c1) | ...
+                HIRValue* acc = nullptr;
+                for (const auto& name : candidates) {
+                    auto* nameConst = builder_->createStringConstant(name);
+                    auto* eq = builder_->createCall(eqFunc, {thrownName, nameConst},
+                                                    "instanceof.cmp");
+                    if (!acc) {
+                        acc = eq;
+                    } else {
+                        acc = builder_->createOr(acc, eq, "instanceof.or");
+                    }
+                }
+
+                if (!acc) {
+                    lastValue_ = builder_->createBoolConstant(false);
+                } else {
+                    auto* zero = builder_->createIntConstant(0);
+                    lastValue_ = builder_->createNe(acc, zero, "instanceof.bool");
+                }
+                return;
+            }
+
+            // Fallback: emit false (unknown instanceof)
+            lastValue_ = builder_->createBoolConstant(false);
+            return;
+        }
+
         // Handle logical operators with proper short-circuit evaluation
         // JavaScript semantics:
         //   && returns left if falsy, otherwise right
@@ -568,13 +743,52 @@ void HIRGenerator::visit(BinaryExpr& node) {
                     if (nullishKind(lhsConstant) && nullishKind(rhsConstant)) {
                         equal = !strict || lhsConstant->kind == rhsConstant->kind;
                     }
-                    equality = builder_->createBoolConstant(equal);
+                    if (strict) {
+                        // `ptr === null` or `null === ptr`: compare the pointer
+                        // payload against 0. The null literal in Nova lowers to
+                        // a zero constant, so this is a plain i64 equality.
+                        if (nullishKind(rhsConstant) &&
+                            lhs && lhs->type &&
+                            (lhs->type->kind == HIRType::Kind::Pointer ||
+                             lhs->type->kind == HIRType::Kind::String ||
+                             lhs->type->kind == HIRType::Kind::JSValue ||
+                             lhs->type->kind == HIRType::Kind::Function ||
+                             lhs->type->kind == HIRType::Kind::Closure ||
+                             lhs->type->kind == HIRType::Kind::Any)) {
+                            equality = builder_->createEq(
+                                lhs, builder_->createIntConstant(0), "strict.ptr_null");
+                            // `equal` flag is no longer a compile-time constant.
+                        } else if (nullishKind(lhsConstant) &&
+                                   rhs && rhs->type &&
+                                   (rhs->type->kind == HIRType::Kind::Pointer ||
+                                    rhs->type->kind == HIRType::Kind::String ||
+                                    rhs->type->kind == HIRType::Kind::JSValue ||
+                                    rhs->type->kind == HIRType::Kind::Function ||
+                                    rhs->type->kind == HIRType::Kind::Closure ||
+                                    rhs->type->kind == HIRType::Kind::Any)) {
+                            equality = builder_->createEq(
+                                rhs, builder_->createIntConstant(0), "strict.null_ptr");
+                        } else {
+                            equality = builder_->createBoolConstant(equal);
+                        }
+                    } else {
+                        equality = builder_->createBoolConstant(equal);
+                    }
                 } else if (strict && lhs && rhs && lhs->type && rhs->type) {
                     const bool lhsNumber = lhs->type->isNumeric();
                     const bool rhsNumber = rhs->type->isNumeric();
+                    const bool lhsAny = lhs->type->kind == HIRType::Kind::Any;
+                    const bool rhsAny = rhs->type->kind == HIRType::Kind::Any;
                     if (lhsNumber && rhsNumber) {
                         // Integer and floating HIR values are both ECMAScript Number.
                         equality = builder_->createEq(lhs, rhs, "strict.number");
+                    } else if ((lhsAny || rhsAny) && (lhsNumber || rhsNumber)) {
+                        // Generic type parameters erase to Any but carry a raw
+                        // numeric payload at runtime; compare those bits
+                        // numerically so `id<number>(42) === 42` holds.
+                        equality = builder_->createEq(lhs, rhs, "strict.any_number");
+                    } else if (lhsAny || rhsAny) {
+                        equality = builder_->createEq(lhs, rhs, "strict.any_payload");
                     } else if (lhs->type->kind != rhs->type->kind) {
                         equality = builder_->createBoolConstant(false);
                     } else {
@@ -741,6 +955,31 @@ void HIRGenerator::visit(UnaryExpr& node) {
                 {
                     std::string typeStr = "unknown";
 
+                    // Special case: typeof of an arrow function or function
+                    // expression. In Nova's HIR, these are represented by a
+                    // String constant containing the function name (see
+                    // visit(ArrowFunctionExpr&) / visit(FunctionExpr&) in
+                    // HIRGen_Functions.cpp). Detect that here so
+                    // `typeof (() => 1) === "function"` works.
+                    if (dynamic_cast<ArrowFunctionExpr*>(node.operand.get()) ||
+                        dynamic_cast<FunctionExpr*>(node.operand.get())) {
+                        typeStr = "function";
+                    }
+
+                    // First, check for literal null/undefined constants — both
+                    // have type Kind::Unknown, but typeof differs (null → "object",
+                    // undefined → "undefined"). The constant kind distinguishes them.
+                    if (typeStr == "unknown") {
+                    if (auto* constVal = dynamic_cast<HIRConstant*>(operand)) {
+                        if (constVal->kind == HIRConstant::Kind::Null) {
+                            typeStr = "object";  // JS quirk: typeof null === "object"
+                        } else if (constVal->kind == HIRConstant::Kind::Undefined) {
+                            typeStr = "undefined";
+                        }
+                    }
+                    }
+
+                    if (typeStr == "unknown") {
                     if (operandIsBigInt) {
                         typeStr = "bigint";
                     } else if (operandIsSymbol) {
@@ -764,16 +1003,36 @@ void HIRGenerator::visit(UnaryExpr& node) {
                                 typeStr = "object";
                                 break;
                             case HIRType::Kind::Function:
+                            case HIRType::Kind::Closure:
                                 typeStr = "function";
                                 break;
                             case HIRType::Kind::Void:
+                            case HIRType::Kind::Unknown:
+                                // UndefinedLiteral produces Kind::Unknown in
+                                // HIRGen_Literals.cpp; treat it the same as
+                                // Void here so `typeof undefined === "undefined"`.
                                 typeStr = "undefined";
+                                break;
+                            case HIRType::Kind::F32:
+                            case HIRType::Kind::F64:
+                            case HIRType::Kind::U8:
+                            case HIRType::Kind::U16:
+                            case HIRType::Kind::U32:
+                            case HIRType::Kind::U64:
+                            case HIRType::Kind::USize:
+                                typeStr = "number";
+                                break;
+                            case HIRType::Kind::JSValue:
+                                // For NaN-boxed values, the runtime decides.
+                                // Most boxed values are objects, so default to that.
+                                typeStr = "object";
                                 break;
                             default:
                                 typeStr = "unknown";
                                 break;
                         }
                     }
+                    }  // end if (typeStr == "unknown")
 
                     if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: typeof operator returns '" << typeStr << "'" << std::endl;
                     lastValue_ = builder_->createStringConstant(typeStr);
@@ -795,24 +1054,44 @@ void HIRGenerator::visit(UnaryExpr& node) {
 
 void HIRGenerator::visit(UpdateExpr& node) {
         // Increment/Decrement operators: ++x, x++, --x, x--
-        // The argument must be a variable (identifier)
+        // Supports identifiers AND member access (obj.field, obj[field]).
         auto* identifier = dynamic_cast<Identifier*>(node.argument.get());
-        if (!identifier) {
-            std::cerr << "ERROR: UpdateExpr argument must be an identifier" << std::endl;
+        auto* member = dynamic_cast<MemberExpr*>(node.argument.get());
+
+        HIRValue* varAlloca = nullptr;
+        HIRValue* objectAlloca = nullptr;
+        HIRValue* currentValue = nullptr;
+
+        if (identifier) {
+            // Get the variable's current value (with closure support)
+            varAlloca = lookupVariable(identifier->name);
+            if (!varAlloca) {
+                if (NOVA_DEBUG) std::cerr << "ERROR: Undefined variable: " << identifier->name << std::endl;
+                return;
+            }
+            currentValue = builder_->createLoad(varAlloca);
+        } else if (member) {
+            // For member access: evaluate the object, then load the field.
+            // We support `obj.field` (static field index) and `obj[field]`
+            // (dynamic index). For now, support both by visiting the
+            // member expression: that yields a value, but we need a
+            // writable reference. The simplest path is to use assignment
+            // semantics — load current value via normal member access,
+            // compute new value, then write back via SetField.
+            node.argument->accept(*this);
+            currentValue = lastValue_;
+            // Visit the object once more for the write-back target.
+            member->object->accept(*this);
+            objectAlloca = lastValue_;
+        } else {
+            if (NOVA_DEBUG) std::cerr << "ERROR: UpdateExpr argument must be an identifier or member expression" << std::endl;
             return;
         }
 
-        // Get the variable's current value (with closure support)
-        HIRValue* varAlloca = lookupVariable(identifier->name);
-        if (!varAlloca) {
-            std::cerr << "ERROR: Undefined variable: " << identifier->name << std::endl;
-            return;
-        }
+        // Stash identifier name (empty for member) for bigint lookup below.
+        const std::string identName = identifier ? identifier->name : std::string();
 
-        // Load current value
-        auto currentValue = builder_->createLoad(varAlloca);
-
-        if (bigIntVars_.count(identifier->name) > 0) {
+        if (identifier && bigIntVars_.count(identifier->name) > 0) {
             auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             const std::string functionName =
                 node.op == UpdateExpr::Op::Increment
@@ -873,8 +1152,27 @@ void HIRGenerator::visit(UpdateExpr& node) {
             newValue = builder_->createSub(currentValue, one);
         }
 
-        // Store new value back to variable
-        builder_->createStore(newValue, varAlloca);
+        // Store new value back to variable (or member field).
+        if (varAlloca) {
+            builder_->createStore(newValue, varAlloca);
+        } else if (member && objectAlloca) {
+            // For member access, look up the field index in the current
+            // class struct (handles `this.field` and `obj.field` when obj
+            // is the current `this`).
+            auto* memberIdent = dynamic_cast<Identifier*>(member->property.get());
+            if (memberIdent && !member->isComputed && currentClassStructType_) {
+                int fieldIdx = -1;
+                for (size_t i = 0; i < currentClassStructType_->fields.size(); ++i) {
+                    if (currentClassStructType_->fields[i].name == memberIdent->name) {
+                        fieldIdx = (int)i;
+                        break;
+                    }
+                }
+                if (fieldIdx >= 0) {
+                    builder_->createSetField(objectAlloca, (size_t)fieldIdx, newValue);
+                }
+            }
+        }
 
         // Return value depends on prefix vs postfix
         if (node.isPrefix) {
@@ -1269,6 +1567,40 @@ void HIRGenerator::visit(AssignmentExpr& node) {
                 objectVariableName = objectIdentifier->name;
             }
 
+            // Static property write: ClassName.field = value.
+            // Route through the runtime mutable store so changes persist.
+            if (!memberExpr->isComputed && objectVariableName != "") {
+                auto classIt = classStaticProps_.find(objectVariableName);
+                if (classIt != classStaticProps_.end()) {
+                    if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                        if (classIt->second.find(propIdent->name) != classIt->second.end()) {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            std::string setter = "nova_class_static_set_i64";
+                            HIRFunction* setFunc = nullptr;
+                            auto existingSet = module_->getFunction(setter);
+                            if (existingSet) setFunc = existingSet.get();
+                            else {
+                                HIRFunctionType* sft = new HIRFunctionType({ptrType, ptrType, intType}, intType);
+                                HIRFunctionPtr sfp = module_->createFunction(setter, sft);
+                                sfp->linkage = HIRFunction::Linkage::External;
+                                setFunc = sfp.get();
+                            }
+                            // Coerce value to i64 if needed (matches the i64 slot type).
+                            HIRValue* i64Value = value;
+                            if (value && value->type && value->type->kind != HIRType::Kind::I64) {
+                                i64Value = builder_->createCast(value, intType.get(), "static_assign_cast");
+                            }
+                            HIRValue* classNameArg = builder_->createStringConstant(objectVariableName);
+                            HIRValue* fieldNameArg = builder_->createStringConstant(propIdent->name);
+                            builder_->createCall(setFunc, {classNameArg, fieldNameArg, i64Value}, "static_set");
+                            lastValue_ = value;
+                            return;
+                        }
+                    }
+                }
+            }
+
             // Get the object/array
             memberExpr->object->accept(*this);
             auto object = lastValue_;
@@ -1403,7 +1735,7 @@ void HIRGenerator::visit(AssignmentExpr& node) {
                 if (object == currentThis_ && currentClassStructType_) {
                     // Use the current class struct type directly
                     structType = currentClassStructType_;
-                    std::cerr << "  DEBUG: Using currentClassStructType_ for 'this' property assignment" << std::endl;
+                    if (NOVA_DEBUG) std::cerr << "  DEBUG: Using currentClassStructType_ for 'this' property assignment" << std::endl;
                 } else if (object && object->type) {
                     // First check if object is directly a struct type
                     if (object->type->kind == hir::HIRType::Kind::Struct) {
@@ -1421,7 +1753,7 @@ void HIRGenerator::visit(AssignmentExpr& node) {
                         if (structType->fields[i].name == propertyName) {
                             fieldIndex = static_cast<uint32_t>(i);
                             found = true;
-                            std::cerr << "  DEBUG: Found field '" << propertyName << "' at index " << fieldIndex << std::endl;
+                            if (NOVA_DEBUG) std::cerr << "  DEBUG: Found field '" << propertyName << "' at index " << fieldIndex << std::endl;
                             break;
                         }
                     }
@@ -1481,17 +1813,20 @@ void HIRGenerator::visit(AssignmentExpr& node) {
                         structType->fields[fieldIndex].type->kind == HIRType::Kind::JSValue) {
                         storedValue = toJSValue(value);
                     }
-                    // Use SetField to store value directly to the field.
-                    builder_->createSetField(object, fieldIndex, storedValue, propertyName);
-                    std::cerr << "  DEBUG: Created SetField for property '" << propertyName << "'" << std::endl;
-                } else {
-                    std::cerr << "Warning: Property '" << propertyName << "' not found for assignment" << std::endl;
-                    if (currentClassStructType_) {
-                        std::cerr << "  DEBUG: Current class has " << currentClassStructType_->fields.size() << " fields:" << std::endl;
-                        for (const auto& field : currentClassStructType_->fields) {
-                            std::cerr << "    - " << field.name << std::endl;
+                    // Convert F64/F32 to I64/I32 if field expects integer but value is float
+                    if (structType && structType->fields[fieldIndex].type && value && value->type) {
+                        auto fieldKind = structType->fields[fieldIndex].type->kind;
+                        auto valueKind = value->type->kind;
+                        if ((fieldKind == HIRType::Kind::I64 || fieldKind == HIRType::Kind::I32) &&
+                            (valueKind == HIRType::Kind::F64 || valueKind == HIRType::Kind::F32)) {
+                            auto targetTy = structType->fields[fieldIndex].type;
+                            storedValue = builder_->createCast(value, targetTy.get(), "fltoint");
                         }
                     }
+                    // Use SetField to store value directly to the field.
+                    builder_->createSetField(object, fieldIndex, storedValue, propertyName);
+                } else {
+                    std::cerr << "Warning: Property '" << propertyName << "' not found for assignment" << std::endl;
                 }
             }
         }

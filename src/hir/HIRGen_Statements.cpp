@@ -2,7 +2,7 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
-#define NOVA_DEBUG 1
+#define NOVA_DEBUG 0
 
 namespace nova::hir {
 
@@ -742,17 +742,21 @@ void HIRGenerator::assignDestructuringPattern(
 }
     
 void HIRGenerator::visit(VarDeclStmt& node) {
-        printf("  ENTER VARDECL: kind=%d count=%zu\n", (int)node.kind, node.declarations.size());
-        fflush(stdout);
+        if(NOVA_DEBUG) {
+            printf("  ENTER VARDECL: kind=%d count=%zu\n", (int)node.kind, node.declarations.size());
+            fflush(stdout);
+        }
         for (auto& decl : node.declarations) {
             lastIntegrityObjectName_.clear();
 
-            std::cerr << "  VARDECL INNER: name='" << decl.name << "' init=" << (decl.init ? "yes" : "no")
-                      << " lastWasSet_=" << lastWasSet_
-                      << " lastWasMap_=" << lastWasMap_
-                      << " lastWasWeakMap_=" << lastWasWeakMap_
-                      << " lastWasWeakSet_=" << lastWasWeakSet_
-                      << std::endl;
+            if(NOVA_DEBUG) {
+                std::cerr << "  VARDECL INNER: name='" << decl.name << "' init=" << (decl.init ? "yes" : "no")
+                          << " lastWasSet_=" << lastWasSet_
+                          << " lastWasMap_=" << lastWasMap_
+                          << " lastWasWeakMap_=" << lastWasWeakMap_
+                          << " lastWasWeakSet_=" << lastWasWeakSet_
+                          << std::endl;
+            }
 
             // Evaluate the initializer first to get its type
             HIRValue* initValue = nullptr;
@@ -761,7 +765,9 @@ void HIRGenerator::visit(VarDeclStmt& node) {
                 initValue = lastValue_;
             }
 
-            std::cerr << "  VARDECL AFTER INIT: lastWasSet_=" << lastWasSet_ << std::endl;
+            if(NOVA_DEBUG) {
+                std::cerr << "  VARDECL AFTER INIT: lastWasSet_=" << lastWasSet_ << std::endl;
+            }
 
             if (!decl.name.empty()) {
                 auto* constant = dynamic_cast<HIRConstant*>(initValue);
@@ -903,6 +909,27 @@ void HIRGenerator::visit(VarDeclStmt& node) {
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered TypedArray type: " << decl.name
                           << " -> " << lastTypedArrayType_ << std::endl;
                 lastTypedArrayType_.clear();  // Clear for next declaration
+            }
+
+            // Track variable kind for instanceof resolution
+            if (!lastVariableKind_.empty()) {
+                variableKinds_[decl.name] = lastVariableKind_;
+                lastVariableKind_.clear();
+            }
+
+            // Track typed-array element types from explicit annotations
+            // (e.g. `let arr: string[] = ...`) so arr[i] can return a String.
+            if (decl.type && decl.type->kind == Type::Kind::Array &&
+                decl.type->elementType) {
+                switch (decl.type->elementType->kind) {
+                    case Type::Kind::String:
+                        variableArrayElementTypes_[decl.name] = "String"; break;
+                    case Type::Kind::Number:
+                        variableArrayElementTypes_[decl.name] = "Number"; break;
+                    case Type::Kind::Boolean:
+                        variableArrayElementTypes_[decl.name] = "Bool"; break;
+                    default: break;
+                }
             }
 
             // Check if this is an ArrayBuffer assignment
@@ -1217,7 +1244,7 @@ void HIRGenerator::visit(LabeledStmt& node) {
 
 void HIRGenerator::visit(WithStmt& node) {
         // 'with' statement is deprecated in JavaScript and forbidden in strict mode
-        std::cerr << "WARNING: 'with' statement is deprecated and not recommended" << std::endl;
+        if (NOVA_DEBUG) std::cerr << "WARNING: 'with' statement is deprecated and not recommended" << std::endl;
 
         // Still evaluate the object expression (may have side effects)
         if (node.object) {

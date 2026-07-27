@@ -399,17 +399,80 @@ Token Lexer::lexString(char quote) {
 Token Lexer::lexTemplateLiteral() {
     SourceLocation loc = currentLocation();
     std::string value;
-    advance();  // skip `
-    
-    while (position_ < source_.length() && currentChar() != '`') {
-        value += currentChar();
+    advance();  // skip opening `
+
+    // Scan the entire template literal, including nested template literals
+    // inside ${...} expressions. The naive approach (stop at next `) breaks
+    // on nested templates like `outer ${`inner ${x}`} end`. Track brace
+    // depth; inside ${...}, all { and } are tracked, and backticks inside
+    // ${...} are part of nested templates (treated as ordinary chars here;
+    // the parser handles nested templates when it re-parses the expression).
+    int braceDepth = 0;
+    while (position_ < source_.length()) {
+        char c = currentChar();
+
+        if (braceDepth == 0 && c == '`') {
+            // End of outer template
+            break;
+        }
+
+        // Process escape sequences only in the static (non-expression) parts.
+        // Inside ${...}, characters are passed through verbatim so the parser
+        // can re-lex the embedded expression.
+        if (braceDepth == 0 && c == '\\') {
+            advance();
+            if (position_ < source_.length()) {
+                char escapeChar = currentChar();
+                switch (escapeChar) {
+                    case 'n':  value += '\n'; break;
+                    case 't':  value += '\t'; break;
+                    case 'r':  value += '\r'; break;
+                    case 'b':  value += '\b'; break;
+                    case 'f':  value += '\f'; break;
+                    case 'v':  value += '\v'; break;
+                    case '0':  value += '\0'; break;
+                    case '\\': value += '\\'; break;
+                    case '\'': value += '\''; break;
+                    case '"':  value += '"';  break;
+                    case '`':  value += '`';  break;
+                    default:
+                        value += '\\';
+                        value += escapeChar;
+                        break;
+                }
+                advance();
+            }
+            continue;
+        }
+
+        value += c;
         advance();
+
+        // Detect ${ opening — note both $ and { are added to value.
+        if (c == '$' && position_ < source_.length() && currentChar() == '{') {
+            value += '{';
+            advance();
+            braceDepth++;
+            continue;
+        }
+
+        // Inside ${...}, track nested braces (e.g., object literals).
+        if (braceDepth > 0) {
+            if (c == '{') {
+                // already appended; but ${...} was handled above with
+                // continue, so reaching here means standalone { (e.g.
+                // object literal inside expression).
+                braceDepth++;
+            } else if (c == '}') {
+                braceDepth--;
+            }
+        }
     }
-    
-    if (currentChar() == '`') {
-        advance();
+
+    if (position_ < source_.length() && currentChar() == '`') {
+        advance();  // skip closing `
     }
-    
+
     return Token(TokenType::TemplateLiteral, value, loc);
 }
 
