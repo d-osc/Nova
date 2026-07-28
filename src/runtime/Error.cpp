@@ -8,11 +8,15 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "nova/runtime/Value.h"
+#include "nova/runtime/Runtime.h"
 
 extern "C" {
 
 // Forward declarations for exception handling (from Utility.cpp)
 extern void nova_throw(int64_t value);
+extern int64_t nova_exception_pending();  // g_exception_pending flag
+extern int64_t nova_try_depth_state();    // g_try_depth (>0 ⇒ inside try)
 
 // ============================================================================
 // Error Type IDs
@@ -40,6 +44,7 @@ struct NovaError {
     char* fileName;         // Source file name
     int64_t lineNumber;     // Line number
     int64_t columnNumber;   // Column number
+    std::uint64_t cause;    // ErrorOptions.cause as a tagged JSValue
     // For AggregateError
     void** errors;          // Array of nested errors
     int64_t errorCount;     // Number of nested errors
@@ -78,8 +83,16 @@ void* nova_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
+    return error;
+}
+
+void* nova_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_error_create(message));
+    error->cause = cause;
     return error;
 }
 
@@ -93,8 +106,16 @@ void* nova_type_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
+    return error;
+}
+
+void* nova_type_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_type_error_create(message));
+    error->cause = cause;
     return error;
 }
 
@@ -108,8 +129,16 @@ void* nova_range_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
+    return error;
+}
+
+void* nova_range_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_range_error_create(message));
+    error->cause = cause;
     return error;
 }
 
@@ -123,6 +152,7 @@ void* nova_reference_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
     return error;
@@ -138,6 +168,7 @@ void* nova_syntax_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
     return error;
@@ -153,6 +184,7 @@ void* nova_uri_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
     return error;
@@ -168,6 +200,7 @@ void* nova_internal_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
     return error;
@@ -183,13 +216,14 @@ void* nova_eval_error_create(const char* message) {
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
     error->errors = nullptr;
     error->errorCount = 0;
     return error;
 }
 
 // Create AggregateError with array of errors
-void* nova_aggregate_error_create(const char* message, void** errors, int64_t errorCount) {
+void* nova_aggregate_error_create(const char* message, void* errorsMeta, int64_t errorCount) {
     NovaError* error = new NovaError();
     error->errorType = ERROR_TYPE_AGGREGATE_ERROR;
     error->name = strdup("AggregateError");
@@ -198,16 +232,82 @@ void* nova_aggregate_error_create(const char* message, void** errors, int64_t er
     error->fileName = strdup("");
     error->lineNumber = 0;
     error->columnNumber = 0;
+    error->cause = nova::runtime::JS_VALUE_UNDEFINED;
 
-    // Copy the errors array
-    if (errors && errorCount > 0) {
-        error->errors = (void**)malloc(sizeof(void*) * errorCount);
-        memcpy(error->errors, errors, sizeof(void*) * errorCount);
-        error->errorCount = errorCount;
+    // HIR passes a ValueArray metadata pointer (header + length + capacity +
+    // elements pointer). The first 24 bytes are the ObjectHeader; offset 24
+    // holds length; offset 32 holds capacity; offset 40 holds the int64
+    // elements array. Each element is a NaN-boxed JSValue or a raw pointer
+    // cast to int64 (for error objects, it's the raw NovaError*).
+    if (errorsMeta && errorCount > 0) {
+        const char* metaBytes = static_cast<const char*>(errorsMeta);
+        const int64_t metaLen = *reinterpret_cast<const int64_t*>(metaBytes + 24);
+        const int64_t* elementsPtr = *reinterpret_cast<int64_t* const*>(
+            const_cast<char*>(metaBytes) + 40);
+        const int64_t count = (metaLen < errorCount) ? metaLen : errorCount;
+        if (count > 0 && elementsPtr) {
+            error->errors = (void**)malloc(sizeof(void*) * count);
+            for (int64_t i = 0; i < count; ++i) {
+                error->errors[i] = reinterpret_cast<void*>(elementsPtr[i]);
+            }
+            error->errorCount = count;
+        } else {
+            error->errors = nullptr;
+            error->errorCount = 0;
+        }
     } else {
         error->errors = nullptr;
         error->errorCount = 0;
     }
+    return error;
+}
+
+// Create AggregateError with cause
+void* nova_aggregate_error_create_with_cause(
+    const char* message, void** errors, int64_t errorCount,
+    std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(
+        nova_aggregate_error_create(message, errors, errorCount));
+    error->cause = cause;
+    return error;
+}
+
+// ============================================================================
+// ErrorOptions.cause overloads for every builtin Error subclass.
+// Each delegates to the base constructor and then sets `cause`.
+// ============================================================================
+void* nova_reference_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_reference_error_create(message));
+    error->cause = cause;
+    return error;
+}
+
+void* nova_syntax_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_syntax_error_create(message));
+    error->cause = cause;
+    return error;
+}
+
+void* nova_uri_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_uri_error_create(message));
+    error->cause = cause;
+    return error;
+}
+
+void* nova_internal_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_internal_error_create(message));
+    error->cause = cause;
+    return error;
+}
+
+void* nova_eval_error_create_with_cause(
+    const char* message, std::uint64_t cause) {
+    NovaError* error = static_cast<NovaError*>(nova_eval_error_create(message));
+    error->cause = cause;
     return error;
 }
 
@@ -231,6 +331,11 @@ const char* nova_error_get_stack(void* errorPtr) {
     if (!errorPtr) return "";
     NovaError* error = static_cast<NovaError*>(errorPtr);
     return error->stack ? error->stack : "";
+}
+
+std::uint64_t nova_error_get_cause(void* errorPtr) {
+    if (!errorPtr) return nova::runtime::JS_VALUE_UNDEFINED;
+    return static_cast<NovaError*>(errorPtr)->cause;
 }
 
 int64_t nova_error_get_type(void* errorPtr) {
@@ -269,50 +374,68 @@ const char* nova_error_toString(void* errorPtr) {
 
 void nova_throw_error(const char* message) {
     void* error = nova_error_create(message);
-    std::cerr << "Uncaught Error: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught Error: " << (message ? message : "") << std::endl;
+    }
+    // NaN-box the error pointer so the catch-side nova_value_to_object can
+    // recover the raw pointer and nova_is_*_error can inspect its type tag.
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 void nova_throw_type_error(const char* message) {
     void* error = nova_type_error_create(message);
-    std::cerr << "Uncaught TypeError: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught TypeError: " << (message ? message : "") << std::endl;
+    }
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 void nova_throw_range_error(const char* message) {
     void* error = nova_range_error_create(message);
-    std::cerr << "Uncaught RangeError: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught RangeError: " << (message ? message : "") << std::endl;
+    }
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 void nova_throw_reference_error(const char* message) {
     void* error = nova_reference_error_create(message);
-    std::cerr << "Uncaught ReferenceError: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught ReferenceError: " << (message ? message : "") << std::endl;
+    }
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 void nova_throw_syntax_error(const char* message) {
     void* error = nova_syntax_error_create(message);
-    std::cerr << "Uncaught SyntaxError: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught SyntaxError: " << (message ? message : "") << std::endl;
+    }
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 void nova_throw_uri_error(const char* message) {
     void* error = nova_uri_error_create(message);
-    std::cerr << "Uncaught URIError: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught URIError: " << (message ? message : "") << std::endl;
+    }
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 void nova_throw_internal_error(const char* message) {
     void* error = nova_internal_error_create(message);
-    std::cerr << "Uncaught InternalError: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught InternalError: " << (message ? message : "") << std::endl;
+    }
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 void nova_throw_aggregate_error(const char* message) {
     void* error = nova_aggregate_error_create(message, nullptr, 0);
-    std::cerr << "Uncaught AggregateError: " << (message ? message : "") << std::endl;
-    nova_throw(reinterpret_cast<int64_t>(error));
+    if (nova_try_depth_state() <= 0) {
+        std::cerr << "Uncaught AggregateError: " << (message ? message : "") << std::endl;
+    }
+    nova_throw(static_cast<int64_t>(nova_value_from_object(error)));
 }
 
 // ============================================================================
@@ -574,12 +697,30 @@ int64_t nova_is_aggregate_error(void* value) {
 // AggregateError specific functions
 // ============================================================================
 
-// Get errors array from AggregateError
+// Get errors array from AggregateError as a ValueArray metadata wrapper
+// so JS-level `.length` and `[i]` work like a real Array.
 void* nova_aggregate_error_get_errors(void* errorPtr) {
-    if (!errorPtr) return nullptr;
+    if (!errorPtr) {
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
     NovaError* error = static_cast<NovaError*>(errorPtr);
-    if (error->errorType != ERROR_TYPE_AGGREGATE_ERROR) return nullptr;
-    return error->errors;
+    if (error->errorType != ERROR_TYPE_AGGREGATE_ERROR ||
+        !error->errors || error->errorCount <= 0) {
+        nova::runtime::ValueArray* emptyArray = nova::runtime::create_value_array(0);
+        return nova::runtime::create_metadata_from_value_array(emptyArray);
+    }
+
+    const int64_t count = error->errorCount;
+    nova::runtime::ValueArray* arr = nova::runtime::create_value_array(count);
+    arr->length = count;
+    for (int64_t i = 0; i < count; ++i) {
+        // Store each error pointer directly (Nova's runtime convention for
+        // error references in arrays). Element access at the HIR level will
+        // rehydrate these as opaque pointers.
+        arr->elements[i] = reinterpret_cast<int64_t>(error->errors[i]);
+    }
+    return nova::runtime::create_metadata_from_value_array(arr);
 }
 
 // Get error count from AggregateError

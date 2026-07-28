@@ -638,6 +638,29 @@ void HIRGenerator::visit(ForOfStmt& node) {
         if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - evaluating iterable" << std::endl;
         node.right->accept(*this);  // Evaluate array expression
         auto* arrayValue = lastValue_;
+        if (arrayValue && arrayValue->type &&
+            arrayValue->type->kind == HIRType::Kind::JSValue) {
+            // Promise callbacks and other dynamic sources carry arrays as
+            // tagged JSValue objects. Runtime array helpers require the
+            // decoded metadata pointer, never the tagged integer bits.
+            auto jsValueType =
+                std::make_shared<HIRType>(HIRType::Kind::JSValue);
+            auto pointerType =
+                std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto existing = module_->getFunction("nova_value_to_object");
+            HIRFunction* toObject = existing ? existing.get() : nullptr;
+            if (!toObject) {
+                auto* functionType = new HIRFunctionType(
+                    {jsValueType}, pointerType);
+                auto created = module_->createFunction(
+                    "nova_value_to_object", functionType);
+                created->linkage = HIRFunction::Linkage::External;
+                toObject = created.get();
+            }
+            arrayValue = builder_->createCall(
+                toObject, {arrayValue}, "forof.array.object");
+            arrayValue->type = pointerType;
+        }
 
         // Create iterator index variable: let __iter_idx = 0
         auto* indexType = new hir::HIRType(hir::HIRType::Kind::I64);
@@ -887,8 +910,35 @@ void HIRGenerator::visit(ReturnStmt& node) {
                     currentFunction_->functionType->returnType &&
                     currentFunction_->functionType->returnType->kind ==
                         HIRType::Kind::JSValue;
+                HIRValue* returnValue = lastValue_;
+                const bool returnsString = currentFunction_ &&
+                    currentFunction_->functionType &&
+                    currentFunction_->functionType->returnType &&
+                    currentFunction_->functionType->returnType->kind ==
+                        HIRType::Kind::String;
+                if (returnsString && returnValue && returnValue->type &&
+                    returnValue->type->kind == HIRType::Kind::JSValue) {
+                    auto jsValueType =
+                        std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                    auto stringType =
+                        std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto existing =
+                        module_->getFunction("nova_value_to_string_ptr");
+                    HIRFunction* function = existing ? existing.get() : nullptr;
+                    if (!function) {
+                        auto* functionType =
+                            new HIRFunctionType({jsValueType}, stringType);
+                        auto created = module_->createFunction(
+                            "nova_value_to_string_ptr", functionType);
+                        created->linkage = HIRFunction::Linkage::External;
+                        function = created.get();
+                    }
+                    returnValue = builder_->createCall(
+                        function, {returnValue}, "unbox.return.string");
+                    returnValue->type = stringType;
+                }
                 builder_->createReturn(
-                    returnsJSValue ? toJSValue(lastValue_) : lastValue_);
+                    returnsJSValue ? toJSValue(returnValue) : returnValue);
             } else {
                 builder_->createReturn(nullptr);
             }
@@ -1186,6 +1236,10 @@ void HIRGenerator::visit(TryStmt& node) {
             // Add catch parameter to symbol table
             if (node.handler && !node.handler->param.empty()) {
                 symbolTable_[node.handler->param] = exceptionValue;
+                // Catch values are tagged and may carry arbitrary object
+                // properties. Route member reads through the checked runtime
+                // accessor instead of treating tagged bits as a raw pointer.
+                dynamicObjectVars_.insert(node.handler->param);
             }
 
             if (node.handler && node.handler->body) {

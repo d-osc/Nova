@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 RUNNER_PATH = Path(__file__).with_name("run_all_tests.py")
@@ -84,7 +85,8 @@ class FailureDebugTests(unittest.TestCase):
         rows = RUNNER.failure_debug_rows(result)
 
         self.assertEqual(rows[0].code, "0xC0000005")
-        self.assertEqual(rows[0].function, "<native-runtime>")
+        self.assertEqual(rows[0].line, 2)
+        self.assertEqual(rows[0].function, "main")
 
     def test_maps_native_class_constructor_name(self) -> None:
         path = self.make_source(
@@ -107,6 +109,64 @@ class FailureDebugTests(unittest.TestCase):
 
         self.assertEqual(rows[0].line, 3)
         self.assertEqual(rows[0].function, "ApplicationError.constructor")
+
+    def test_separates_compiler_linker_and_emitted_program_failures(self) -> None:
+        self.assertEqual(
+            RUNNER.classify_failure_stage(
+                "run", 1, "", "LLVM IR verification failed"
+            ),
+            "compiler",
+        )
+        self.assertEqual(
+            RUNNER.classify_failure_stage(
+                "run", 1, "", "[NOVA_LINKER_FAILURE] failed"
+            ),
+            "linker",
+        )
+        self.assertEqual(
+            RUNNER.classify_failure_stage("run", 7, "", ""),
+            "emitted-program",
+        )
+
+    def test_compare_mode_warms_cache_and_checks_cache_hit(self) -> None:
+        path = self.make_source(
+            "// NOVA_EXPECT_EXIT: 0\n"
+            "function main(): number { return 0; }\n"
+        )
+        calls: list[str] = []
+
+        def fake_run_test(
+            nova: Path, test_path: Path, timeout: float, cache_mode: str
+        ) -> object:
+            calls.append(cache_mode)
+            return RUNNER.TestResult(test_path, "PASS", return_code=0)
+
+        with mock.patch.object(RUNNER, "run_test", side_effect=fake_run_test):
+            result = RUNNER.run_test_compare(Path("nova"), path, 1.0)
+
+        self.assertEqual(result.status, "PASS")
+        self.assertEqual(calls, ["uncached", "cached", "cached"])
+
+    def test_safety_only_accepts_semantics_but_rejects_native_faults(self) -> None:
+        path = self.make_source(
+            "// NOVA_EXPECT_EXIT: 0\n"
+            "function main(): number { return 0; }\n"
+        )
+        semantic = RUNNER.TestResult(
+            path, "FAIL", "exit 7, expected 0",
+            return_code=7, failure_stage="emitted-program",
+        )
+        native = RUNNER.TestResult(
+            path, "FAIL", "exit 3221225477, expected 0",
+            return_code=3221225477, failure_stage="emitted-program",
+        )
+
+        self.assertEqual(
+            RUNNER.safety_only_result(semantic).status, "PASS"
+        )
+        self.assertEqual(
+            RUNNER.safety_only_result(native).status, "FAIL"
+        )
 
 
 if __name__ == "__main__":

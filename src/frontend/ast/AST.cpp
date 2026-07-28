@@ -82,6 +82,7 @@ void FunctionDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void ClassDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void InterfaceDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void TypeAliasDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
+void NamespaceDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void EnumDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void ImportDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 void ExportDecl::accept(ASTVisitor& visitor) { visitor.visit(*this); }

@@ -14,9 +14,11 @@ extern "C" {
 // ArrayBuffer Structure
 // ============================================================================
 struct NovaArrayBuffer {
-    uint8_t* data;      // Raw byte data
-    int64_t byteLength; // Length in bytes
-    bool detached;      // Whether buffer has been detached
+    uint8_t* data;          // Raw byte data
+    int64_t byteLength;     // Current length in bytes
+    int64_t maxByteLength;  // Max byteLength for resizable buffers (0 = fixed)
+    bool detached;          // Whether buffer has been detached
+    bool resizable;         // Whether buffer is resizable
 };
 
 // ============================================================================
@@ -29,7 +31,9 @@ void* nova_arraybuffer_create(int64_t byteLength) {
 
     NovaArrayBuffer* buffer = new NovaArrayBuffer();
     buffer->byteLength = byteLength;
+    buffer->maxByteLength = 0;
     buffer->detached = false;
+    buffer->resizable = false;
 
     if (byteLength > 0) {
         buffer->data = static_cast<uint8_t*>(calloc(byteLength, 1)); // Zero-initialized
@@ -38,6 +42,57 @@ void* nova_arraybuffer_create(int64_t byteLength) {
     }
 
     return buffer;
+}
+
+// new ArrayBuffer(length, { maxByteLength }) — ES2024 resizable ArrayBuffer.
+void* nova_arraybuffer_create_resizable(int64_t byteLength, int64_t maxByteLength) {
+    if (byteLength < 0) byteLength = 0;
+    if (maxByteLength < byteLength) maxByteLength = byteLength;
+
+    NovaArrayBuffer* buffer = new NovaArrayBuffer();
+    buffer->byteLength = byteLength;
+    buffer->maxByteLength = maxByteLength;
+    buffer->detached = false;
+    buffer->resizable = true;
+
+    if (maxByteLength > 0) {
+        // Pre-allocate the maximum so resize() doesn't need to realloc.
+        buffer->data = static_cast<uint8_t*>(calloc(maxByteLength, 1));
+    } else {
+        buffer->data = nullptr;
+    }
+
+    return buffer;
+}
+
+// ArrayBuffer.resizable getter (ES2024)
+int64_t nova_arraybuffer_resizable(void* bufferPtr) {
+    if (!bufferPtr) return 0;
+    NovaArrayBuffer* buffer = static_cast<NovaArrayBuffer*>(bufferPtr);
+    return buffer->resizable ? 1 : 0;
+}
+
+// ArrayBuffer.maxByteLength getter (ES2024)
+int64_t nova_arraybuffer_maxByteLength(void* bufferPtr) {
+    if (!bufferPtr) return 0;
+    NovaArrayBuffer* buffer = static_cast<NovaArrayBuffer*>(bufferPtr);
+    return buffer->detached ? 0 : buffer->maxByteLength;
+}
+
+// ArrayBuffer.prototype.resize(newLength) — ES2024
+int64_t nova_arraybuffer_resize(void* bufferPtr, int64_t newLength) {
+    if (!bufferPtr) return 0;
+    NovaArrayBuffer* buffer = static_cast<NovaArrayBuffer*>(bufferPtr);
+    if (buffer->detached || !buffer->resizable) return 0;
+    if (newLength < 0 || newLength > buffer->maxByteLength) return 0;
+    // The backing store was pre-allocated to maxByteLength, so just update
+    // the length. Newly-exposed bytes are zeroed for spec compliance.
+    if (newLength > buffer->byteLength && buffer->data) {
+        std::memset(buffer->data + buffer->byteLength, 0,
+                    static_cast<size_t>(newLength - buffer->byteLength));
+    }
+    buffer->byteLength = newLength;
+    return 1;
 }
 
 // ArrayBuffer.byteLength getter

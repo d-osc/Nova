@@ -6,6 +6,8 @@
 #include <sstream>
 #include <cstdlib>
 
+#include "nova/Version.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #include <process.h>
@@ -45,7 +47,13 @@ public:
 
     // Get cached executable path for a source file
     std::string getCachedExePath([[maybe_unused]] const std::string& sourceFile, const std::string& sourceContent) {
-        std::string hash = hashSource(sourceContent);
+        // A source-only key can execute stale machine code after rebuilding
+        // Nova. The compilation timestamp is embedded in the driver binary,
+        // so every compiler rebuild gets an isolated native cache namespace.
+        const std::string cacheIdentity =
+            std::string(NOVA_VERSION) + "|" + __DATE__ + "|" + __TIME__ + "|" +
+            sourceContent;
+        std::string hash = hashSource(cacheIdentity);
 
 #ifdef _WIN32
         return cacheDir + "/" + hash + ".exe";

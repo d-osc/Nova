@@ -43,6 +43,16 @@ std::string TypeChecker::typeName(const TypePtr& type) {
         case Type::Kind::Literal: return "literal";
         case Type::Kind::TypeParameter: return "type parameter";
         case Type::Kind::IndexedAccess: return "indexed access";
+        case Type::Kind::Keyof: return "keyof";
+        case Type::Kind::Conditional: return "conditional type";
+        case Type::Kind::Mapped: return "mapped type";
+        case Type::Kind::Infer: return "infer " + type->name;
+        case Type::Kind::TypeQuery: return "typeof " + type->name;
+        case Type::Kind::TypePredicate:
+            return (type->isAssertion ? "asserts " : "") +
+                type->name + (type->elementType
+                    ? " is " + typeName(type->elementType) : "");
+        case Type::Kind::TemplateLiteral: return "`" + type->name + "`";
     }
     return "unknown";
 }
@@ -558,7 +568,11 @@ void TypeChecker::checkStatement(Stmt* statement) {
 
 void TypeChecker::checkFunction(FunctionDecl& function) {
     TypePtr savedReturn = expectedReturnType_;
-    expectedReturnType_ = function.returnType;
+    expectedReturnType_ =
+        function.returnType &&
+        function.returnType->kind == Type::Kind::TypePredicate
+            ? makeType(Type::Kind::Boolean)
+            : function.returnType;
     std::unordered_map<std::string, TypePtr> savedTypeParameters;
     for (size_t index = 0; index < function.typeParams.size(); ++index) {
         const std::string& name = function.typeParams[index];

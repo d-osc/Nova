@@ -20,6 +20,16 @@ Lexer::Lexer(const std::string& source)
     : Lexer("<input>", source) {
 }
 
+bool Lexer::isJSXMode() const {
+    auto endsWith = [this](const std::string& suffix) {
+        return filename_.size() >= suffix.size() &&
+               filename_.compare(
+                   filename_.size() - suffix.size(),
+                   suffix.size(), suffix) == 0;
+    };
+    return endsWith(".tsx") || endsWith(".jsx");
+}
+
 void Lexer::initializeKeywords() {
     keywords_ = {
         // JavaScript Keywords
@@ -188,7 +198,9 @@ Token Lexer::nextToken() {
 
     // Check for regex literal (context-dependent)
     // A '/' starts a regex if the last token allows an expression to start
-    if (current == '/' && peekChar() != '=' && canPrecedeRegex(lastTokenType_)) {
+    if (current == '/' && peekChar() != '=' &&
+        canPrecedeRegex(lastTokenType_) &&
+        !(isJSXMode() && lastTokenType_ == TokenType::Less)) {
         Token token = lexRegex();
         lastTokenType_ = token.type;
         return token;
@@ -373,6 +385,57 @@ Token Lexer::lexString(char quote) {
                     case '\\': value += '\\'; break;  // backslash
                     case '\'': value += '\''; break;  // single quote
                     case '"':  value += '"';  break;  // double quote
+                    case 'u': {
+                        // \uXXXX or \u{...} Unicode escape.
+                        advance();  // consume 'u'
+                        uint32_t codepoint = 0;
+                        if (position_ < source_.length() && currentChar() == '{') {
+                            advance();  // consume '{'
+                            std::string hex;
+                            while (position_ < source_.length() && currentChar() != '}') {
+                                hex += currentChar();
+                                advance();
+                            }
+                            if (position_ < source_.length() && currentChar() == '}') {
+                                advance();
+                            }
+                            try {
+                                codepoint = static_cast<uint32_t>(
+                                    std::stoul(hex, nullptr, 16));
+                            } catch (...) {
+                                codepoint = 0xFFFD;
+                            }
+                        } else {
+                            std::string hex;
+                            for (int k = 0; k < 4 && position_ < source_.length(); ++k) {
+                                hex += currentChar();
+                                advance();
+                            }
+                            try {
+                                codepoint = static_cast<uint32_t>(
+                                    std::stoul(hex, nullptr, 16));
+                            } catch (...) {
+                                codepoint = 0xFFFD;
+                            }
+                        }
+                        // Encode codepoint as UTF-8.
+                        if (codepoint <= 0x7F) {
+                            value += static_cast<char>(codepoint);
+                        } else if (codepoint <= 0x7FF) {
+                            value += static_cast<char>(0xC0 | (codepoint >> 6));
+                            value += static_cast<char>(0x80 | (codepoint & 0x3F));
+                        } else if (codepoint <= 0xFFFF) {
+                            value += static_cast<char>(0xE0 | (codepoint >> 12));
+                            value += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                            value += static_cast<char>(0x80 | (codepoint & 0x3F));
+                        } else {
+                            value += static_cast<char>(0xF0 | (codepoint >> 18));
+                            value += static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+                            value += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                            value += static_cast<char>(0x80 | (codepoint & 0x3F));
+                        }
+                        continue;  // already advanced past \uXXXX
+                    }
                     default:
                         // For unknown escape sequences, keep the backslash and character
                         value += '\\';

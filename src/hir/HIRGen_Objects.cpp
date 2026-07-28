@@ -2,14 +2,356 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
+#include <unordered_set>
 #define NOVA_DEBUG 0
 
 namespace nova::hir {
 
+// Emit code that builds a runtime nova::runtime::Object* from an object
+// literal, registering each property through nova_dynamic_object_set_tagged.
+// Used when the destination variable is in forcedDynamicObjectVars_ — i.e.
+// it will be passed to Object.create/defineProperty/Reflect/delete/in/etc.
+//
+// Phase 2.4: Methods on the literal are also emitted as free functions
+// with a runtime-object-method calling convention
+//   int64_t (*)(int64_t this, int64_t arg1, int64_t arg2, ...)
+// (this = the runtime Object* tagged as OBJECT JSValue; all other args
+// are NaN-boxed JSValues). Each method's function pointer is then stored
+// on the runtime Object via nova_dynamic_object_set_function so it can be
+// retrieved and dispatched by Proxy traps, Reflect.apply, Object.groupBy
+// callbacks, and any other path that needs to treat a function as a value.
+void HIRGenerator::emitRuntimeObjectLiteral(ObjectExpr& node) {
+    auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+    auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+    auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+    auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+    auto anyType = std::make_shared<HIRType>(HIRType::Kind::Any);
+
+    // nova_dynamic_object_create() -> Object*
+    auto getCreate = [&](HIRFunction*& fn) {
+        auto existing = module_->getFunction("nova_dynamic_object_create");
+        if (existing) { fn = existing.get(); return; }
+        auto* type = new HIRFunctionType({}, pointerType);
+        auto created = module_->createFunction("nova_dynamic_object_create", type);
+        created->linkage = HIRFunction::Linkage::External;
+        fn = created.get();
+    };
+    HIRFunction* createFn = nullptr;
+    getCreate(createFn);
+    HIRValue* obj = builder_->createCall(createFn, {}, "runtime.object.literal");
+
+    // nova_dynamic_object_set_tagged(Object*, const char* key, JSValue value)
+    auto getSet = [&](HIRFunction*& fn) {
+        auto existing = module_->getFunction("nova_dynamic_object_set_tagged");
+        if (existing) { fn = existing.get(); return; }
+        auto* type = new HIRFunctionType({pointerType, stringType, jsValueType}, voidType);
+        auto created = module_->createFunction("nova_dynamic_object_set_tagged", type);
+        created->linkage = HIRFunction::Linkage::External;
+        fn = created.get();
+    };
+    HIRFunction* setFn = nullptr;
+    getSet(setFn);
+
+    // nova_dynamic_object_set_function(Object*, const char* key, ptr fnPtr)
+    // — stores a function pointer as a callable JSValue.
+    auto getSetFn = [&](HIRFunction*& fn) {
+        auto existing = module_->getFunction("nova_dynamic_object_set_function");
+        if (existing) { fn = existing.get(); return; }
+        auto* type = new HIRFunctionType({pointerType, stringType, pointerType}, voidType);
+        auto created = module_->createFunction("nova_dynamic_object_set_function", type);
+        created->linkage = HIRFunction::Linkage::External;
+        fn = created.get();
+    };
+    HIRFunction* setFnPtrFn = nullptr;
+    getSetFn(setFnPtrFn);
+
+    // Two passes — first data properties (so the builder context stays in
+    // the calling function), then methods (which each switch the builder
+    // into a fresh function scope).
+    //
+    // PASS 1: data properties.
+    for (size_t i = 0; i < node.properties.size(); ++i) {
+        auto& prop = node.properties[i];
+        // Skip methods/getters/setters — handled in pass 2.
+        if (prop.kind == ObjectExpr::Property::Kind::Method ||
+            prop.kind == ObjectExpr::Property::Kind::Get ||
+            prop.kind == ObjectExpr::Property::Kind::Set) {
+            continue;
+        }
+        std::string fieldName = "field" + std::to_string(i);
+        if (auto* ident = dynamic_cast<Identifier*>(prop.key.get())) {
+            fieldName = ident->name;
+        } else if (auto* str = dynamic_cast<StringLiteral*>(prop.key.get())) {
+            fieldName = str->value;
+        } else if (auto* num = dynamic_cast<NumberLiteral*>(prop.key.get())) {
+            fieldName = std::to_string(num->value);
+        }
+
+        // Evaluate the value expression (clear currentDeclName_ so nested
+        // object literals don't get mistakenly flagged as dynamic).
+        const std::string savedDeclName = currentDeclName_;
+        currentDeclName_.clear();
+        if (prop.value) {
+            prop.value->accept(*this);
+        }
+        currentDeclName_ = savedDeclName;
+        if (!lastValue_) continue;
+
+        HIRValue* boxed = toJSValue(lastValue_);
+        builder_->createCall(setFn, {
+            obj,
+            builder_->createStringConstant(fieldName),
+            boxed,
+        });
+    }
+
+    // PASS 2: methods. Delegate each method's FunctionExpr to the regular
+    // FunctionExpr visitor so the full closure machinery (scopeStack push,
+    // capturedVariables_ tracking, __env parameter, materializeClosureEnvironment)
+    // works. After visit(FunctionExpr&) returns, lastValue_ holds a string
+    // constant with the generated function name. If that function captured
+    // outer-scope variables, we materialize the closure env in the caller's
+    // context (the function constructing this object literal) and store BOTH
+    // the function pointer and env pointer on the runtime Object — trap
+    // dispatch then passes env as the trailing argument.
+    auto voidType2 = std::make_shared<HIRType>(HIRType::Kind::Void);
+    auto getSetFnWithEnv = [&](HIRFunction*& fn) {
+        auto existing = module_->getFunction("nova_dynamic_object_set_function_with_env");
+        if (existing) { fn = existing.get(); return; }
+        auto* type = new HIRFunctionType({pointerType, stringType, pointerType, pointerType}, voidType2);
+        auto created = module_->createFunction("nova_dynamic_object_set_function_with_env", type);
+        created->linkage = HIRFunction::Linkage::External;
+        fn = created.get();
+    };
+    HIRFunction* setFnWithEnvFn = nullptr;
+    getSetFnWithEnv(setFnWithEnvFn);
+
+    for (size_t i = 0; i < node.properties.size(); ++i) {
+        auto& prop = node.properties[i];
+        if (prop.kind != ObjectExpr::Property::Kind::Method) continue;
+
+        std::string fieldName;
+        if (auto* ident = dynamic_cast<Identifier*>(prop.key.get())) {
+            fieldName = ident->name;
+        } else if (auto* str = dynamic_cast<StringLiteral*>(prop.key.get())) {
+            fieldName = str->value;
+        } else {
+            continue;
+        }
+
+        auto* funcExpr = dynamic_cast<FunctionExpr*>(prop.value.get());
+        if (!funcExpr) continue;
+
+        // Clear currentDeclName_ so nested object literals aren't mistakenly
+        // flagged as forced-dynamic.
+        std::string savedDeclName = currentDeclName_;
+        currentDeclName_.clear();
+
+        // Save lastValue — FunctionExpr overwrites it.
+        HIRValue* savedLastValue = lastValue_;
+
+        // Delegate to FunctionExpr visitor. This:
+        //   - creates a fresh function with __this (JSValue) + params
+        //   - pushes parent symbol table onto scopeStack_
+        //   - generates body (captures are detected via lookupVariable)
+        //   - appends __env parameter if any captures
+        //   - returns string constant with function name in lastValue_
+        funcExpr->accept(*this);
+
+        HIRValue* fnNameValue = lastValue_;
+        lastValue_ = savedLastValue;
+        currentDeclName_ = savedDeclName;
+
+        if (!fnNameValue) continue;
+
+        // Extract the function name from the string constant.
+        std::string methodFuncName;
+        if (auto* cnst = dynamic_cast<hir::HIRConstant*>(fnNameValue)) {
+            if (std::holds_alternative<std::string>(cnst->value)) {
+                methodFuncName = std::get<std::string>(cnst->value);
+            }
+        }
+        if (methodFuncName.empty()) continue;
+
+        // Check whether the method captured any outer variables.
+        const bool hasEnv =
+            closureEnvironments_.count(methodFuncName) > 0 &&
+            closureEnvironments_[methodFuncName] &&
+            !closureEnvironments_[methodFuncName]->fields.empty();
+
+        if (hasEnv) {
+            // Materialize the env in the caller's scope (allocates an env
+            // struct, populates fields with current captured-variable values,
+            // returns a pointer to it). Store fn+env on runtime Object.
+            HIRValue* envPtr = materializeClosureEnvironment(methodFuncName);
+            if (envPtr) {
+                builder_->createCall(setFnWithEnvFn, {
+                    obj,
+                    builder_->createStringConstant(fieldName),
+                    builder_->createStringConstant(methodFuncName),
+                    envPtr,
+                });
+            } else {
+                builder_->createCall(setFnPtrFn, {
+                    obj,
+                    builder_->createStringConstant(fieldName),
+                    builder_->createStringConstant(methodFuncName),
+                });
+            }
+        } else {
+            // No captures — direct fn pointer storage.
+            builder_->createCall(setFnPtrFn, {
+                obj,
+                builder_->createStringConstant(fieldName),
+                builder_->createStringConstant(methodFuncName),
+            });
+        }
+    }
+
+    lastValue_ = obj;
+    lastValue_->type = pointerType;
+}
+
+
 void HIRGenerator::visit(MemberExpr& node) {
-        if (auto* objectIdentifier = dynamic_cast<Identifier*>(node.object.get());
-            objectIdentifier &&
-            dynamicObjectVars_.count(objectIdentifier->name) > 0) {
+        // Early Error-property routing for Error-typed variables. Errors are
+        // also registered in dynamicObjectVars_ (see HIRGen_Statements.cpp),
+        // but their known properties (name/message/stack/cause/errors) must
+        // go through the strongly-typed runtime accessors so the result has
+        // the correct HIR type (String for name/message/stack, JSValue for
+        // cause, runtime-array pointer for errors). Without this short-circuit
+        // the dynamic path returns a generic JSValue and `.errors.length` or
+        // `.cause` propagation fails.
+        if (auto* errIdent = dynamic_cast<Identifier*>(node.object.get())) {
+            if (promiseWithResolversVars_.count(errIdent->name) > 0) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(node.property.get())) {
+                    const std::string& propertyName = propIdent->name;
+                    if (propertyName == "promise" || propertyName == "resolve" ||
+                        propertyName == "reject") {
+                        errIdent->accept(*this);
+                        HIRValue* object = lastValue_;
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+
+                        std::string runtimeFunc;
+                        if (propertyName == "promise") {
+                            runtimeFunc = "nova_promise_withResolvers_promise";
+                        } else if (propertyName == "resolve") {
+                            runtimeFunc = "nova_promise_withResolvers_resolve_get";
+                        } else {
+                            runtimeFunc = "nova_promise_withResolvers_reject_get";
+                        }
+                        auto existingFunc = module_->getFunction(runtimeFunc);
+                        HIRFunction* func = existingFunc ? existingFunc.get() : nullptr;
+                        if (!func) {
+                            std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            HIRFunctionType* ft = new HIRFunctionType(paramTypes, ptrType);
+                            HIRFunctionPtr fp = module_->createFunction(runtimeFunc, ft);
+                            fp->linkage = HIRFunction::Linkage::External;
+                            func = fp.get();
+                        }
+                        lastValue_ = builder_->createCall(func, {object}, "resolver_field");
+                        lastValue_->type = ptrType;
+                        if (propertyName == "promise") {
+                            // The promise field is a real Promise — flag it so
+                            // subsequent .then/.catch and instanceof dispatch
+                            // work.
+                            lastWasPromise_ = true;
+                        }
+                        return;
+                    }
+                }
+            }
+            if (errorVars_.count(errIdent->name) > 0) {
+                if (auto* propIdent = dynamic_cast<Identifier*>(node.property.get())) {
+                    const std::string& propertyName = propIdent->name;
+                    static const std::unordered_set<std::string> errorProps = {
+                        "name", "message", "stack", "cause", "errors"
+                    };
+                    if (errorProps.count(propertyName) > 0) {
+                        errIdent->accept(*this);
+                        HIRValue* object = lastValue_;
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                        auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+
+                        std::string runtimeFunc;
+                        std::string returnTypeKind;  // empty = ptr(string), "jsvalue" = JSValue
+                        if (propertyName == "name") {
+                            runtimeFunc = "nova_error_get_name";
+                        } else if (propertyName == "message") {
+                            runtimeFunc = "nova_error_get_message";
+                        } else if (propertyName == "stack") {
+                            runtimeFunc = "nova_error_get_stack";
+                        } else if (propertyName == "cause") {
+                            runtimeFunc = "nova_error_get_cause";
+                            returnTypeKind = "jsvalue";
+                        } else if (propertyName == "errors") {
+                            runtimeFunc = "nova_aggregate_error_get_errors";
+                        }
+
+                        std::vector<HIRTypePtr> paramTypes = {ptrType};
+                        HIRTypePtr retType = ptrType;
+                        if (propertyName == "name" || propertyName == "message" ||
+                            propertyName == "stack") {
+                            retType = stringType;
+                        } else if (returnTypeKind == "jsvalue") {
+                            retType = jsValueType;
+                        }
+                        auto existingFunc = module_->getFunction(runtimeFunc);
+                        HIRFunction* func = existingFunc ? existingFunc.get() : nullptr;
+                        if (!func) {
+                            HIRFunctionType* funcType = new HIRFunctionType(paramTypes, retType);
+                            HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
+                            funcPtr->linkage = HIRFunction::Linkage::External;
+                            func = funcPtr.get();
+                        }
+
+                        HIRValue* errorObject = object;
+                        if (errorObject && errorObject->type &&
+                            errorObject->type->kind == HIRType::Kind::JSValue) {
+                            auto existingUnbox = module_->getFunction("nova_value_to_object");
+                            HIRFunction* unbox = existingUnbox ? existingUnbox.get() : nullptr;
+                            if (!unbox) {
+                                auto* type = new HIRFunctionType({jsValueType}, ptrType);
+                                auto created = module_->createFunction("nova_value_to_object", type);
+                                created->linkage = HIRFunction::Linkage::External;
+                                unbox = created.get();
+                            }
+                            errorObject = builder_->createCall(unbox, {errorObject}, "error.object.unbox");
+                            errorObject->type = ptrType;
+                        }
+                        lastValue_ = builder_->createCall(func, {errorObject}, "error_prop");
+                        lastValue_->type = retType;
+                        // `.errors` returns a ValueArray metadata wrapper so
+                        // subsequent `.length` / `[i]` work like any other
+                        // runtime array.
+                        if (propertyName == "errors") {
+                            lastWasRuntimeArray_ = true;
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
+        std::function<bool(Expr*)> isDynamicObjectExpression =
+            [&](Expr* expression) -> bool {
+                if (!expression) return false;
+                if (auto* identifier =
+                        dynamic_cast<Identifier*>(expression)) {
+                    return dynamicObjectVars_.count(identifier->name) > 0;
+                }
+                if (auto* assertion = dynamic_cast<AsExpr*>(expression)) {
+                    return isDynamicObjectExpression(
+                        assertion->expression.get());
+                }
+                if (auto* member = dynamic_cast<MemberExpr*>(expression)) {
+                    return isDynamicObjectExpression(member->object.get());
+                }
+                return false;
+            };
+        if (isDynamicObjectExpression(node.object.get())) {
             std::string propertyName;
             if (auto* propertyIdentifier =
                     dynamic_cast<Identifier*>(node.property.get())) {
@@ -27,6 +369,65 @@ void HIRGenerator::visit(MemberExpr& node) {
                     HIRType::Kind::String);
                 auto jsValueType = std::make_shared<HIRType>(
                     HIRType::Kind::JSValue);
+                // If the object expression just produced a runtime-array
+                // metadata pointer (e.g. `aggregate.errors`), the dynamic
+                // fallback below would treat the ValueArray metadata as a
+                // nova::runtime::Object and segfault. Short-circuit `.length`
+                // and `[i]` on the freshly-produced runtime array instead.
+                if (lastWasRuntimeArray_ && objectValue && objectValue->type &&
+                    objectValue->type->kind == HIRType::Kind::Pointer) {
+                    auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    if (propertyName == "length") {
+                        auto existingLen = module_->getFunction("nova_value_array_length");
+                        HIRFunction* lenFn = existingLen ? existingLen.get() : nullptr;
+                        if (!lenFn) {
+                            std::vector<HIRTypePtr> paramTypes = {pointerType};
+                            HIRFunctionType* ft = new HIRFunctionType(paramTypes, intType);
+                            HIRFunctionPtr fp = module_->createFunction("nova_value_array_length", ft);
+                            fp->linkage = HIRFunction::Linkage::External;
+                            lenFn = fp.get();
+                        }
+                        lastValue_ = builder_->createCall(lenFn, {objectValue}, "runtime_array_len");
+                        lastValue_->type = intType;
+                        lastWasRuntimeArray_ = false;
+                        return;
+                    }
+                    if (node.isComputed) {
+                        node.property->accept(*this);
+                        HIRValue* index = lastValue_;
+                        auto existingAt = module_->getFunction("nova_value_array_at");
+                        HIRFunction* atFn = existingAt ? existingAt.get() : nullptr;
+                        if (!atFn) {
+                            std::vector<HIRTypePtr> paramTypes = {pointerType, intType};
+                            HIRFunctionType* ft = new HIRFunctionType(paramTypes, intType);
+                            HIRFunctionPtr fp = module_->createFunction("nova_value_array_at", ft);
+                            fp->linkage = HIRFunction::Linkage::External;
+                            atFn = fp.get();
+                        }
+                        lastValue_ = builder_->createCall(atFn, {objectValue, index}, "runtime_array_elem");
+                        lastValue_->type = intType;
+                        lastWasRuntimeArray_ = false;
+                        return;
+                    }
+                }
+                if (objectValue && objectValue->type &&
+                    objectValue->type->kind == HIRType::Kind::JSValue) {
+                    auto existingUnbox =
+                        module_->getFunction("nova_value_to_object");
+                    HIRFunction* unbox =
+                        existingUnbox ? existingUnbox.get() : nullptr;
+                    if (!unbox) {
+                        auto* type = new HIRFunctionType(
+                            {jsValueType}, pointerType);
+                        auto created = module_->createFunction(
+                            "nova_value_to_object", type);
+                        created->linkage = HIRFunction::Linkage::External;
+                        unbox = created.get();
+                    }
+                    objectValue = builder_->createCall(
+                        unbox, {objectValue}, "dynamic.object.unbox");
+                    objectValue->type = pointerType;
+                }
                 auto existing = module_->getFunction(
                     "nova_dynamic_object_get_tagged");
                 HIRFunction* getter = existing ? existing.get() : nullptr;
@@ -43,6 +444,13 @@ void HIRGenerator::visit(MemberExpr& node) {
                     builder_->createStringConstant(propertyName)
                 }, "dynamic.object.property");
                 lastValue_->type = jsValueType;
+                // Phase 2.4: nova_dynamic_object_get_tagged may dispatch a
+                // Proxy trap, which can throw (e.g. revoked-proxy TypeError).
+                // When inside a try block, poll for a pending exception and
+                // branch to the catch block so `try { revoked.proxy.ok }`
+                // actually catches. pollExceptionAfterCall() is a no-op when
+                // currentCatchBlock_ is null.
+                pollExceptionAfterCall();
                 return;
             }
         }
@@ -344,6 +752,56 @@ void HIRGenerator::visit(MemberExpr& node) {
         // Evaluate the object/array
         node.object->accept(*this);
         auto object = lastValue_;
+
+        // If the object expression just produced a runtime-array metadata
+        // pointer (e.g. `aggregate.errors` returning a ValueArray wrapper),
+        // route `.length` and `[i]` through the runtime-array primitives
+        // even when the receiver is not a simple Identifier. Without this,
+        // `aggregate.errors.length` falls through to the dynamic-object or
+        // generic-class path and returns undefined / segfaults.
+        if (lastWasRuntimeArray_ && object && object->type &&
+            object->type->kind == HIRType::Kind::Pointer) {
+            if (auto* propIdent = dynamic_cast<Identifier*>(node.property.get())) {
+                if (propIdent->name == "length") {
+                    auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                    auto existingFunc = module_->getFunction("nova_value_array_length");
+                    HIRFunction* func = existingFunc ? existingFunc.get() : nullptr;
+                    if (!func) {
+                        std::vector<HIRTypePtr> paramTypes = {ptrType};
+                        HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                        HIRFunctionPtr funcPtr = module_->createFunction("nova_value_array_length", funcType);
+                        funcPtr->linkage = HIRFunction::Linkage::External;
+                        func = funcPtr.get();
+                    }
+                    lastValue_ = builder_->createCall(func, {object}, "runtime_array_len");
+                    lastValue_->type = intType;
+                    lastWasRuntimeArray_ = false;
+                    return;
+                }
+            }
+            if (node.isComputed) {
+                // numeric/symbol index on a freshly-produced runtime array
+                node.property->accept(*this);
+                auto index = lastValue_;
+                auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                auto existingFunc = module_->getFunction("nova_value_array_at");
+                HIRFunction* func = existingFunc ? existingFunc.get() : nullptr;
+                if (!func) {
+                    std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                    HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
+                    HIRFunctionPtr funcPtr = module_->createFunction("nova_value_array_at", funcType);
+                    funcPtr->linkage = HIRFunction::Linkage::External;
+                    func = funcPtr.get();
+                }
+                std::vector<HIRValue*> args = {object, index};
+                lastValue_ = builder_->createCall(func, args, "runtime_array_elem");
+                lastValue_->type = intType;
+                lastWasRuntimeArray_ = false;
+                return;
+            }
+        }
 
         auto unboxTaggedObject = [&](HIRValue* value) -> HIRValue* {
             if (!value || !value->type ||
@@ -685,21 +1143,30 @@ void HIRGenerator::visit(MemberExpr& node) {
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                         auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
 
+                        std::string runtimeFunc;
                         if (propertyName == "byteLength") {
+                            runtimeFunc = "nova_arraybuffer_byteLength";
+                        } else if (propertyName == "resizable") {
+                            runtimeFunc = "nova_arraybuffer_resizable";
+                        } else if (propertyName == "maxByteLength") {
+                            runtimeFunc = "nova_arraybuffer_maxByteLength";
+                        }
+
+                        if (!runtimeFunc.empty()) {
                             std::vector<HIRTypePtr> paramTypes = {ptrType};
-                            auto existingFunc = module_->getFunction("nova_arraybuffer_byteLength");
+                            auto existingFunc = module_->getFunction(runtimeFunc);
                             HIRFunction* func = nullptr;
                             if (existingFunc) {
                                 func = existingFunc.get();
                             } else {
                                 HIRFunctionType* funcType = new HIRFunctionType(paramTypes, intType);
-                                HIRFunctionPtr funcPtr = module_->createFunction("nova_arraybuffer_byteLength", funcType);
+                                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 func = funcPtr.get();
                             }
 
                             std::vector<HIRValue*> args = {object};
-                            lastValue_ = builder_->createCall(func, args, "arraybuffer_byteLength");
+                            lastValue_ = builder_->createCall(func, args, "arraybuffer_prop");
                             lastValue_->type = intType;
                             return;
                         }
@@ -850,30 +1317,70 @@ void HIRGenerator::visit(MemberExpr& node) {
                         auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
 
                         std::string runtimeFunc;
+                        std::string returnTypeKind;  // empty = ptr, "jsvalue" = JSValue
                         if (propertyName == "name") {
                             runtimeFunc = "nova_error_get_name";
                         } else if (propertyName == "message") {
                             runtimeFunc = "nova_error_get_message";
                         } else if (propertyName == "stack") {
                             runtimeFunc = "nova_error_get_stack";
+                        } else if (propertyName == "cause") {
+                            runtimeFunc = "nova_error_get_cause";
+                            returnTypeKind = "jsvalue";
+                        } else if (propertyName == "errors") {
+                            runtimeFunc = "nova_aggregate_error_get_errors";
                         }
 
                         if (!runtimeFunc.empty()) {
                             std::vector<HIRTypePtr> paramTypes = {ptrType};
+                            HIRTypePtr retType = ptrType;
+                            if (returnTypeKind == "jsvalue") {
+                                retType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                            }
                             auto existingFunc = module_->getFunction(runtimeFunc);
                             HIRFunction* func = nullptr;
                             if (existingFunc) {
                                 func = existingFunc.get();
                             } else {
-                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
+                                HIRFunctionType* funcType = new HIRFunctionType(paramTypes, retType);
                                 HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                                 funcPtr->linkage = HIRFunction::Linkage::External;
                                 func = funcPtr.get();
                             }
 
-                            std::vector<HIRValue*> args = {object};
+                            HIRValue* errorObject = object;
+                            if (errorObject && errorObject->type &&
+                                errorObject->type->kind ==
+                                    HIRType::Kind::JSValue) {
+                                auto jsValueType = std::make_shared<HIRType>(
+                                    HIRType::Kind::JSValue);
+                                auto existingUnbox = module_->getFunction(
+                                    "nova_value_to_object");
+                                HIRFunction* unbox = existingUnbox
+                                    ? existingUnbox.get() : nullptr;
+                                if (!unbox) {
+                                    auto* type = new HIRFunctionType(
+                                        {jsValueType}, ptrType);
+                                    auto created = module_->createFunction(
+                                        "nova_value_to_object", type);
+                                    created->linkage =
+                                        HIRFunction::Linkage::External;
+                                    unbox = created.get();
+                                }
+                                errorObject = builder_->createCall(
+                                    unbox, {errorObject},
+                                    "error.object.unbox");
+                                errorObject->type = ptrType;
+                            }
+                            std::vector<HIRValue*> args = {errorObject};
                             lastValue_ = builder_->createCall(func, args, "error_prop");
-                            lastValue_->type = ptrType;
+                            lastValue_->type = retType;
+                            // `aggregate.errors` returns a ValueArray metadata
+                            // wrapper so subsequent `.length` / `[i]` work like
+                            // any other runtime array.
+                            if (propertyName == "errors") {
+                                lastWasRuntimeArray_ = true;
+                            }
                             return;
                         }
                     }
@@ -1150,9 +1657,65 @@ void HIRGenerator::visit(MemberExpr& node) {
 
                 if (found) {
                     lastValue_ = builder_->createGetField(object, fieldIndex, propertyName);
+                } else if (object && object->type &&
+                           !node.isComputed &&
+                           propertyName != "length" &&
+                           object->type->kind == hir::HIRType::Kind::JSValue) {
+                    // Phase 2.4: Member access on a JSValue-typed `this` or
+                    // parameter (e.g. inside a function called via Reflect.apply
+                    // where thisArg is a runtime Object). Unbox to Object* and
+                    // route through nova_dynamic_object_get_tagged so the
+                    // property is read at runtime regardless of how the caller
+                    // constructed the object.
+                    auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                    auto pointerType2 = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    auto stringType2 = std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto existingUnbox = module_->getFunction("nova_value_to_object");
+                    HIRFunction* unbox = existingUnbox ? existingUnbox.get() : nullptr;
+                    if (!unbox) {
+                        auto* type = new HIRFunctionType({jsValueType}, pointerType2);
+                        auto created = module_->createFunction("nova_value_to_object", type);
+                        created->linkage = HIRFunction::Linkage::External;
+                        unbox = created.get();
+                    }
+                    HIRValue* objPtr = builder_->createCall(unbox, {object}, "jsvalue.member.unbox");
+                    objPtr->type = pointerType2;
+                    auto existing = module_->getFunction("nova_dynamic_object_get_tagged");
+                    HIRFunction* getter = existing ? existing.get() : nullptr;
+                    if (!getter) {
+                        auto* type = new HIRFunctionType({pointerType2, stringType2}, jsValueType);
+                        auto created = module_->createFunction("nova_dynamic_object_get_tagged", type);
+                        created->linkage = HIRFunction::Linkage::External;
+                        getter = created.get();
+                    }
+                    lastValue_ = builder_->createCall(getter, {
+                        objPtr,
+                        builder_->createStringConstant(propertyName)
+                    }, "jsvalue.member.get");
+                    lastValue_->type = jsValueType;
                 } else {
+                    // When the static type is JSValue (e.g. an unannotated
+                    // arrow-function parameter), emit a runtime dispatch
+                    // helper that inspects the tag and computes length.
+                    if (object && object->type &&
+                        object->type->kind == hir::HIRType::Kind::JSValue &&
+                        propertyName == "length") {
+                        auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto existing = module_->getFunction("nova_value_length");
+                        hir::HIRFunction* func = existing ? existing.get() : nullptr;
+                        if (!func) {
+                            std::vector<HIRTypePtr> paramTypes = {jsValueType};
+                            HIRFunctionType* ft = new HIRFunctionType(paramTypes, intType);
+                            HIRFunctionPtr fp = module_->createFunction("nova_value_length", ft);
+                            fp->linkage = HIRFunction::Linkage::External;
+                            func = fp.get();
+                        }
+                        lastValue_ = builder_->createCall(func, {object}, "jsvalue.length");
+                        lastValue_->type = intType;
+                    }
                     // Check for built-in string properties
-                    if (object && object->type && object->type->kind == hir::HIRType::Kind::String && propertyName == "length") {
+                    else if (object && object->type && object->type->kind == hir::HIRType::Kind::String && propertyName == "length") {
                         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Accessing built-in string.length property" << std::endl;
 
                         // Try to find if this is a string literal constant
@@ -1286,6 +1849,16 @@ void HIRGenerator::visit(ObjectExpr& node) {
         // Create struct type with fields for each property
         // Mark as Object for instanceof resolution
         lastVariableKind_ = "Object";
+
+        // If this literal is being assigned to a variable that was flagged as
+        // forced-dynamic (used with Object.create/defineProperty/delete/in/etc.),
+        // emit a runtime nova::runtime::Object* instead of a fixed-layout struct.
+        if (!currentDeclName_.empty() &&
+            forcedDynamicObjectVars_.count(currentDeclName_) > 0) {
+            emitRuntimeObjectLiteral(node);
+            return;
+        }
+
         std::vector<hir::HIRStructType::Field> fields;
         std::vector<hir::HIRValue*> fieldValues;
         std::string structName = "anon_obj";

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <cstdlib>
 #define NOVA_DEBUG 0
 
 namespace nova::hir {
@@ -648,6 +649,9 @@ void HIRGenerator::visit(TaggedTemplateExpr& node) {
         }
 
         if (hasRest) {
+            for (auto*& value : exprValues) {
+                value = toJSValue(value);
+            }
             auto* valuesArray = builder_->createArrayConstruct(
                 exprValues, "tagged_values");
             args.push_back(valuesArray);
@@ -732,21 +736,96 @@ void HIRGenerator::visit(Decorator& node) {
     
     // JSX/TSX Expressions
 void HIRGenerator::visit(JSXElement& node) {
-        (void)node;
-        // JSX element - translate to runtime createElement call
-        // For now, treat as opaque object creation
-        // TODO: Implement JSX transformation to React.createElement or similar
-        lastValue_ = builder_->createNullConstant(
-            std::make_shared<HIRType>(HIRType::Kind::Any).get()
-        );
+        static size_t jsxCounter = 0;
+        const size_t id = jsxCounter++;
+
+        std::vector<HIRStructType::Field> propFields;
+        std::vector<HIRValue*> propValues;
+        for (auto& attribute : node.attributes) {
+            if (attribute->value) {
+                attribute->value->accept(*this);
+            } else {
+                lastValue_ = builder_->createBoolConstant(true);
+            }
+            propFields.push_back({
+                attribute->name, lastValue_->type, true
+            });
+            propValues.push_back(lastValue_);
+        }
+        for (size_t index = 0;
+             index < node.spreadAttributes.size(); ++index) {
+            node.spreadAttributes[index]->expression->accept(*this);
+            propFields.push_back({
+                "$spread" + std::to_string(index),
+                lastValue_->type, true
+            });
+            propValues.push_back(lastValue_);
+        }
+        auto* propsType = new HIRStructType(
+            "__jsx_props_" + std::to_string(id), propFields);
+        HIRValue* props = builder_->createStructConstruct(
+            propsType, propValues,
+            "__jsx_props_" + std::to_string(id));
+
+        std::vector<HIRValue*> children;
+        children.reserve(node.children.size());
+        for (auto& child : node.children) {
+            child->accept(*this);
+            children.push_back(lastValue_);
+        }
+        HIRValue* childArray = builder_->createArrayConstruct(
+            children, "__jsx_children_" + std::to_string(id));
+        HIRValue* tag = builder_->createStringConstant(node.tagName);
+
+        // The default emit is a stable, framework-neutral virtual-node
+        // record. A host can opt into a factory ABI by setting
+        // NOVA_JSX_FACTORY to an externally linked function accepting
+        // (tag, props, children).
+        if (const char* factoryName = std::getenv("NOVA_JSX_FACTORY");
+            factoryName && *factoryName) {
+            auto existing = module_->getFunction(factoryName);
+            HIRFunction* factory = existing ? existing.get() : nullptr;
+            if (!factory) {
+                auto stringType = std::make_shared<HIRType>(
+                    HIRType::Kind::String);
+                auto anyType = std::make_shared<HIRType>(
+                    HIRType::Kind::Any);
+                auto* factoryType = new HIRFunctionType(
+                    {stringType, props->type, childArray->type}, anyType);
+                auto created = module_->createFunction(
+                    factoryName, factoryType);
+                created->linkage = HIRFunction::Linkage::External;
+                factory = created.get();
+            }
+            lastValue_ = builder_->createCall(
+                factory, {tag, props, childArray}, "jsx.factory");
+            return;
+        }
+
+        std::vector<HIRStructType::Field> vnodeFields = {
+            {"type", tag->type, true},
+            {"props", props->type, true},
+            {"children", childArray->type, true}
+        };
+        auto* vnodeType = new HIRStructType(
+            "__jsx_vnode_" + std::to_string(id), vnodeFields);
+        lastValue_ = builder_->createStructConstruct(
+            vnodeType, {tag, props, childArray},
+            "__jsx_vnode_" + std::to_string(id));
     }
     
 void HIRGenerator::visit(JSXFragment& node) {
-        (void)node;
-        // JSX fragment - translate to Fragment component
-        lastValue_ = builder_->createNullConstant(
-            std::make_shared<HIRType>(HIRType::Kind::Any).get()
-        );
+        static size_t fragmentCounter = 0;
+        std::vector<HIRValue*> children;
+        children.reserve(node.children.size());
+        for (auto& child : node.children) {
+            child->accept(*this);
+            children.push_back(lastValue_);
+        }
+        lastValue_ = builder_->createArrayConstruct(
+            children,
+            "__jsx_fragment_" +
+                std::to_string(fragmentCounter++));
     }
     
 void HIRGenerator::visit(JSXText& node) {
@@ -760,13 +839,15 @@ void HIRGenerator::visit(JSXExpressionContainer& node) {
     }
     
 void HIRGenerator::visit(JSXAttribute& node) {
-        // JSX attribute - not yet implemented
-        (void)node;
+        if (node.value) {
+            node.value->accept(*this);
+        } else {
+            lastValue_ = builder_->createBoolConstant(true);
+        }
     }
     
 void HIRGenerator::visit(JSXSpreadAttribute& node) {
-        // JSX spread attribute - not yet implemented
-        (void)node;
+        node.expression->accept(*this);
     }
     
     // Patterns (for destructuring)
@@ -811,6 +892,12 @@ void HIRGenerator::visit(InterfaceDecl& node) {
 void HIRGenerator::visit(TypeAliasDecl& node) {
         (void)node;
         // Type alias - type information only
+    }
+
+void HIRGenerator::visit(NamespaceDecl& node) {
+        (void)node;
+        // Namespace declarations are erased from JavaScript output. Runtime
+        // namespace values will be handled by the module/object lowering phase.
     }
     
 void HIRGenerator::visit(EnumDecl& node) {

@@ -2,6 +2,7 @@
 // Extracted from HIRGen.cpp for better code organization
 
 #include "nova/HIR/HIRGen_Internal.h"
+#include <unordered_map>
 #define NOVA_DEBUG 0
 
 namespace nova::hir {
@@ -252,6 +253,74 @@ void HIRGenerator::visit(BinaryExpr& node) {
                 auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
                 auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
 
+                // First, when RHS is a builtin Error subclass, evaluate LHS
+                // to a pointer and dispatch to the matching nova_is_<type>
+                // runtime helper. This handles values that were never thrown
+                // (e.g. `aggregate.errors[0] instanceof RangeError`).
+                static const std::unordered_map<std::string, std::string>
+                    builtinErrorCheck = {
+                        {"Error", "nova_is_error"},
+                        {"TypeError", "nova_is_type_error"},
+                        {"RangeError", "nova_is_range_error"},
+                        {"ReferenceError", "nova_is_reference_error"},
+                        {"SyntaxError", "nova_is_syntax_error"},
+                        {"URIError", "nova_is_uri_error"},
+                        {"AggregateError", "nova_is_aggregate_error"},
+                        {"Promise", "nova_promise_isPromise"},
+                    };
+                auto builtinErrIt = builtinErrorCheck.find(rhsClassName);
+                HIRValue* runtimeTypeCheck = nullptr;
+                if (builtinErrIt != builtinErrorCheck.end()) {
+                    // Evaluate LHS
+                    node.left->accept(*this);
+                    HIRValue* lhsValue = lastValue_;
+                    if (lhsValue && lhsValue->type &&
+                        lhsValue->type->kind == HIRType::Kind::I64) {
+                        // Cast raw i64 (pointer bits) to pointer
+                        lhsValue = builder_->createCast(
+                            lhsValue, ptrType.get(), "instanceof.lhs.ptr");
+                    } else if (lhsValue && lhsValue->type &&
+                               lhsValue->type->kind == HIRType::Kind::JSValue) {
+                        auto existingUnbox = module_->getFunction("nova_value_to_object");
+                        HIRFunction* unbox = existingUnbox ? existingUnbox.get() : nullptr;
+                        if (!unbox) {
+                            auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                            auto* type = new HIRFunctionType({jsValueType}, ptrType);
+                            auto created = module_->createFunction("nova_value_to_object", type);
+                            created->linkage = HIRFunction::Linkage::External;
+                            unbox = created.get();
+                        }
+                        lhsValue = builder_->createCall(unbox, {lhsValue}, "instanceof.lhs.unbox");
+                        lhsValue->type = ptrType;
+                    }
+
+                    HIRFunction* checkFn = module_->getFunction(builtinErrIt->second).get();
+                    if (!checkFn) {
+                        HIRFunctionType* ft = new HIRFunctionType({ptrType}, intType);
+                        auto fp = module_->createFunction(builtinErrIt->second, ft);
+                        fp->linkage = HIRFunction::Linkage::External;
+                        checkFn = fp.get();
+                    }
+                    runtimeTypeCheck = builder_->createCall(
+                        checkFn, {lhsValue}, "instanceof.builtin");
+                    runtimeTypeCheck->type = intType;
+                    // For specific builtin subclasses (TypeError, RangeError,
+                    // etc.) and Promise, the runtime check is authoritative —
+                    // a value either has that error-type tag / is a registered
+                    // promise, or it doesn't. Return early so we don't OR in
+                    // stale thrown-class state.
+                    // For "Error" RHS we fall through and OR with the
+                    // thrown-class-name candidates, because custom subclasses
+                    // (e.g. `class MyErr extends Error`) are not NovaError
+                    // instances and `nova_is_error` would miss them.
+                    if (rhsClassName != "Error") {
+                        lastValue_ = builder_->createNe(
+                            runtimeTypeCheck, builder_->createIntConstant(0),
+                            "instanceof.bool");
+                        return;
+                    }
+                }
+
                 // Get the runtime class-name tag (set at throw time)
                 std::string getFuncName = "nova_get_thrown_class_name";
                 HIRFunction* getFunc = module_->getFunction(getFuncName).get();
@@ -278,11 +347,34 @@ void HIRGenerator::visit(BinaryExpr& node) {
                 std::vector<std::string> candidates;
                 candidates.push_back(rhsClassName);
 
+                std::unordered_set<std::string> known;
+                known.insert(rhsClassName);
+
+                // Builtin Error hierarchy. Nova represents builtin error
+                // subclasses (TypeError extends Error, etc.) only at runtime;
+                // the static classInheritance_ table doesn't know about them.
+                // Inject them here so `instanceof Error` and `instanceof
+                // <BuiltinError>` see the full subtree.
+                static const std::unordered_map<std::string,
+                    std::vector<std::string>> builtinSubclasses = {
+                    {"Error", {"TypeError", "RangeError", "ReferenceError",
+                               "SyntaxError", "URIError", "InternalError",
+                               "EvalError", "AggregateError"}},
+                    {"RangeError", {"AggregateError"}},
+                };
+                auto builtinIt = builtinSubclasses.find(rhsClassName);
+                if (builtinIt != builtinSubclasses.end()) {
+                    for (const auto& sub : builtinIt->second) {
+                        if (known.count(sub) == 0) {
+                            known.insert(sub);
+                            candidates.push_back(sub);
+                        }
+                    }
+                }
+
                 // Repeatedly scan classInheritance_ for new child classes until
                 // a fixed point is reached. This handles multi-level chains
                 // (C extends B extends A extends Error).
-                std::unordered_set<std::string> known;
-                known.insert(rhsClassName);
                 bool changed = true;
                 while (changed) {
                     changed = false;
@@ -311,8 +403,18 @@ void HIRGenerator::visit(BinaryExpr& node) {
                 }
 
                 if (!acc) {
-                    lastValue_ = builder_->createBoolConstant(false);
+                    if (runtimeTypeCheck) {
+                        auto* zero = builder_->createIntConstant(0);
+                        lastValue_ = builder_->createNe(
+                            runtimeTypeCheck, zero, "instanceof.bool");
+                    } else {
+                        lastValue_ = builder_->createBoolConstant(false);
+                    }
                 } else {
+                    if (runtimeTypeCheck) {
+                        acc = builder_->createOr(
+                            acc, runtimeTypeCheck, "instanceof.runtime_or");
+                    }
                     auto* zero = builder_->createIntConstant(0);
                     lastValue_ = builder_->createNe(acc, zero, "instanceof.bool");
                 }
@@ -321,6 +423,87 @@ void HIRGenerator::visit(BinaryExpr& node) {
 
             // Fallback: emit false (unknown instanceof)
             lastValue_ = builder_->createBoolConstant(false);
+            return;
+        }
+
+        // Handle `in` operator: `"key" in obj`.
+        // Routes through nova_object_has(Object*, const char*) at runtime —
+        // works for both runtime Objects (Object.create / dynamic literals)
+        // and class instances reinterpreted as Object*.
+        if (node.op == Op::In) {
+            node.left->accept(*this);
+            HIRValue* key = lastValue_;
+            node.right->accept(*this);
+            HIRValue* obj = lastValue_;
+
+            auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+            // Coerce key to string if needed.
+            if (key && key->type && key->type->kind != HIRType::Kind::String) {
+                // For JSValue keys, unbox to a C string via nova_value_to_string_ptr.
+                if (key->type->kind == HIRType::Kind::JSValue) {
+                    auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                    auto existing = module_->getFunction("nova_value_to_string_ptr");
+                    HIRFunction* fn = existing ? existing.get() : nullptr;
+                    if (!fn) {
+                        auto* type = new HIRFunctionType({jsValueType}, stringType);
+                        auto created = module_->createFunction("nova_value_to_string_ptr", type);
+                        created->linkage = HIRFunction::Linkage::External;
+                        fn = created.get();
+                    }
+                    key = builder_->createCall(fn, {key}, "in.key.to_string");
+                    key->type = stringType;
+                } else if (key->type->kind == HIRType::Kind::I64 ||
+                           key->type->kind == HIRType::Kind::I32) {
+                    // Convert numeric key to string via a runtime helper that
+                    // formats the integer. We bypass createCast here because
+                    // pointer-keyed values would otherwise hit a bogus SExt.
+                    auto existing = module_->getFunction("nova_value_key_to_string");
+                    HIRFunction* fn = existing ? existing.get() : nullptr;
+                    if (!fn) {
+                        auto* type = new HIRFunctionType({intType}, stringType);
+                        auto created = module_->createFunction("nova_value_key_to_string", type);
+                        created->linkage = HIRFunction::Linkage::External;
+                        fn = created.get();
+                    }
+                    // Widen to i64 if narrower (e.g. i32) — integer-to-integer
+                    // cast is the only safe kind here.
+                    HIRValue* asI64 = key;
+                    if (key->type->kind == HIRType::Kind::I32) {
+                        asI64 = builder_->createCast(key, intType.get());
+                    }
+                    key = builder_->createCall(fn, {asI64}, "in.key.numeric");
+                    key->type = stringType;
+                }
+            }
+
+            // Coerce object to pointer.
+            if (obj && obj->type && obj->type->kind == HIRType::Kind::JSValue) {
+                auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                auto existingUnbox = module_->getFunction("nova_value_to_object");
+                HIRFunction* unbox = existingUnbox ? existingUnbox.get() : nullptr;
+                if (!unbox) {
+                    auto* type = new HIRFunctionType({jsValueType}, pointerType);
+                    auto created = module_->createFunction("nova_value_to_object", type);
+                    created->linkage = HIRFunction::Linkage::External;
+                    unbox = created.get();
+                }
+                obj = builder_->createCall(unbox, {obj}, "in.obj.unbox");
+                obj->type = pointerType;
+            }
+
+            auto existingHas = module_->getFunction("nova_object_has");
+            HIRFunction* hasFn = existingHas ? existingHas.get() : nullptr;
+            if (!hasFn) {
+                auto* type = new HIRFunctionType({pointerType, stringType}, intType);
+                auto created = module_->createFunction("nova_object_has", type);
+                created->linkage = HIRFunction::Linkage::External;
+                hasFn = created.get();
+            }
+
+            lastValue_ = builder_->createCall(hasFn, {obj, key}, "in.has");
             return;
         }
 
@@ -602,6 +785,69 @@ void HIRGenerator::visit(BinaryExpr& node) {
             return value;
         };
 
+        // Coerce object-literal operands to primitives when possible.
+        // If an operand is an instance of an anonymous object literal struct
+        // (named "__obj_N") and that object defines a `valueOf` (preferred) or
+        // `toString` method, emit a direct call to that method so the binary
+        // operator sees a primitive value. This is the static fast-path for
+        // ECMAScript ToPrimitive(number) on object literals; the runtime path
+        // for opaque objects is handled by nova_value_to_primitive.
+        auto coerceObjectLiteral = [this](HIRValue* value) -> HIRValue* {
+            if (!value || !value->type) return value;
+            // Resolve to the underlying struct type — either directly, or
+            // through a pointer-typed value (the common case after a load).
+            hir::HIRStructType* structType = nullptr;
+            HIRValue* receiver = value;
+            if (auto* s = dynamic_cast<hir::HIRStructType*>(value->type.get())) {
+                structType = s;
+            } else if (auto* p = dynamic_cast<hir::HIRPointerType*>(value->type.get())) {
+                if (p->pointeeType) {
+                    structType = dynamic_cast<hir::HIRStructType*>(p->pointeeType.get());
+                }
+            }
+            if (!structType) return value;
+            if (structType->name.rfind("__obj_", 0) != 0) return value;
+            auto objIt = objectMethodFunctions_.find(structType->name);
+            if (objIt == objectMethodFunctions_.end()) return value;
+            const auto& methods = objIt->second;
+
+            // Prefer valueOf, fall back to toString (ToPrimitive default
+            // hint for `+` and arithmetic is number).
+            std::string methodName;
+            auto valueOfIt = methods.find("valueOf");
+            if (valueOfIt != methods.end()) {
+                methodName = valueOfIt->second;
+            } else {
+                auto toStringIt = methods.find("toString");
+                if (toStringIt == methods.end()) return value;
+                methodName = toStringIt->second;
+            }
+
+            auto existing = module_->getFunction(methodName);
+            HIRFunction* fn = existing ? existing.get() : nullptr;
+            if (!fn) return value;
+
+            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            std::vector<HIRTypePtr> paramVec = {ptrType};
+            auto retType = std::make_shared<HIRType>(HIRType::Kind::Any);
+            HIRFunctionType* fnType = new HIRFunctionType(paramVec, retType);
+            HIRFunctionPtr created = module_->createFunction(methodName, fnType);
+            created->linkage = HIRFunction::Linkage::External;
+            return builder_->createCall(created.get(), {receiver}, "obj.primitive");
+        };
+
+        // Coercion applies to every arithmetic, comparison, and bitwise
+        // operator below. We rewrite lhs/rhs in place before the switch so
+        // every case benefits.
+        if (node.op != Op::Add || !(lhs && lhs->type &&
+                lhs->type->kind == HIRType::Kind::String)) {
+            lhs = coerceObjectLiteral(lhs);
+        }
+        if (node.op != Op::Add || !(rhs && rhs->type &&
+                rhs->type->kind == HIRType::Kind::String)) {
+            rhs = coerceObjectLiteral(rhs);
+        }
+
         // Generate operation based on operator
         switch (node.op) {
             case Op::Add: {
@@ -635,9 +881,49 @@ void HIRGenerator::visit(BinaryExpr& node) {
             case Op::Mod:
                 lastValue_ = builder_->createRem(lhs, rhs);
                 break;
-            case Op::Pow:
-                lastValue_ = builder_->createPow(lhs, rhs);
+            case Op::Pow: {
+                // Constant-fold integer ** integer when both operands are
+                // literals. Promote to F64 when the result reaches
+                // Number.MAX_SAFE_INTEGER so IEEE 754 semantics hold
+                // (e.g. `2 ** 53 + 1 === 2 ** 53`).
+                auto* lhsConst = dynamic_cast<HIRConstant*>(lhs);
+                auto* rhsConst = dynamic_cast<HIRConstant*>(rhs);
+                HIRValue* powResult = nullptr;
+                if (lhsConst && rhsConst &&
+                    lhsConst->kind == HIRConstant::Kind::Integer &&
+                    rhsConst->kind == HIRConstant::Kind::Integer) {
+                    const int64_t base = std::get<int64_t>(lhsConst->value);
+                    const int64_t exp = std::get<int64_t>(rhsConst->value);
+                    if (exp >= 0 && exp <= 62) {
+                        int64_t acc = 1;
+                        bool exceedsSafeInt = false;
+                        for (int i = 0; i < exp; ++i) {
+                            if (acc > (1LL << 53) / std::max<int64_t>(1, std::llabs(base))) {
+                                exceedsSafeInt = true;
+                                break;
+                            }
+                            acc *= base;
+                        }
+                        if (!exceedsSafeInt && std::llabs(acc) >= (1LL << 53)) {
+                            exceedsSafeInt = true;
+                        }
+                        if (exceedsSafeInt) {
+                            double floatResult = 1.0;
+                            for (int i = 0; i < exp; ++i) {
+                                floatResult *= static_cast<double>(base);
+                            }
+                            powResult = builder_->createFloatConstant(floatResult);
+                        } else {
+                            powResult = builder_->createIntConstant(acc);
+                        }
+                    }
+                }
+                if (!powResult) {
+                    powResult = builder_->createPow(lhs, rhs);
+                }
+                lastValue_ = powResult;
                 break;
+            }
             case Op::BitAnd:
                 lastValue_ = builder_->createAnd(lhs, rhs);
                 break;
@@ -743,7 +1029,34 @@ void HIRGenerator::visit(BinaryExpr& node) {
                     if (nullishKind(lhsConstant) && nullishKind(rhsConstant)) {
                         equal = !strict || lhsConstant->kind == rhsConstant->kind;
                     }
-                    if (strict) {
+                    // For both strict AND abstract equality, when one side is
+                    // a pointer-typed value (e.g. an Object* that may legitimately
+                    // be null) and the other is a nullish literal, emit a runtime
+                    // pointer==0 check instead of constant-folding. This matters
+                    // for `Object.getOwnPropertyDescriptor(obj, "missing")` which
+                    // returns nullptr; `result != undefined` must compare the
+                    // pointer payload, not fold to `true`.
+                    auto emitPointerNullCheck = [&](HIRValue* ptrVal) -> HIRValue* {
+                        return builder_->createEq(
+                            ptrVal, builder_->createIntConstant(0), "ptr.nullish_eq");
+                    };
+                    if (nullishKind(rhsConstant) && lhs && lhs->type &&
+                        (lhs->type->kind == HIRType::Kind::Pointer ||
+                         lhs->type->kind == HIRType::Kind::String ||
+                         lhs->type->kind == HIRType::Kind::JSValue ||
+                         lhs->type->kind == HIRType::Kind::Function ||
+                         lhs->type->kind == HIRType::Kind::Closure ||
+                         lhs->type->kind == HIRType::Kind::Any)) {
+                        equality = emitPointerNullCheck(lhs);
+                    } else if (nullishKind(lhsConstant) && rhs && rhs->type &&
+                               (rhs->type->kind == HIRType::Kind::Pointer ||
+                                rhs->type->kind == HIRType::Kind::String ||
+                                rhs->type->kind == HIRType::Kind::JSValue ||
+                                rhs->type->kind == HIRType::Kind::Function ||
+                                rhs->type->kind == HIRType::Kind::Closure ||
+                                rhs->type->kind == HIRType::Kind::Any)) {
+                        equality = emitPointerNullCheck(rhs);
+                    } else if (strict) {
                         // `ptr === null` or `null === ptr`: compare the pointer
                         // payload against 0. The null literal in Nova lowers to
                         // a zero constant, so this is a plain i64 equality.
@@ -779,6 +1092,22 @@ void HIRGenerator::visit(BinaryExpr& node) {
                     const bool rhsNumber = rhs->type->isNumeric();
                     const bool lhsAny = lhs->type->kind == HIRType::Kind::Any;
                     const bool rhsAny = rhs->type->kind == HIRType::Kind::Any;
+                    // Strings produced by runtime calls (nova_error_get_name,
+                    // nova_value_to_string_alloc, etc.) arrive as Pointer-typed
+                    // HIR values, while string literals are typed String. Treat
+                    // Pointer/Function/Closure/Reference on one side and String
+                    // on the other as a string equality via nova_string_equals,
+                    // otherwise `err.name !== "TypeError"` gets constant-folded
+                    // to `true` and the entire if-body is elided.
+                    const auto isStringLike = [](HIRType::Kind kind) {
+                        return kind == HIRType::Kind::String ||
+                            kind == HIRType::Kind::Pointer ||
+                            kind == HIRType::Kind::Reference ||
+                            kind == HIRType::Kind::Function ||
+                            kind == HIRType::Kind::Closure;
+                    };
+                    const bool lhsStringy = isStringLike(lhs->type->kind);
+                    const bool rhsStringy = isStringLike(rhs->type->kind);
                     if (lhsNumber && rhsNumber) {
                         // Integer and floating HIR values are both ECMAScript Number.
                         equality = builder_->createEq(lhs, rhs, "strict.number");
@@ -789,11 +1118,143 @@ void HIRGenerator::visit(BinaryExpr& node) {
                         equality = builder_->createEq(lhs, rhs, "strict.any_number");
                     } else if (lhsAny || rhsAny) {
                         equality = builder_->createEq(lhs, rhs, "strict.any_payload");
+                    } else if (lhsStringy && rhsStringy &&
+                               lhs->type->kind != rhs->type->kind) {
+                        // Mixed String/Pointer kinds: route through runtime
+                        // string equality instead of constant-folding.
+                        auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto existing = module_->getFunction("nova_string_equals");
+                        HIRFunction* strEq = existing ? existing.get() : nullptr;
+                        if (!strEq) {
+                            HIRFunctionType* ft = new HIRFunctionType(
+                                {ptrType, ptrType}, intType);
+                            HIRFunctionPtr created = module_->createFunction(
+                                "nova_string_equals", ft);
+                            created->linkage = HIRFunction::Linkage::External;
+                            strEq = created.get();
+                        }
+                        equality = builder_->createCall(
+                            strEq, {lhs, rhs}, "strict.string_eq");
+                    } else if ((lhsStringy || rhsStringy) &&
+                               (lhs->type->kind == HIRType::Kind::I64 ||
+                                rhs->type->kind == HIRType::Kind::I64)) {
+                        // Array elements / opaque runtime values often arrive as
+                        // raw i64 carrying pointer bits. When the other operand
+                        // is a string literal (String or Pointer-to-char), reinterpret
+                        // the bits as a pointer and do a string comparison.
+                        // Restriction: only enter the string-equals path when at
+                        // least one operand is a genuine pointer-typed value
+                        // (Pointer/Function/Closure/Reference) OR an i64 produced
+                        // by a runtime Call (e.g., nova_value_array_at returning
+                        // a tagged JS value as raw bits). Otherwise `"1" === 1`
+                        // (String literal vs numeric i64 literal) would crash by
+                        // reinterpreting the integer 1 as a pointer.
+                        const auto isRealPtr = [](HIRType::Kind kind) {
+                            return kind == HIRType::Kind::Pointer ||
+                                kind == HIRType::Kind::Function ||
+                                kind == HIRType::Kind::Closure ||
+                                kind == HIRType::Kind::Reference;
+                        };
+                        const auto isOpaqueBits = [](HIRValue* v) {
+                            if (!v) return false;
+                            auto* instr = dynamic_cast<HIRInstruction*>(v);
+                            if (!instr) return false;
+                            return instr->opcode == HIRInstruction::Opcode::Call ||
+                                instr->opcode == HIRInstruction::Opcode::Load ||
+                                instr->opcode == HIRInstruction::Opcode::GetElement ||
+                                instr->opcode == HIRInstruction::Opcode::Phi;
+                        };
+                        const bool lhsOpaque = isRealPtr(lhs->type->kind) ||
+                            (lhs->type->kind == HIRType::Kind::I64 && isOpaqueBits(lhs));
+                        const bool rhsOpaque = isRealPtr(rhs->type->kind) ||
+                            (rhs->type->kind == HIRType::Kind::I64 && isOpaqueBits(rhs));
+                        if (lhsOpaque || rhsOpaque) {
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto existing = module_->getFunction("nova_string_equals");
+                            HIRFunction* strEq = existing ? existing.get() : nullptr;
+                            if (!strEq) {
+                                HIRFunctionType* ft = new HIRFunctionType(
+                                    {ptrType, ptrType}, intType);
+                                HIRFunctionPtr created = module_->createFunction(
+                                    "nova_string_equals", ft);
+                                created->linkage = HIRFunction::Linkage::External;
+                                strEq = created.get();
+                            }
+                            auto as_ptr = [&](HIRValue* v) -> HIRValue* {
+                                if (!v || !v->type) return v;
+                                if (v->type->kind == HIRType::Kind::String ||
+                                    v->type->kind == HIRType::Kind::Pointer ||
+                                    v->type->kind == HIRType::Kind::Function ||
+                                    v->type->kind == HIRType::Kind::Closure ||
+                                    v->type->kind == HIRType::Kind::Reference) {
+                                    return v;
+                                }
+                                // int-to-ptr reinterpret via Cast (lowered as PtrToInt
+                                // in reverse — actually the codegen treats int->ptr as
+                                // an opaque bit cast on x64).
+                                auto* asPtr = builder_->createCast(v, ptrType.get());
+                                return asPtr;
+                            };
+                            equality = builder_->createCall(
+                                strEq, {as_ptr(lhs), as_ptr(rhs)}, "strict.i64_string_eq");
+                        } else {
+                            // No real pointer involved — String vs numeric i64
+                            // is a type mismatch in strict equality.
+                            equality = builder_->createBoolConstant(false);
+                        }
                     } else if (lhs->type->kind != rhs->type->kind) {
-                        equality = builder_->createBoolConstant(false);
+                        // Mixed kinds where one is a raw i64 (pointer bits) and
+                        // the other is a pointer-typed value: compare as pointer
+                        // identity. This covers `ownKeys[1] !== symbol` where
+                        // ownKeys[1] is an i64 carrying a Symbol* and symbol is
+                        // a Pointer-typed Symbol reference.
+                        const auto isIntOrPtr = [](HIRType::Kind kind) {
+                            return kind == HIRType::Kind::I64 ||
+                                kind == HIRType::Kind::I32 ||
+                                kind == HIRType::Kind::Pointer ||
+                                kind == HIRType::Kind::Reference ||
+                                kind == HIRType::Kind::Function ||
+                                kind == HIRType::Kind::Closure ||
+                                kind == HIRType::Kind::Any;
+                        };
+                        if (isIntOrPtr(lhs->type->kind) && isIntOrPtr(rhs->type->kind)) {
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto lhsI = lhs;
+                            auto rhsI = rhs;
+                            if (lhs->type->kind != HIRType::Kind::I64) {
+                                lhsI = builder_->createCast(lhs, intType.get());
+                            }
+                            if (rhs->type->kind != HIRType::Kind::I64) {
+                                rhsI = builder_->createCast(rhs, intType.get());
+                            }
+                            equality = builder_->createEq(lhsI, rhsI, "strict.ptr_bits");
+                        } else {
+                            equality = builder_->createBoolConstant(false);
+                        }
                     } else {
                         const auto kind = lhs->type->kind;
-                        if (identityKind(kind)) {
+                        if (kind == HIRType::Kind::String) {
+                            // Two String operands: compare by value (content)
+                            // rather than by pointer. JS `===` semantics require
+                            // "foo" === "foo" to be true even when the runtime
+                            // allocates them at distinct addresses.
+                            auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto existing = module_->getFunction("nova_string_equals");
+                            HIRFunction* strEq = existing ? existing.get() : nullptr;
+                            if (!strEq) {
+                                HIRFunctionType* ft = new HIRFunctionType(
+                                    {ptrType, ptrType}, intType);
+                                HIRFunctionPtr created = module_->createFunction(
+                                    "nova_string_equals", ft);
+                                created->linkage = HIRFunction::Linkage::External;
+                                strEq = created.get();
+                            }
+                            equality = builder_->createCall(
+                                strEq, {lhs, rhs}, "strict.string_eq");
+                        } else if (identityKind(kind)) {
                             equality = emitIdentityEquality(lhs, rhs);
                         } else {
                             equality = builder_->createEq(lhs, rhs, "strict.equal");
@@ -884,14 +1345,90 @@ void HIRGenerator::visit(BinaryExpr& node) {
 void HIRGenerator::visit(UnaryExpr& node) {
         lastWasBigInt_ = false;
         lastWasSymbol_ = false;
+
+        using Op = UnaryExpr::Op;
+
+        // `delete object.property` — route through nova_object_delete when the
+        // receiver is a dynamic Object. Returns true (1) on success or when the
+        // property didn't exist; the runtime honors configurable=false by
+        // returning false in strict mode semantics (we accept silent refusal
+        // here since Nova codegen doesn't currently distinguish strict mode).
+        if (node.op == Op::Delete) {
+            auto* member = dynamic_cast<MemberExpr*>(node.operand.get());
+            if (member && !member->isComputed) {
+                std::string objectVariableName;
+                if (auto* objIdent = dynamic_cast<Identifier*>(member->object.get())) {
+                    objectVariableName = objIdent->name;
+                }
+                if (!objectVariableName.empty() &&
+                    dynamicObjectVars_.count(objectVariableName) > 0) {
+                    std::string propertyName;
+                    if (auto* propIdent = dynamic_cast<Identifier*>(member->property.get())) {
+                        propertyName = propIdent->name;
+                    } else if (auto* propStr = dynamic_cast<StringLiteral*>(member->property.get())) {
+                        propertyName = propStr->value;
+                    } else if (auto* propNum = dynamic_cast<NumberLiteral*>(member->property.get())) {
+                        propertyName = std::to_string(propNum->value);
+                    }
+
+                    if (!propertyName.empty()) {
+                        member->object->accept(*this);
+                        HIRValue* objectValue = lastValue_;
+
+                        auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                        auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+
+                        if (objectValue && objectValue->type &&
+                            objectValue->type->kind == HIRType::Kind::JSValue) {
+                            auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                            auto existingUnbox = module_->getFunction("nova_value_to_object");
+                            HIRFunction* unbox = existingUnbox ? existingUnbox.get() : nullptr;
+                            if (!unbox) {
+                                auto* type = new HIRFunctionType({jsValueType}, pointerType);
+                                auto created = module_->createFunction("nova_value_to_object", type);
+                                created->linkage = HIRFunction::Linkage::External;
+                                unbox = created.get();
+                            }
+                            objectValue = builder_->createCall(
+                                unbox, {objectValue}, "delete.unbox");
+                            objectValue->type = pointerType;
+                        }
+
+                        auto existingDel = module_->getFunction("nova_object_delete");
+                        HIRFunction* delFn = existingDel ? existingDel.get() : nullptr;
+                        if (!delFn) {
+                            auto* type = new HIRFunctionType({pointerType, stringType}, intType);
+                            auto created = module_->createFunction("nova_object_delete", type);
+                            created->linkage = HIRFunction::Linkage::External;
+                            delFn = created.get();
+                        }
+
+                        // Spec returns true unconditionally for missing properties in
+                        // non-strict mode, and our object_delete returns void, so wrap.
+                        lastValue_ = builder_->createIntConstant(1);
+                        builder_->createCall(delFn, {
+                            objectValue,
+                            builder_->createStringConstant(propertyName),
+                        }, "delete.property");
+                        return;
+                    }
+                }
+            }
+
+            // Plain `delete identifier` or non-dynamic member: just evaluate the
+            // operand for side effects and return true.
+            node.operand->accept(*this);
+            lastValue_ = builder_->createIntConstant(1);
+            return;
+        }
+
         node.operand->accept(*this);
         auto operand = lastValue_;
         const bool operandIsBigInt = lastWasBigInt_;
         const bool operandIsSymbol = lastWasSymbol_;
         lastWasBigInt_ = false;
         lastWasSymbol_ = false;
-
-        using Op = UnaryExpr::Op;
         if (operandIsBigInt &&
             (node.op == Op::Minus || node.op == Op::BitNot)) {
             auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -939,6 +1476,16 @@ void HIRGenerator::visit(UnaryExpr& node) {
                 lastValue_ = operand;
                 break;
             case Op::Minus:
+                // Preserve signed-zero semantics for `-0`: when the operand is
+                // a literal integer 0, lower as f64 -0.0 so Object.is(0, -0)
+                // returns false and 1 / -0 returns -Infinity per spec.
+                if (auto* constOperand = dynamic_cast<HIRConstant*>(operand)) {
+                    if (constOperand->kind == HIRConstant::Kind::Integer &&
+                        std::get<int64_t>(constOperand->value) == 0) {
+                        lastValue_ = builder_->createFloatConstant(-0.0);
+                        break;
+                    }
+                }
                 lastValue_ = builder_->createNeg(operand, "unary_minus");
                 break;
             case Op::Not:
@@ -954,6 +1501,21 @@ void HIRGenerator::visit(UnaryExpr& node) {
                 // typeof operator - return string representation of type
                 {
                     std::string typeStr = "unknown";
+
+                    // Special case: typeof of `resolvers.resolve` / `resolvers.reject`
+                    // where `resolvers` is the result of Promise.withResolvers().
+                    // Those properties are callable functions per spec.
+                    if (auto* member = dynamic_cast<MemberExpr*>(node.operand.get())) {
+                        if (auto* objIdent = dynamic_cast<Identifier*>(member->object.get())) {
+                            if (promiseWithResolversVars_.count(objIdent->name) > 0) {
+                                if (auto* propIdent = dynamic_cast<Identifier*>(member->property.get())) {
+                                    if (propIdent->name == "resolve" || propIdent->name == "reject") {
+                                        typeStr = "function";
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Special case: typeof of an arrow function or function
                     // expression. In Nova's HIR, these are represented by a
@@ -1565,6 +2127,159 @@ void HIRGenerator::visit(AssignmentExpr& node) {
             std::string objectVariableName;
             if (auto* objectIdentifier = dynamic_cast<Identifier*>(memberExpr->object.get())) {
                 objectVariableName = objectIdentifier->name;
+            }
+
+            // Dynamic-object property write: if the base variable is in
+            // dynamicObjectVars_ (forced-dynamic, Object.create result, etc.),
+            // route the assignment through nova_dynamic_object_set_tagged.
+            if (!objectVariableName.empty() &&
+                dynamicObjectVars_.count(objectVariableName) > 0) {
+                std::string propertyName;
+                if (!memberExpr->isComputed) {
+                    if (auto* propIdent = dynamic_cast<Identifier*>(memberExpr->property.get())) {
+                        propertyName = propIdent->name;
+                    } else if (auto* propStr = dynamic_cast<StringLiteral*>(memberExpr->property.get())) {
+                        propertyName = propStr->value;
+                    } else if (auto* propNum = dynamic_cast<NumberLiteral*>(memberExpr->property.get())) {
+                        propertyName = std::to_string(propNum->value);
+                    }
+                }
+
+                // For dynamic objects, even computed keys should route through
+                // the property map rather than being treated as array index
+                // writes. We materialize the key as a string at runtime when we
+                // can't resolve it statically.
+                if (!propertyName.empty() || memberExpr->isComputed) {
+                    memberExpr->object->accept(*this);
+                    HIRValue* objectValue = lastValue_;
+                    auto pointerType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    auto stringType = std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto jsValueType = std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                    auto voidType = std::make_shared<HIRType>(HIRType::Kind::Void);
+
+                    if (objectValue && objectValue->type &&
+                        objectValue->type->kind == HIRType::Kind::JSValue) {
+                        auto existingUnbox = module_->getFunction("nova_value_to_object");
+                        HIRFunction* unbox = existingUnbox ? existingUnbox.get() : nullptr;
+                        if (!unbox) {
+                            auto* type = new HIRFunctionType({jsValueType}, pointerType);
+                            auto created = module_->createFunction("nova_value_to_object", type);
+                            created->linkage = HIRFunction::Linkage::External;
+                            unbox = created.get();
+                        }
+                        objectValue = builder_->createCall(
+                            unbox, {objectValue}, "dynamic.assign.unbox");
+                        objectValue->type = pointerType;
+                    }
+
+                    auto existingSet = module_->getFunction("nova_dynamic_object_set_tagged");
+                    HIRFunction* setFn = existingSet ? existingSet.get() : nullptr;
+                    if (!setFn) {
+                        auto* type = new HIRFunctionType(
+                            {pointerType, stringType, jsValueType}, voidType);
+                        auto created = module_->createFunction(
+                            "nova_dynamic_object_set_tagged", type);
+                        created->linkage = HIRFunction::Linkage::External;
+                        setFn = created.get();
+                    }
+
+                    HIRValue* keyArg = nullptr;
+                    if (!propertyName.empty()) {
+                        keyArg = builder_->createStringConstant(propertyName);
+                    } else {
+                        // Computed key: evaluate the expression and convert
+                        // to a string key at runtime. Symbol-typed keys use a
+                        // dedicated runtime entry point so identity is
+                        // preserved across ownKeys / === comparisons.
+                        lastWasSymbol_ = false;
+                        memberExpr->property->accept(*this);
+                        HIRValue* computedKey = lastValue_;
+                        const bool computedKeyIsSymbol = lastWasSymbol_;
+                        lastWasSymbol_ = false;
+
+                        if (computedKeyIsSymbol && computedKey &&
+                            computedKey->type &&
+                            computedKey->type->kind == HIRType::Kind::Pointer) {
+                            // Symbol-keyed property write: bypass the string
+                            // property map entirely so identity round-trips.
+                            HIRValue* boxedVal = toJSValue(value);
+
+                            auto existingSymSet =
+                                module_->getFunction("nova_object_set_symbol");
+                            HIRFunction* symSetFn =
+                                existingSymSet ? existingSymSet.get() : nullptr;
+                            if (!symSetFn) {
+                                auto* type = new HIRFunctionType(
+                                    {pointerType, pointerType, jsValueType}, voidType);
+                                auto created = module_->createFunction(
+                                    "nova_object_set_symbol", type);
+                                created->linkage = HIRFunction::Linkage::External;
+                                symSetFn = created.get();
+                            }
+                            builder_->createCall(
+                                symSetFn,
+                                {objectValue, computedKey, boxedVal},
+                                "dynamic.symbol_assign");
+                            lastValue_ = value;
+                            return;
+                        }
+
+                        if (computedKey && computedKey->type &&
+                            (computedKey->type->kind == HIRType::Kind::Pointer ||
+                             computedKey->type->kind == HIRType::Kind::String)) {
+                            // Could be a string pointer (or String-typed
+                            // constant) or a Symbol*. Try the symbol helper
+                            // first; it falls back to string semantics if the
+                            // pointer doesn't belong to the symbol table.
+                            auto existingSym = module_->getFunction("nova_symbol_to_key");
+                            HIRFunction* symFn = existingSym ? existingSym.get() : nullptr;
+                            if (!symFn) {
+                                auto* type = new HIRFunctionType({pointerType}, stringType);
+                                auto created = module_->createFunction("nova_symbol_to_key", type);
+                                created->linkage = HIRFunction::Linkage::External;
+                                symFn = created.get();
+                            }
+                            keyArg = builder_->createCall(symFn, {computedKey}, "dynamic.symbol_key");
+                            keyArg->type = stringType;
+                        } else if (computedKey && computedKey->type &&
+                                   computedKey->type->kind == HIRType::Kind::JSValue) {
+                            auto existingPtr = module_->getFunction("nova_value_to_string_ptr");
+                            HIRFunction* strFn = existingPtr ? existingPtr.get() : nullptr;
+                            if (!strFn) {
+                                auto* type = new HIRFunctionType({jsValueType}, stringType);
+                                auto created = module_->createFunction("nova_value_to_string_ptr", type);
+                                created->linkage = HIRFunction::Linkage::External;
+                                strFn = created.get();
+                            }
+                            keyArg = builder_->createCall(strFn, {computedKey}, "dynamic.jsvalue_key");
+                            keyArg->type = stringType;
+                        } else {
+                            // Fallback: convert to a generic key string. Pointer
+                            // values that aren't Symbols (e.g. function refs)
+                            // land here.
+                            auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+                            auto existingKey = module_->getFunction("nova_value_key_to_string");
+                            HIRFunction* keyFn = existingKey ? existingKey.get() : nullptr;
+                            if (!keyFn) {
+                                auto* type = new HIRFunctionType({intType}, stringType);
+                                auto created = module_->createFunction("nova_value_key_to_string", type);
+                                created->linkage = HIRFunction::Linkage::External;
+                                keyFn = created.get();
+                            }
+                            keyArg = builder_->createCall(keyFn, {computedKey}, "dynamic.computed_key");
+                            keyArg->type = stringType;
+                        }
+                    }
+
+                    HIRValue* boxed = toJSValue(value);
+                    builder_->createCall(setFn, {
+                        objectValue,
+                        keyArg,
+                        boxed,
+                    }, "dynamic.assign");
+                    lastValue_ = value;
+                    return;
+                }
             }
 
             // Static property write: ClassName.field = value.

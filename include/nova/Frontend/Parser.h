@@ -40,6 +40,7 @@ private:
     std::unique_ptr<Stmt> parseClassDeclaration();
     std::unique_ptr<Stmt> parseInterfaceDeclaration();
     std::unique_ptr<Stmt> parseTypeAliasDeclaration();
+    std::unique_ptr<Stmt> parseNamespaceDeclaration();
     std::unique_ptr<Stmt> parseEnumDeclaration();
     std::unique_ptr<Stmt> parseImportDeclaration();
     std::unique_ptr<Stmt> parseExportDeclaration();
@@ -117,6 +118,12 @@ private:
     std::unique_ptr<TypeAnnotation> parseTupleType();
     std::unique_ptr<TypeAnnotation> parseFunctionType();
     std::unique_ptr<TypeAnnotation> parseObjectType();
+    std::vector<TypePtr> parseTypeArgumentList();
+    void parseTypeParameterList(std::vector<std::string>& names,
+                                std::vector<TypePtr>& constraints,
+                                std::vector<TypePtr>& defaults);
+    bool checkTypeArgumentClose() const;
+    void consumeTypeArgumentClose(const std::string& message);
     
     // Decorator parsing
     std::unique_ptr<Decorator> parseDecorator();
@@ -137,6 +144,9 @@ private:
     std::vector<Token> tokens_;
     size_t current_;
     std::vector<std::string> errors_;
+    unsigned pendingTypeArgumentClosers_ = 0;
+    unsigned ambientDepth_ = 0;
+    bool jsxMode_ = false;
 };
 
 } // namespace nova

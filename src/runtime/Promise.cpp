@@ -48,6 +48,10 @@ struct PromiseCallback {
     void* callback;      // Fulfillment/catch/finally function pointer
     void* rejectedCallback; // Optional rejection function for then(resolve, reject)
     void* nextPromise;   // Promise to chain result to
+    void* callbackEnvironment = nullptr;
+    void* rejectedEnvironment = nullptr;
+    bool callbackAcceptsValue = true;
+    bool rejectedAcceptsValue = true;
 };
 
 // ============================================================================
@@ -129,6 +133,38 @@ static NovaPromise* promiseFromValue(int64_t value) {
 static std::queue<std::function<void()>> microtaskQueue;
 static std::mutex microtaskMutex;
 static std::atomic<bool> processingMicrotasks{false};
+
+static int64_t invokePromiseCallback(
+        void* callback, int64_t value, void* environment, bool acceptsValue) {
+    if (!callback) {
+        return static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED);
+    }
+    if (environment) {
+        if (acceptsValue) {
+            using Callback = int64_t (*)(int64_t, void*);
+            return reinterpret_cast<Callback>(callback)(value, environment);
+        }
+        using Callback = int64_t (*)(void*);
+        return reinterpret_cast<Callback>(callback)(environment);
+    }
+    if (acceptsValue) {
+        using Callback = int64_t (*)(int64_t);
+        return reinterpret_cast<Callback>(callback)(value);
+    }
+    using Callback = int64_t (*)();
+    return reinterpret_cast<Callback>(callback)();
+}
+
+static void invokeFinallyCallback(void* callback, void* environment) {
+    if (!callback) return;
+    if (environment) {
+        using Callback = void (*)(void*);
+        reinterpret_cast<Callback>(callback)(environment);
+        return;
+    }
+    using Callback = void (*)();
+    reinterpret_cast<Callback>(callback)();
+}
 
 void nova_promise_queue_microtask(std::function<void()> task) {
     std::lock_guard<std::mutex> lock(microtaskMutex);
@@ -252,10 +288,6 @@ void* nova_promise_reject(int64_t reason) {
 
 // Internal: Process callbacks when promise settles
 void nova_promise_process_callbacks(NovaPromise* promise) {
-    typedef int64_t (*ThenCallback)(int64_t);
-    typedef int64_t (*CatchCallback)(int64_t);
-    typedef void (*FinallyCallback)();
-
     std::vector<PromiseCallback> callbacks;
     std::vector<std::function<void(PromiseState, int64_t)>> observers;
     PromiseState state;
@@ -281,7 +313,9 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
             case PromiseCallback::Type::THEN:
                 if (state == PromiseState::FULFILLED && cb.callback) {
                     try {
-                        int64_t result = reinterpret_cast<ThenCallback>(cb.callback)(value);
+                        int64_t result = invokePromiseCallback(
+                            cb.callback, value, cb.callbackEnvironment,
+                            cb.callbackAcceptsValue);
                         if (nextPromise) {
                             nova_promise_fulfill(nextPromise, result);
                         }
@@ -293,8 +327,10 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
                 } else if (state == PromiseState::REJECTED &&
                            cb.rejectedCallback) {
                     try {
-                        int64_t result = reinterpret_cast<CatchCallback>(
-                            cb.rejectedCallback)(error);
+                        int64_t result = invokePromiseCallback(
+                            cb.rejectedCallback, error,
+                            cb.rejectedEnvironment,
+                            cb.rejectedAcceptsValue);
                         if (nextPromise) {
                             nova_promise_fulfill(nextPromise, result);
                         }
@@ -315,7 +351,9 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
             case PromiseCallback::Type::CATCH:
                 if (state == PromiseState::REJECTED && cb.callback) {
                     try {
-                        int64_t result = reinterpret_cast<CatchCallback>(cb.callback)(error);
+                        int64_t result = invokePromiseCallback(
+                            cb.callback, error, cb.callbackEnvironment,
+                            cb.callbackAcceptsValue);
                         if (nextPromise) {
                             nova_promise_fulfill(nextPromise, result);
                         }
@@ -334,7 +372,8 @@ void nova_promise_process_callbacks(NovaPromise* promise) {
 
             case PromiseCallback::Type::FINALLY:
                 if (cb.callback) {
-                    reinterpret_cast<FinallyCallback>(cb.callback)();
+                    invokeFinallyCallback(
+                        cb.callback, cb.callbackEnvironment);
                 }
                 // Pass through the original state
                 if (nextPromise) {
@@ -457,7 +496,9 @@ void nova_promise_reject_value(void* promisePtr, int64_t reason) {
 // ============================================================================
 
 // promise.then(onFulfilled) - returns new Promise
-void* nova_promise_then(void* promisePtr, void* onFulfilled) {
+void* nova_promise_then(
+        void* promisePtr, void* onFulfilled, void* environment,
+        int64_t acceptsValue) {
     if (!promisePtr) return nova_promise_reject(-1);
     NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
 
@@ -474,15 +515,19 @@ void* nova_promise_then(void* promisePtr, void* onFulfilled) {
             cb.callback = onFulfilled;
             cb.rejectedCallback = nullptr;
             cb.nextPromise = nextPromise;
+            cb.callbackEnvironment = environment;
+            cb.callbackAcceptsValue = acceptsValue != 0;
             promise->callbacks.push_back(cb);
         } else if (promise->state == PromiseState::FULFILLED) {
             // Already fulfilled, schedule callback
             int64_t value = promise->value;
-            nova_promise_queue_microtask([onFulfilled, value, nextPromise]() {
+            nova_promise_queue_microtask(
+                [onFulfilled, environment, acceptsValue, value, nextPromise]() {
                 if (onFulfilled) {
-                    typedef int64_t (*ThenCallback)(int64_t);
                     try {
-                        int64_t result = reinterpret_cast<ThenCallback>(onFulfilled)(value);
+                        int64_t result = invokePromiseCallback(
+                            onFulfilled, value, environment,
+                            acceptsValue != 0);
                         nova_promise_fulfill(nextPromise, result);
                     } catch (...) {
                         nova_promise_reject_internal(nextPromise, -1);
@@ -501,7 +546,9 @@ void* nova_promise_then(void* promisePtr, void* onFulfilled) {
 }
 
 // promise.catch(onRejected) - returns new Promise
-void* nova_promise_catch(void* promisePtr, void* onRejected) {
+void* nova_promise_catch(
+        void* promisePtr, void* onRejected, void* environment,
+        int64_t acceptsValue) {
     if (!promisePtr) return nova_promise_reject(-1);
     NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
 
@@ -516,14 +563,18 @@ void* nova_promise_catch(void* promisePtr, void* onRejected) {
             cb.callback = onRejected;
             cb.rejectedCallback = nullptr;
             cb.nextPromise = nextPromise;
+            cb.callbackEnvironment = environment;
+            cb.callbackAcceptsValue = acceptsValue != 0;
             promise->callbacks.push_back(cb);
         } else if (promise->state == PromiseState::REJECTED) {
             int64_t error = promise->error;
-            nova_promise_queue_microtask([onRejected, error, nextPromise]() {
+            nova_promise_queue_microtask(
+                [onRejected, environment, acceptsValue, error, nextPromise]() {
                 if (onRejected) {
-                    typedef int64_t (*CatchCallback)(int64_t);
                     try {
-                        int64_t result = reinterpret_cast<CatchCallback>(onRejected)(error);
+                        int64_t result = invokePromiseCallback(
+                            onRejected, error, environment,
+                            acceptsValue != 0);
                         nova_promise_fulfill(nextPromise, result);
                     } catch (...) {
                         nova_promise_reject_internal(nextPromise, -1);
@@ -542,7 +593,9 @@ void* nova_promise_catch(void* promisePtr, void* onRejected) {
 }
 
 // promise.finally(onFinally) - returns new Promise
-void* nova_promise_finally(void* promisePtr, void* onFinally) {
+void* nova_promise_finally(
+        void* promisePtr, void* onFinally, void* environment,
+        [[maybe_unused]] int64_t acceptsValue) {
     if (!promisePtr) return nova_promise_reject(-1);
     NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
 
@@ -557,16 +610,18 @@ void* nova_promise_finally(void* promisePtr, void* onFinally) {
             cb.callback = onFinally;
             cb.rejectedCallback = nullptr;
             cb.nextPromise = nextPromise;
+            cb.callbackEnvironment = environment;
+            cb.callbackAcceptsValue = false;
             promise->callbacks.push_back(cb);
         } else {
             int64_t value = promise->value;
             int64_t error = promise->error;
             PromiseState state = promise->state;
 
-            nova_promise_queue_microtask([onFinally, value, error, state, nextPromise]() {
+            nova_promise_queue_microtask(
+                [onFinally, environment, value, error, state, nextPromise]() {
                 if (onFinally) {
-                    typedef void (*FinallyCallback)();
-                    reinterpret_cast<FinallyCallback>(onFinally)();
+                    invokeFinallyCallback(onFinally, environment);
                 }
                 if (state == PromiseState::FULFILLED) {
                     nova_promise_fulfill(nextPromise, value);
@@ -679,7 +734,17 @@ void* nova_promise_allSettled(void* arrayPtr) {
     if (!arrayPtr) return nova_promise_resolve(0);
     PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
     int64_t count = meta->length;
-    return nova_promise_resolve(count);
+    // Always expose an array-shaped result. Returning the raw count made
+    // generated for-of/property access reinterpret a small integer as an
+    // object pointer and crash before semantic diagnostics could be produced.
+    void* results = nova_value_array_create(count);
+    for (int64_t index = 0; index < count; ++index) {
+        value_array_set(
+            results, index,
+            static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED));
+    }
+    return nova_promise_resolve(static_cast<int64_t>(
+        nova_value_from_object(results)));
 }
 
 // Promise.any(promises) - First fulfilled promise wins (ES2021)
@@ -747,6 +812,22 @@ void* nova_promise_withResolvers_promise(void* resolversPtr) {
     if (!resolversPtr) return nullptr;
     PromiseWithResolvers* resolvers = static_cast<PromiseWithResolvers*>(resolversPtr);
     return resolvers->promise;
+}
+
+// Get resolve function from withResolvers result. Returns a non-null
+// placeholder so HIR-level `typeof capability.resolve === "function"`
+// holds; the actual callback dispatch goes through Promise.resolve on
+// the underlying promise object.
+void* nova_promise_withResolvers_resolve_get(void* resolversPtr) {
+    if (!resolversPtr) return nullptr;
+    PromiseWithResolvers* resolvers = static_cast<PromiseWithResolvers*>(resolversPtr);
+    return resolvers->resolve ? resolvers->resolve : resolversPtr;
+}
+
+void* nova_promise_withResolvers_reject_get(void* resolversPtr) {
+    if (!resolversPtr) return nullptr;
+    PromiseWithResolvers* resolvers = static_cast<PromiseWithResolvers*>(resolversPtr);
+    return resolvers->reject ? resolvers->reject : resolversPtr;
 }
 
 // Resolve the promise from withResolvers
@@ -827,7 +908,12 @@ int64_t nova_promise_get_error(void* promisePtr) {
 }
 
 // promise.then(onFulfilled, onRejected) - full version with both callbacks
-void* nova_promise_then_both(void* promisePtr, void* onFulfilled, void* onRejected) {
+void* nova_promise_then_both(
+        void* promisePtr,
+        void* onFulfilled, void* fulfilledEnvironment,
+        int64_t fulfilledAcceptsValue,
+        void* onRejected, void* rejectedEnvironment,
+        int64_t rejectedAcceptsValue) {
     if (!promisePtr) return nova_promise_reject(-1);
     NovaPromise* promise = static_cast<NovaPromise*>(promisePtr);
 
@@ -842,14 +928,21 @@ void* nova_promise_then_both(void* promisePtr, void* onFulfilled, void* onReject
             thenCb.callback = onFulfilled;
             thenCb.rejectedCallback = onRejected;
             thenCb.nextPromise = nextPromise;
+            thenCb.callbackEnvironment = fulfilledEnvironment;
+            thenCb.rejectedEnvironment = rejectedEnvironment;
+            thenCb.callbackAcceptsValue = fulfilledAcceptsValue != 0;
+            thenCb.rejectedAcceptsValue = rejectedAcceptsValue != 0;
             promise->callbacks.push_back(thenCb);
         } else if (promise->state == PromiseState::FULFILLED) {
             int64_t value = promise->value;
-            nova_promise_queue_microtask([onFulfilled, value, nextPromise]() {
+            nova_promise_queue_microtask(
+                [onFulfilled, fulfilledEnvironment, fulfilledAcceptsValue,
+                 value, nextPromise]() {
                 if (onFulfilled) {
-                    typedef int64_t (*ThenCallback)(int64_t);
                     try {
-                        int64_t result = reinterpret_cast<ThenCallback>(onFulfilled)(value);
+                        int64_t result = invokePromiseCallback(
+                            onFulfilled, value, fulfilledEnvironment,
+                            fulfilledAcceptsValue != 0);
                         nova_promise_fulfill(nextPromise, result);
                     } catch (...) {
                         nova_promise_reject_internal(nextPromise, -1);
@@ -861,10 +954,13 @@ void* nova_promise_then_both(void* promisePtr, void* onFulfilled, void* onReject
         } else {
             int64_t error = promise->error;
             if (onRejected) {
-                nova_promise_queue_microtask([onRejected, error, nextPromise]() {
-                    typedef int64_t (*CatchCallback)(int64_t);
+                nova_promise_queue_microtask(
+                    [onRejected, rejectedEnvironment, rejectedAcceptsValue,
+                     error, nextPromise]() {
                     try {
-                        int64_t result = reinterpret_cast<CatchCallback>(onRejected)(error);
+                        int64_t result = invokePromiseCallback(
+                            onRejected, error, rejectedEnvironment,
+                            rejectedAcceptsValue != 0);
                         nova_promise_fulfill(nextPromise, result);
                     } catch (...) {
                         nova_promise_reject_internal(nextPromise, -1);

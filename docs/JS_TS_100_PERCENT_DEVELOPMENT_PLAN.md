@@ -11,29 +11,31 @@ feature surface. The current local baseline is:
 
 | Gate | Result |
 |---|---:|
-| Failure-debug unit tests | 4/4 pass |
+| Failure-debug unit tests | 7/7 pass |
 | Verified conformance tests | 107 |
-| Passing conformance tests | 80 |
-| Failing conformance tests | 27 |
+| Passing conformance tests | 82 |
+| Failing conformance tests | 25 |
 | Skipped tests | 1 |
-| Failure-debug locations | 90 |
-| Native access-violation locations | 9 |
-| Compiler/parser diagnostic locations | 56 |
-| Missing-output locations | 15 |
+| Failure-debug locations | 47 |
+| Native access-violation locations | 0 |
+| Valid-source parser diagnostic locations | 0 |
+| TypeScript semantic diagnostic locations | 17 |
+| Missing-output locations | 11 |
 
-Breakdown of the 90 failure-debug locations:
+Breakdown of the 47 failure-debug locations:
 
 | Area | Locations | Files | Native crashes | Diagnostics |
 |---|---:|---:|---:|---:|
-| Existing conformance | 15 | 8 | 7 | 0 |
-| JavaScript 100% target | 26 | 12 | 2 | 15 |
-| TypeScript 100% target | 49 | 7 | 0 | 41 |
+| Existing conformance | 8 | 8 | 0 | 0 |
+| JavaScript 100% target | 15 | 12 | 0 | 0 |
+| TypeScript 100% target | 24 | 5 | 0 | 17 |
 
-The immediate priorities are therefore:
+The next priorities are therefore:
 
-1. Remove all native crashes and establish one safe callable/value ABI.
-2. Finish contextual JavaScript and TypeScript parsing so valid programs reach
-   the checker/runtime.
+1. Maintain the zero-crash safety gate while converging on one callable/value
+   ABI in Phase 2.
+2. Use the completed contextual JavaScript/TypeScript parser to fix the
+   newly exposed checker/runtime failures without parser special cases.
 3. Complete JavaScript coercion, property/prototype and async semantics.
 4. Rebuild the TypeScript checker around a richer type representation and
    control-flow graph.
@@ -89,39 +91,81 @@ spec-level completion harder.
 
 Priority: P0  
 Estimated effort: 1–2 engineer-weeks
+Status: **Complete — 2026-07-27**
 
-### Work
+Completion evidence:
 
-- Keep `tests/test_run_all_tests_debug.py` as a mandatory pre-test gate.
-- Add Debug and AddressSanitizer CI configurations.
-- Preserve symbols for generated native binaries and record the generated
+- The failure-debug pre-test gate passes 7/7 tests and distinguishes compiler,
+  linker, emitted-program and cached/uncached determinism failures.
+- `tests/phase0` contains 20 minimized reproductions covering every original
+  Error, generator/iterator, Promise and tagged-template crash family.
+- The Phase 0 safety suite passes 20/20 in uncached and cache-compare modes,
+  with zero failure-debug locations.
+- Full Debug and Release conformance runs have identical pass/fail totals:
+  82 passed, 25 failed and 1 skipped. Both reports contain 47 semantic
+  locations and zero native access violations.
+- Generated native binaries retain debug symbols. A native fault without a
+  runtime symbol is attributed to `main` or the first generated source
+  function and a real source line rather than line 0.
+- Native-cache keys include the compiler version/build identity and source
+  content, preventing stale executables from hiding compiler changes.
+- CMake and CI provide mandatory Debug and AddressSanitizer configurations.
+  The local MSVC ASan configuration and instrumented targets build
+  successfully; CI executes the sanitizer gate with Clang 18 on Linux.
+- `nova-parser-phase1` and `nova-phase0-safety` pass together through CTest
+  (2/2).
+
+### Completed work
+
+- [x] Keep `tests/test_run_all_tests_debug.py` as a mandatory pre-test gate.
+- [x] Add Debug and AddressSanitizer CI configurations.
+- [x] Preserve symbols for generated native binaries and record the generated
   function name on runtime faults.
-- Make compiler/runtime failures deterministic across cached and uncached runs.
-- Add one minimized test per crash before changing implementation.
-- Separate compiler failure, linker failure and emitted-program failure in the
+- [x] Make compiler/runtime failures deterministic across cached and uncached
+  runs.
+- [x] Add one minimized test per crash before changing implementation.
+- [x] Separate compiler failure, linker failure and emitted-program failure in the
   test result model.
 
-### Current crash targets
+### Resolved crash targets
 
-| Test | Failure location | Likely ownership |
+| Test | Original failure location | Phase 0 result |
 |---|---|---|
-| `error_classes.ts` | `CustomError.constructor`, `ValidationError.constructor`, `NotFoundError.constructor` | `HIRGen_Classes.cpp`, object layout, exception runtime |
-| `generators.ts` | `range`, `counter` | `HIRGen_Functions.cpp`, `HIRGen_Advanced.cpp`, `LLVMCodeGen.cpp` |
-| `js_spec_errors.js` | `ApplicationError.constructor` | class/super allocation and Error runtime |
-| `js_spec_promises.js` | native runtime | `Promise.cpp`, callback ABI/lifetime |
-| `promise_static.ts` | native runtime | `Promise.cpp`, static combinators |
-| `template_literals.ts` | native runtime | `HIRGen_Advanced.cpp`, JSValue-to-string conversion |
+| `error_classes.ts` | `CustomError.constructor`, `ValidationError.constructor`, `NotFoundError.constructor` | Controlled semantic exit; no native fault |
+| `generators.ts` | `range`, `counter` | Controlled semantic exit; no native fault |
+| `js_spec_errors.js` | `ApplicationError.constructor` | Controlled semantic exit; no native fault |
+| `js_spec_iterators_generators.js` | compiler/native runtime | Controlled semantic exit; no native fault |
+| `js_spec_promises.js` | native runtime | Controlled semantic exit; no native fault |
+| `promise_static.ts` | native runtime | Runs to completion; remaining output mismatch is semantic |
+| `template_literals.ts` | native runtime | Passes |
 
 ### Exit gate
 
-- `0xC0000005`: 9 → 0.
-- Every native failure reports a generated function and source test line.
-- Debug and Release have identical pass/fail results.
+- [x] `0xC0000005`: 10 → 0.
+- [x] Every native failure reports a generated function and source test line.
+- [x] Debug and Release have identical pass/fail results.
 
 ## 5. Phase 1 — Lexer, parser and AST completion
 
 Priority: P0  
 Estimated effort: 3–5 engineer-weeks
+Status: **Complete — 2026-07-27**
+
+Completion evidence:
+
+- `nova-parser-phase1` passes and validates the AST shape of contextual object
+  members, ambient declarations, overload links, advanced types and TSX.
+- The same regression executable parses all 11 Phase 1 conformance targets
+  directly and confirms that every source builds an AST without parser errors.
+- Full conformance improved from 80/107 to 82/107 and failure-debug locations
+  fell from 90 to 54.
+- Generic closers are parsed safely without reinterpreting ordinary comparison
+  expressions as generic calls.
+- JSX lowering now produces framework-neutral virtual-node records rather than
+  opaque nulls. `NOVA_JSX_FACTORY` selects an externally linked factory ABI.
+- Remaining diagnostics are explicitly classified as `TS2322`/`TS2345`
+  semantic-checker work for Phase 5; there are no remaining generic
+  `ERROR_DIAGNOSTIC` parser failures.
 
 This phase removes the 56 `ERROR_DIAGNOSTIC` locations before deeper semantic
 work.
@@ -217,9 +261,9 @@ Unblocked test:
 
 ### Exit gate
 
-- `ERROR_DIAGNOSTIC`: 56 → 0 for valid target tests.
-- Every valid target source builds an AST.
-- Parser unit tests cover every fixed grammar production.
+- [x] `ERROR_DIAGNOSTIC`: 56 → 0 for valid target tests.
+- [x] Every valid target source builds an AST.
+- [x] Parser unit tests cover every fixed grammar production.
 
 ## 6. Phase 2 — Unified JSValue, object model and callable ABI
 
@@ -655,7 +699,7 @@ Qualify increasingly difficult packages:
 |---|---|
 | M0 — Baseline | 80/107 pass; 90 debug locations; report reproducible |
 | M1 — Safe compiler | 0 native crashes; sanitizer gate enabled |
-| M2 — Parser complete | 0 valid-source `ERROR_DIAGNOSTIC` locations |
+| M2 — Parser complete (achieved 2026-07-27) | 0 valid-source `ERROR_DIAGNOSTIC` locations; AST regression gate passes |
 | M3 — JavaScript local target | all `js_spec_*` tests pass |
 | M4 — TypeScript local target | all `ts_spec_*` tests pass with expected diagnostics |
 | M5 — Local release gate | 107/107 verified tests pass; 0 skipped |
@@ -709,12 +753,13 @@ accepted host/API profile and upstream-suite gap.
 
 Start with these five bounded changes:
 
-1. Fix computed object methods and contextual `get`/`set` identifiers.
+1. **Complete:** fix computed object methods and contextual `get`/`set`
+   identifiers.
 2. Fix generator hidden-parameter ABI and remove the `range`/`counter` crash.
 3. Fix Error subclass `super` allocation and constructor lifetime.
 4. Fix `Number("")`, `Array.reduceRight` and `Atomics.add` return semantics.
-5. Add TypeScript parser support for readonly members, generic constraints and
-   overload signatures.
+5. **Complete:** add TypeScript parser support for readonly members, generic
+   constraints and overload signatures.
 
 After each item, rerun the full suite and use the debug-file delta to select
 the next smallest root-cause cluster.

@@ -1,10 +1,11 @@
 #include "nova/Frontend/Parser.h"
 #include <sstream>
+#include <unordered_map>
 
 namespace nova {
 
 Parser::Parser(Lexer& lexer) 
-    : lexer_(lexer), current_(0) {
+    : lexer_(lexer), current_(0), jsxMode_(lexer.isJSXMode()) {
     // Pre-fetch all tokens for easier lookahead
     Token token;
     do {
@@ -28,6 +29,33 @@ std::unique_ptr<Program> Parser::parseProgram() {
         }
     }
     
+    // Connect overload signatures to their implementation without changing
+    // source order or ownership in the AST.
+    std::unordered_map<std::string, std::vector<FunctionDecl*>> overloads;
+    std::unordered_map<std::string, FunctionDecl*> implementations;
+    for (auto& statement : statements) {
+        auto* declarationStatement =
+            dynamic_cast<DeclStmt*>(statement.get());
+        auto* function = declarationStatement
+            ? dynamic_cast<FunctionDecl*>(
+                  declarationStatement->declaration.get())
+            : nullptr;
+        if (!function || function->isDeclare) continue;
+        if (function->isOverload) {
+            overloads[function->name].push_back(function);
+        } else {
+            implementations[function->name] = function;
+        }
+    }
+    for (auto& [name, signatures] : overloads) {
+        auto found = implementations.find(name);
+        if (found == implementations.end()) continue;
+        found->second->overloads = signatures;
+        for (FunctionDecl* signature : signatures) {
+            signature->implementation = found->second;
+        }
+    }
+
     auto program = std::make_unique<Program>(std::move(statements));
     program->location = getCurrentLocation();
     

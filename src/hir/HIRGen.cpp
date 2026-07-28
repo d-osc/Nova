@@ -402,6 +402,21 @@ void HIRGenerator::visit(Identifier& node) {
 
     // Look up variable in symbol table and parent scopes
     HIRValue* value = lookupVariable(node.name);
+
+    // If not in symbol table, check whether this name refers to a known
+    // module function. When a function name is used as a value (e.g. the
+    // target argument of Reflect.apply), return the function name as a
+    // string constant — LLVM codegen auto-resolves string constants to
+    // function pointers when the callee's parameter type is `ptr` (see
+    // LLVMCodeGen.cpp:5353). This is the same trick used for array/Promise
+    // callbacks.
+    if (!value) {
+        auto existingFunc = module_->getFunction(node.name);
+        if (existingFunc) {
+            lastValue_ = builder_->createStringConstant(node.name);
+            return;
+        }
+    }
     if (value) {
         if (heapClosureCells_.count(value) != 0) {
             lastValue_ = builder_->createLoad(value, node.name);

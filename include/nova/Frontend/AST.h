@@ -42,7 +42,8 @@ public:
         Tuple, Literal, TypeParameter, IndexedAccess,
         // TypeScript advanced type-only constructs. Treated as `Any`
         // at runtime via type erasure.
-        Keyof, Conditional, Mapped, Infer
+        Keyof, Conditional, Mapped, Infer, TypeQuery, TypePredicate,
+        TemplateLiteral
     };
 
     Kind kind;
@@ -51,6 +52,10 @@ public:
     TypePtr elementType;         // Array element type
     std::unordered_map<std::string, TypePtr> properties; // Structural object members
     std::unordered_set<std::string> optionalProperties;
+    std::unordered_set<std::string> readonlyProperties;
+    std::vector<TypePtr> typeArguments;
+    TypePtr indexType;           // IndexedAccess: Object[Index]
+    bool isReadonly = false;
     // Conditional: T extends U ? X : Y
     TypePtr checkType;     // T
     TypePtr extendsType;   // U
@@ -59,6 +64,11 @@ public:
     // Mapped: { [K in keyof T]: V }
     TypePtr mappedSource;  // T
     std::string mappedVar;  // K
+    TypePtr mappedValue;
+    TypePtr mappedNameType;
+    int mappedReadonlyModifier = 0; // -1 remove, 0 preserve, 1 add
+    int mappedOptionalModifier = 0; // -1 remove, 0 preserve, 1 add
+    bool isAssertion = false;
     // Infer: infer T (stored in `name`)
     // Keyof: keyof T (stored in `elementType`)
 
@@ -276,6 +286,9 @@ public:
         TypePtr type;
         ExprPtr initializer;
         bool isStatic = false;
+        bool isReadonly = false;
+        bool isComputed = false;
+        ExprPtr computedKey;
     };
 
     struct Method {
@@ -285,6 +298,8 @@ public:
         enum class Kind { Method, Constructor, Get, Set } kind;
         bool isStatic = false;
         bool isAsync = false;
+        bool isComputed = false;
+        ExprPtr computedKey;
         TypePtr returnType;
     };
 
@@ -613,6 +628,7 @@ public:
     
     Kind kind;
     std::vector<Declarator> declarations;
+    bool isDeclare = false;
     
     VarDeclStmt(Kind k, std::vector<Declarator> decls)
         : kind(k), declarations(std::move(decls)) {}
@@ -831,6 +847,7 @@ public:
     std::string name;
     std::vector<std::string> typeParams;
     std::vector<TypePtr> typeParamConstraints;
+    std::vector<TypePtr> typeParamDefaults;
     std::vector<std::string> params;
     std::vector<std::shared_ptr<Pattern>> paramPatterns;
     std::vector<TypePtr> paramTypes;  // Type annotations for parameters
@@ -840,6 +857,11 @@ public:
     StmtPtr body;
     bool isAsync = false;
     bool isGenerator = false;
+    bool isDeclare = false;
+    bool isOverload = false;
+    // Non-owning links established by Parser::parseProgram.
+    std::vector<FunctionDecl*> overloads;
+    FunctionDecl* implementation = nullptr;
     TypePtr returnType;
 
     FunctionDecl() = default;
@@ -860,6 +882,8 @@ public:
         bool isStatic = false;
         bool isAsync = false;
         bool isAbstract = false;
+        bool isOverride = false;
+        std::vector<TypePtr> paramTypes;
         TypePtr returnType;
         std::vector<std::unique_ptr<Decorator>> decorators;
         bool isComputed = false;
@@ -872,6 +896,7 @@ public:
         TypePtr type;
         bool isStatic = false;
         bool isReadonly = false;
+        bool isOptional = false;
         std::vector<std::unique_ptr<Decorator>> decorators;
         bool isComputed = false;
         ExprPtr computedKey;
@@ -881,9 +906,13 @@ public:
     std::string superclass;
     std::vector<std::string> interfaces;
     std::vector<std::string> typeParams;
+    std::vector<TypePtr> typeParamConstraints;
+    std::vector<TypePtr> typeParamDefaults;
     std::vector<Method> methods;
     std::vector<Property> properties;
     std::vector<std::unique_ptr<Decorator>> decorators;
+    bool isAbstract = false;
+    bool isDeclare = false;
     
     ClassDecl() = default;
     void accept(ASTVisitor& visitor) override;
@@ -901,10 +930,13 @@ public:
         std::string name;
         TypePtr type;
         bool isOptional = false;
+        bool isReadonly = false;
     };
     
     std::string name;
     std::vector<std::string> typeParams;
+    std::vector<TypePtr> typeParamConstraints;
+    std::vector<TypePtr> typeParamDefaults;
     std::vector<std::string> extends;
     std::vector<MethodSignature> methods;
     std::vector<PropertySignature> properties;
@@ -917,9 +949,21 @@ class TypeAliasDecl : public Decl {
 public:
     std::string name;
     std::vector<std::string> typeParams;
+    std::vector<TypePtr> typeParamConstraints;
+    std::vector<TypePtr> typeParamDefaults;
     TypePtr type;
     
     TypeAliasDecl() = default;
+    void accept(ASTVisitor& visitor) override;
+};
+
+class NamespaceDecl : public Decl {
+public:
+    std::string name;
+    std::vector<StmtPtr> body;
+    bool isDeclare = false;
+
+    NamespaceDecl() = default;
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -1068,6 +1112,7 @@ public:
     virtual void visit(ClassDecl& node) = 0;
     virtual void visit(InterfaceDecl& node) = 0;
     virtual void visit(TypeAliasDecl& node) = 0;
+    virtual void visit(NamespaceDecl& node) = 0;
     virtual void visit(EnumDecl& node) = 0;
     virtual void visit(ImportDecl& node) = 0;
     virtual void visit(ExportDecl& node) = 0;

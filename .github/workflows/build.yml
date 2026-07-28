@@ -133,6 +133,51 @@ jobs:
           dist/libnovacore.a
         retention-days: 30
 
+  phase0-safety:
+    name: Phase 0 / ${{ matrix.configuration }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - configuration: Debug
+            asan: OFF
+          - configuration: ASan
+            asan: ON
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-18 llvm-18 llvm-18-dev cmake ninja-build
+
+    - name: Validate failure diagnostics
+      run: python -m unittest tests.test_run_all_tests_debug -v
+
+    - name: Configure
+      run: |
+        cmake -S . -B build/phase0-${{ matrix.configuration }} -G Ninja \
+          -DCMAKE_C_COMPILER=clang-18 \
+          -DCMAKE_CXX_COMPILER=clang++-18 \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DNOVA_ENABLE_ASAN=${{ matrix.asan }} \
+          -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+
+    - name: Build safety gates
+      run: |
+        cmake --build build/phase0-${{ matrix.configuration }} \
+          --target nova nova-parser-phase1-tests
+
+    - name: Run safety gates
+      env:
+        ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      run: |
+        ctest --test-dir build/phase0-${{ matrix.configuration }} \
+          --output-on-failure -R "nova-parser-phase1|nova-phase0"
+
   build-windows:
     name: Build Windows
     runs-on: windows-latest

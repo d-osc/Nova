@@ -504,29 +504,65 @@ void HIRGenerator::visit(NewExpr& node) {
                 messageArg = lastValue_;
             }
 
-            // Create function type: ptr @nova_aggregate_error_create(ptr, ptr, i64)
-            std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, intType};
+            // Third argument is ErrorOptions — extract `cause` if present.
+            HIRValue* causeArg = nullptr;
+            if (node.arguments.size() >= 3) {
+                if (auto* options =
+                        dynamic_cast<ObjectExpr*>(node.arguments[2].get())) {
+                    for (auto& property : options->properties) {
+                        std::string key;
+                        if (auto* identifier =
+                                dynamic_cast<Identifier*>(property.key.get())) {
+                            key = identifier->name;
+                        } else if (auto* literal =
+                                       dynamic_cast<StringLiteral*>(
+                                           property.key.get())) {
+                            key = literal->value;
+                        }
+                        if (key == "cause" && property.value) {
+                            property.value->accept(*this);
+                            causeArg = toJSValue(lastValue_);
+                            break;
+                        }
+                    }
+                }
+            }
 
-            auto existingFunc = module_->getFunction("nova_aggregate_error_create");
+            const std::string runtimeFunc = causeArg
+                ? "nova_aggregate_error_create_with_cause"
+                : "nova_aggregate_error_create";
+
+            // Create function type: ptr @(ptr, ptr, i64[, i64])
+            std::vector<HIRTypePtr> paramTypes = {ptrType, ptrType, intType};
+            if (causeArg) {
+                paramTypes.push_back(std::make_shared<HIRType>(
+                    HIRType::Kind::JSValue));
+            }
+
+            auto existingFunc = module_->getFunction(runtimeFunc);
             HIRFunction* func = nullptr;
             if (existingFunc) {
                 func = existingFunc.get();
             } else {
                 HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
-                HIRFunctionPtr funcPtr = module_->createFunction("nova_aggregate_error_create", funcType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
                 func = funcPtr.get();
-                if (NOVA_DEBUG) std::cerr << "  DEBUG: Created external function: nova_aggregate_error_create" << std::endl;
+                if (NOVA_DEBUG) std::cerr << "  DEBUG: Created external function: " << runtimeFunc << std::endl;
             }
 
-            // Prepare arguments in runtime order: (message, errors, count)
+            // Prepare arguments in runtime order: (message, errors, count[, cause])
             std::vector<HIRValue*> args;
             args.push_back(messageArg ? messageArg : builder_->createStringConstant(""));
             args.push_back(errorsArg ? errorsArg : builder_->createIntConstant(0));
             args.push_back(builder_->createIntConstant(errorCount));
+            if (causeArg) {
+                args.push_back(causeArg);
+            }
 
             lastValue_ = builder_->createCall(func, args, "aggregate_error");
             lastValue_->type = ptrType;
+            lastWasError_ = true;  // Track for variable declaration
             if (NOVA_DEBUG) std::cerr << "  DEBUG: Created AggregateError with " << errorCount << " errors" << std::endl;
             return;
         }
@@ -547,19 +583,47 @@ void HIRGenerator::visit(NewExpr& node) {
                 lengthArg = builder_->createIntConstant(0);
             }
 
-            std::vector<HIRTypePtr> paramTypes = {intType};
-            auto existingFunc = module_->getFunction("nova_arraybuffer_create");
+            // Check for second argument: options object with maxByteLength
+            HIRValue* maxByteLengthArg = nullptr;
+            if (node.arguments.size() >= 2) {
+                auto* optionsExpr = node.arguments[1].get();
+                auto* objExpr = dynamic_cast<ObjectExpr*>(optionsExpr);
+                if (objExpr) {
+                    // Extract maxByteLength property if present
+                    for (auto& prop : objExpr->properties) {
+                        std::string keyName;
+                        if (auto* ident = dynamic_cast<Identifier*>(prop.key.get())) {
+                            keyName = ident->name;
+                        } else if (auto* strLit = dynamic_cast<StringLiteral*>(prop.key.get())) {
+                            keyName = strLit->value;
+                        }
+                        if (keyName == "maxByteLength" && prop.value) {
+                            prop.value->accept(*this);
+                            maxByteLengthArg = lastValue_;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            std::string runtimeFunc = maxByteLengthArg ? "nova_arraybuffer_create_resizable" : "nova_arraybuffer_create";
+            std::vector<HIRTypePtr> paramTypes = maxByteLengthArg
+                ? std::vector<HIRTypePtr>{intType, intType}
+                : std::vector<HIRTypePtr>{intType};
+            auto existingFunc = module_->getFunction(runtimeFunc);
             HIRFunction* func = nullptr;
             if (existingFunc) {
                 func = existingFunc.get();
             } else {
                 HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
-                HIRFunctionPtr funcPtr = module_->createFunction("nova_arraybuffer_create", funcType);
+                HIRFunctionPtr funcPtr = module_->createFunction(runtimeFunc, funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
                 func = funcPtr.get();
             }
 
-            std::vector<HIRValue*> args = {lengthArg};
+            std::vector<HIRValue*> args;
+            args.push_back(lengthArg);
+            if (maxByteLengthArg) args.push_back(maxByteLengthArg);
             lastValue_ = builder_->createCall(func, args, "arraybuffer");
             lastValue_->type = ptrType;
             lastWasArrayBuffer_ = true;  // Track for variable declaration
@@ -1701,22 +1765,58 @@ void HIRGenerator::visit(NewExpr& node) {
                 node.arguments[0]->accept(*this);
                 messageArg = lastValue_;
             }
+            HIRValue* causeArg = nullptr;
+            // ErrorOptions `{ cause }` is accepted by every builtin Error
+            // subclass (Error, TypeError, RangeError, ...). Extract the cause
+            // value at HIR time so we can pass it to the constructor.
+            if (node.arguments.size() > 1) {
+                if (auto* options =
+                        dynamic_cast<ObjectExpr*>(node.arguments[1].get())) {
+                    for (auto& property : options->properties) {
+                        std::string key;
+                        if (auto* identifier =
+                                dynamic_cast<Identifier*>(property.key.get())) {
+                            key = identifier->name;
+                        } else if (auto* literal =
+                                       dynamic_cast<StringLiteral*>(
+                                           property.key.get())) {
+                            key = literal->value;
+                        }
+                        if (key == "cause" && property.value) {
+                            property.value->accept(*this);
+                            causeArg = toJSValue(lastValue_);
+                            break;
+                        }
+                    }
+                }
+            }
 
             // Determine runtime function name
             std::string runtimeFunc;
-            if (className == "Error") runtimeFunc = "nova_error_create";
-            else if (className == "TypeError") runtimeFunc = "nova_type_error_create";
-            else if (className == "RangeError") runtimeFunc = "nova_range_error_create";
-            else if (className == "ReferenceError") runtimeFunc = "nova_reference_error_create";
-            else if (className == "SyntaxError") runtimeFunc = "nova_syntax_error_create";
-            else if (className == "URIError") runtimeFunc = "nova_uri_error_create";
-            else if (className == "InternalError") runtimeFunc = "nova_internal_error_create";
-            else if (className == "EvalError") runtimeFunc = "nova_eval_error_create";
+            const std::string baseFuncByClass =
+                (className == "Error") ? "nova_error_create"
+                : (className == "TypeError") ? "nova_type_error_create"
+                : (className == "RangeError") ? "nova_range_error_create"
+                : (className == "ReferenceError") ? "nova_reference_error_create"
+                : (className == "SyntaxError") ? "nova_syntax_error_create"
+                : (className == "URIError") ? "nova_uri_error_create"
+                : (className == "InternalError") ? "nova_internal_error_create"
+                : (className == "EvalError") ? "nova_eval_error_create"
+                : std::string();
+            if (!baseFuncByClass.empty()) {
+                runtimeFunc = causeArg
+                    ? baseFuncByClass + "_with_cause"
+                    : baseFuncByClass;
+            }
 
             // Create external function reference
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             std::vector<HIRTypePtr> paramTypes;
             paramTypes.push_back(ptrType);  // const char* message
+            if (causeArg) {
+                paramTypes.push_back(std::make_shared<HIRType>(
+                    HIRType::Kind::JSValue));
+            }
 
             // Check if function already exists
             auto existingFunc = module_->getFunction(runtimeFunc);
@@ -1738,6 +1838,9 @@ void HIRGenerator::visit(NewExpr& node) {
             } else {
                 // Pass empty string if no message
                 args.push_back(builder_->createStringConstant(""));
+            }
+            if (causeArg) {
+                args.push_back(causeArg);
             }
 
             lastValue_ = builder_->createCall(func, args, "error_obj");
@@ -1894,6 +1997,9 @@ void HIRGenerator::visit(SuperExpr& node) {
     
 
 void HIRGenerator::visit(ClassDecl& node) {
+        if (node.isDeclare) {
+            return;
+        }
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Processing class declaration: " << node.name << std::endl;
 
         // Register class name for static method call detection
@@ -2410,8 +2516,13 @@ void HIRGenerator::generateDefaultConstructor(const std::string& className,
         // Save current function and class context
         HIRFunction* savedFunction = currentFunction_;
         hir::HIRStructType* savedClassStructType = currentClassStructType_;
+        hir::HIRValue* savedThis = currentThis_;
+        auto savedBuilder = std::move(builder_);
+        auto savedSymbolTable = symbolTable_;
         currentFunction_ = func.get();
         currentClassStructType_ = structType;
+        currentThis_ = nullptr;
+        symbolTable_.clear();
 
         // Create entry block
         auto entryBlock = func->createBasicBlock("entry");
@@ -2440,9 +2551,14 @@ void HIRGenerator::generateDefaultConstructor(const std::string& className,
             mallocFunc = mallocFuncPtr.get();
         }
 
-        // Calculate struct size (number of fields * 8 bytes for i64)
-        size_t structSize = structType->fields.size() * 8;
-        if (structSize == 0) structSize = 8;  // Minimum allocation
+        // Class instances use the same runtime object layout as explicit
+        // constructors: a 24-byte ObjectHeader followed by the fixed field
+        // capacity used by LLVM lowering.  Allocating only fields * 8 here
+        // caused instanceof/property reads on default-derived classes to walk
+        // beyond the allocation.
+        constexpr size_t objectHeaderSize = 24;
+        constexpr size_t maxFields = 8;
+        size_t structSize = objectHeaderSize + (maxFields * 8);
         auto sizeValue = builder_->createIntConstant(structSize);
 
         // Call malloc to allocate memory
@@ -2462,6 +2578,9 @@ void HIRGenerator::generateDefaultConstructor(const std::string& className,
         builder_->createReturn(instancePtr);
 
         // Restore context
+        symbolTable_ = std::move(savedSymbolTable);
+        builder_ = std::move(savedBuilder);
+        currentThis_ = savedThis;
         currentClassStructType_ = savedClassStructType;
         currentFunction_ = savedFunction;
 

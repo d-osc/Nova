@@ -12,6 +12,11 @@ bool Parser::tryParseTypeArguments() {
     // bail and let caller treat `<` as a comparison.
     if (!check(TokenType::Less)) return false;
     size_t savedPos = current_;
+    auto finish = [this, savedPos]() {
+        if (check(TokenType::LeftParen)) return true;
+        current_ = savedPos;
+        return false;
+    };
     advance();  // consume `<`
 
     int angleDepth = 1;
@@ -28,12 +33,12 @@ bool Parser::tryParseTypeArguments() {
         } else if (t == TokenType::Greater) {
             angleDepth--;
             advance();
-            if (angleDepth == 0) return true;
+            if (angleDepth == 0) return finish();
         } else if (t == TokenType::GreaterGreater) {
             // `>>` — close two levels.
             angleDepth -= 2;
             advance();
-            if (angleDepth <= 0) return true;
+            if (angleDepth <= 0) return finish();
         } else if (t == TokenType::LessEqual || t == TokenType::GreaterEqual) {
             // `<=` / `>=` — clearly a comparison, not a type.
             current_ = savedPos;
@@ -230,10 +235,10 @@ std::unique_ptr<Expr> Parser::parseAssignmentExpression() {
                             couldBeArrow = false;
                         }
                         break;
-                    } else if (check(TokenType::Identifier) ||
+                    } else if (checkBindingIdentifier() ||
                                check(TokenType::LeftBrace) ||
                                check(TokenType::LeftBracket)) {
-                        if (check(TokenType::Identifier)) {
+                        if (checkBindingIdentifier()) {
                             params.push_back(advance().value);
                             paramPatterns.push_back(nullptr);
                         } else {
@@ -896,26 +901,26 @@ std::unique_ptr<Expr> Parser::parsePostfixExpression() {
 }
 
 std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
-    // JSX Element or Fragment
-    if (check(TokenType::LessThan)) {
-        // Look ahead to distinguish from comparison
-        size_t savedPos = current_;
-        advance(); // consume '<'
-        
-        // JSX Fragment: <>...</>
-        if (check(TokenType::Greater)) {
-            current_ = savedPos;
+    // JSX is selected by the source extension. In .ts files the same token
+    // sequence is an angle-bracket type assertion; TypeScript deliberately
+    // forbids that assertion form in .tsx files to remove the ambiguity.
+    if (check(TokenType::Less)) {
+        if (jsxMode_ &&
+            (peek(1).type == TokenType::Greater ||
+             peek(1).type == TokenType::Identifier ||
+             peek(1).isKeyword())) {
             return parseJSXElement();
         }
-        
-        // JSX Element: <TagName or closing tag </
-        if (check(TokenType::Identifier) || check(TokenType::Slash)) {
-            current_ = savedPos;
-            return parseJSXElement();
+        if (!jsxMode_) {
+            Token opening = advance();
+            auto targetType = parseTypeAnnotation();
+            consumeTypeArgumentClose(
+                "Expected '>' after type assertion");
+            auto assertion = std::make_unique<AsExpr>(
+                parseUnaryExpression(), std::move(targetType));
+            assertion->location = opening.location;
+            return assertion;
         }
-        
-        // Not JSX, restore and continue
-        current_ = savedPos;
     }
     
     // Literals
@@ -1003,10 +1008,10 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
                     couldBeArrow = false;
                 }
                 break;
-            } else if (check(TokenType::Identifier) ||
+            } else if (checkBindingIdentifier() ||
                        check(TokenType::LeftBrace) ||
                        check(TokenType::LeftBracket)) {
-                if (check(TokenType::Identifier)) {
+                if (checkBindingIdentifier()) {
                     params.push_back(advance().value);
                     paramPatterns.push_back(nullptr);
                 } else {
@@ -1524,7 +1529,8 @@ std::unique_ptr<Expr> Parser::parseFunctionExpression() {
     
     while (!check(TokenType::RightParen) && !isAtEnd()) {
         if (match(TokenType::DotDotDot)) {
-            Token rest = consume(TokenType::Identifier, "Expected rest parameter name");
+            Token rest = consumeBindingIdentifier(
+                "Expected rest parameter name");
             func->restParam = rest.value;
             if (match(TokenType::Colon)) {
                 parseTypeAnnotation();
@@ -1541,7 +1547,8 @@ std::unique_ptr<Expr> Parser::parseFunctionExpression() {
             func->paramPatterns.push_back(
                 std::shared_ptr<Pattern>(std::move(pattern)));
         } else {
-            Token param = consume(TokenType::Identifier, "Expected parameter name");
+            Token param = consumeBindingIdentifier(
+                "Expected parameter name");
             func->params.push_back(param.value);
             func->paramPatterns.push_back(nullptr);
         }
@@ -1603,7 +1610,8 @@ std::unique_ptr<Expr> Parser::parseClassExpression() {
 
     // Extends clause
     if (match(TokenType::KeywordExtends)) {
-        Token parent = consume(TokenType::Identifier, "Expected parent class name");
+        Token parent = consumeBindingIdentifier(
+            "Expected parent class name");
         classExpr->superclass = parent.value;
     }
 
@@ -1611,18 +1619,57 @@ std::unique_ptr<Expr> Parser::parseClassExpression() {
 
     // Parse class members
     while (!check(TokenType::RightBrace) && !isAtEnd()) {
-        // Static members
-        bool isStatic = match(TokenType::KeywordStatic);
+        bool isStatic = false;
+        bool isAsync = false;
+        bool isReadonly = false;
+        bool consumedModifier = true;
+        while (consumedModifier) {
+            consumedModifier = true;
+            if (check(TokenType::KeywordStatic) &&
+                peek(1).type != TokenType::LeftParen) {
+                advance();
+                isStatic = true;
+            } else if (check(TokenType::KeywordAsync) &&
+                       peek(1).type != TokenType::LeftParen) {
+                advance();
+                isAsync = true;
+            } else if (match(TokenType::KeywordReadonly)) {
+                isReadonly = true;
+            } else if (match(TokenType::KeywordPublic) ||
+                       match(TokenType::KeywordPrivate) ||
+                       match(TokenType::KeywordProtected) ||
+                       match(TokenType::KeywordOverride) ||
+                       match(TokenType::KeywordAbstract)) {
+                // Type-only modifier.
+            } else {
+                consumedModifier = false;
+            }
+        }
 
-        // Async methods
-        bool isAsync = match(TokenType::KeywordAsync);
+        bool isGetter = false;
+        bool isSetter = false;
+        if ((check(TokenType::KeywordGet) ||
+             check(TokenType::KeywordSet)) &&
+            peek(1).type != TokenType::LeftParen) {
+            isGetter = check(TokenType::KeywordGet);
+            isSetter = check(TokenType::KeywordSet);
+            advance();
+        }
 
-        // Getter/Setter
-        bool isGetter = match(TokenType::KeywordGet);
-        bool isSetter = match(TokenType::KeywordSet);
-
-        // Member name
-        Token name = consume(TokenType::Identifier, "Expected class member name");
+        bool isComputed = false;
+        ExprPtr computedKey;
+        Token name;
+        if (match(TokenType::LeftBracket)) {
+            isComputed = true;
+            computedKey = parseExpression();
+            consume(TokenType::RightBracket,
+                    "Expected ']' after computed class member");
+            name.value = "__computed__";
+            name.location = getCurrentLocation();
+        } else {
+            name = consumeIdentifierName(
+                "Expected class member name");
+        }
 
         // Check if it's a method (has parentheses) or property
         if (check(TokenType::LeftParen)) {
@@ -1631,6 +1678,8 @@ std::unique_ptr<Expr> Parser::parseClassExpression() {
             method.name = name.value;
             method.isStatic = isStatic;
             method.isAsync = isAsync;
+            method.isComputed = isComputed;
+            method.computedKey = std::move(computedKey);
 
             if (isGetter) {
                 method.kind = ClassExpr::Method::Kind::Get;
@@ -1646,9 +1695,11 @@ std::unique_ptr<Expr> Parser::parseClassExpression() {
             consume(TokenType::LeftParen, "Expected '(' after method name");
 
             while (!check(TokenType::RightParen) && !isAtEnd()) {
-                Token param = consume(TokenType::Identifier, "Expected parameter name");
+                Token param = consumeBindingIdentifier(
+                    "Expected parameter name");
                 method.params.push_back(param.value);
 
+                match(TokenType::Question);
                 if (match(TokenType::Colon)) {
                     parseTypeAnnotation();
                 }
@@ -1674,7 +1725,12 @@ std::unique_ptr<Expr> Parser::parseClassExpression() {
             ClassExpr::Property prop;
             prop.name = name.value;
             prop.isStatic = isStatic;
+            prop.isReadonly = isReadonly;
+            prop.isComputed = isComputed;
+            prop.computedKey = std::move(computedKey);
 
+            match(TokenType::Question);
+            match(TokenType::Exclamation);
             // Type annotation
             if (match(TokenType::Colon)) {
                 prop.type = parseTypeAnnotation();
@@ -1769,7 +1825,8 @@ std::unique_ptr<Expr> Parser::parseParenthesizedExpression() {
 // ==================== JSX/TSX Parsing ====================
 
 std::unique_ptr<Expr> Parser::parseJSXElement() {
-    consume(TokenType::LessThan, "Expected '<'");
+    const SourceLocation location = getCurrentLocation();
+    consume(TokenType::Less, "Expected '<'");
     
     // JSX Fragment: <>...</>
     if (check(TokenType::Greater)) {
@@ -1778,29 +1835,41 @@ std::unique_ptr<Expr> Parser::parseJSXElement() {
         fragment->location = getCurrentLocation();
         
         // Parse children until </>
-        while (!check(TokenType::LessThanSlash) && !isAtEnd()) {
+        while (!(check(TokenType::Less) &&
+                 peek(1).type == TokenType::Slash) &&
+               !isAtEnd()) {
             fragment->children.push_back(parseJSXChild());
         }
-        
-        consume(TokenType::LessThanSlash, "Expected '</'");
+
+        consume(TokenType::Less, "Expected '</'");
+        consume(TokenType::Slash, "Expected '/' in fragment closing tag");
         consume(TokenType::Greater, "Expected '>' after fragment");
         
         return fragment;
     }
     
     // JSX Element: <TagName ...>
-    if (!check(TokenType::Identifier)) {
+    if (!checkIdentifierName()) {
         reportError("Expected JSX tag name");
         return std::make_unique<NullLiteral>();
     }
-    
-    std::string tagName = advance().value;
+
+    std::string tagName = consumeIdentifierName(
+        "Expected JSX tag name").value;
+    while (check(TokenType::Dot) || check(TokenType::Colon) ||
+           check(TokenType::Minus)) {
+        const std::string separator = advance().value;
+        tagName += separator +
+            consumeIdentifierName(
+                "Expected JSX name after separator").value;
+    }
     auto element = std::make_unique<JSXElement>(tagName);
-    element->location = getCurrentLocation();
+    element->location = location;
     
     // Parse attributes
     while (!check(TokenType::Greater) && 
-           !check(TokenType::SlashGreaterThan) && 
+           !(check(TokenType::Slash) &&
+             peek(1).type == TokenType::Greater) &&
            !isAtEnd()) {
         
         // Spread attribute: {...expr}
@@ -1817,15 +1886,24 @@ std::unique_ptr<Expr> Parser::parseJSXElement() {
         }
         
         // Regular attribute: name={value} or name="value" or name
-        if (check(TokenType::Identifier)) {
-            std::string attrName = advance().value;
+        if (checkIdentifierName()) {
+            std::string attrName =
+                consumeIdentifierName(
+                    "Expected JSX attribute name").value;
+            while (check(TokenType::Colon) ||
+                   check(TokenType::Minus)) {
+                const std::string separator = advance().value;
+                attrName += separator +
+                    consumeIdentifierName(
+                        "Expected JSX attribute name after separator").value;
+            }
             ExprPtr attrValue = nullptr;
             
             if (match(TokenType::Equal)) {
                 if (check(TokenType::StringLiteral)) {
                     attrValue = parseLiteral();
                 } else if (match(TokenType::LeftBrace)) {
-                    attrValue = parseExpression();
+                    attrValue = parseAssignmentExpression();
                     consume(TokenType::RightBrace, "Expected '}' after expression");
                 }
             }
@@ -1838,7 +1916,10 @@ std::unique_ptr<Expr> Parser::parseJSXElement() {
     }
     
     // Self-closing: <Tag />
-    if (match(TokenType::SlashGreaterThan)) {
+    if (check(TokenType::Slash) &&
+        peek(1).type == TokenType::Greater) {
+        advance();
+        advance();
         element->selfClosing = true;
         return element;
     }
@@ -1846,13 +1927,25 @@ std::unique_ptr<Expr> Parser::parseJSXElement() {
     consume(TokenType::Greater, "Expected '>' or '/>'");
     
     // Parse children until </TagName>
-    while (!check(TokenType::LessThanSlash) && !isAtEnd()) {
+    while (!(check(TokenType::Less) &&
+             peek(1).type == TokenType::Slash) &&
+           !isAtEnd()) {
         element->children.push_back(parseJSXChild());
     }
-    
+
     // Closing tag: </TagName>
-    consume(TokenType::LessThanSlash, "Expected closing tag");
-    if (!check(TokenType::Identifier) || advance().value != tagName) {
+    consume(TokenType::Less, "Expected closing tag");
+    consume(TokenType::Slash, "Expected '/' in closing tag");
+    std::string closingName =
+        consumeIdentifierName("Expected JSX closing tag name").value;
+    while (check(TokenType::Dot) || check(TokenType::Colon) ||
+           check(TokenType::Minus)) {
+        const std::string separator = advance().value;
+        closingName += separator +
+            consumeIdentifierName(
+                "Expected JSX closing name after separator").value;
+    }
+    if (closingName != tagName) {
         reportError("Mismatched JSX closing tag");
     }
     consume(TokenType::Greater, "Expected '>' after closing tag");
@@ -1862,25 +1955,38 @@ std::unique_ptr<Expr> Parser::parseJSXElement() {
 
 std::unique_ptr<Expr> Parser::parseJSXChild() {
     // JSX Expression: {expr}
-    if (check(TokenType::LeftBrace)) {
-        advance();
-        auto expr = parseExpression();
+    if (match(TokenType::LeftBrace)) {
+        if (match(TokenType::RightBrace)) {
+            auto empty = std::make_unique<JSXExpressionContainer>(
+                std::make_unique<NullLiteral>());
+            empty->location = getCurrentLocation();
+            return empty;
+        }
+        auto expr = parseAssignmentExpression();
         consume(TokenType::RightBrace, "Expected '}'");
-        return std::make_unique<JSXExpressionContainer>(std::move(expr));
+        auto container = std::make_unique<JSXExpressionContainer>(
+            std::move(expr));
+        container->location = getCurrentLocation();
+        return container;
     }
     
     // Nested JSX Element
-    if (check(TokenType::LessThan)) {
+    if (check(TokenType::Less)) {
         return parseJSXElement();
     }
     
     // JSX Text - consume until special character
     std::string text;
-    while (!check(TokenType::LessThan) && 
-           !check(TokenType::LessThanSlash) &&
+    while (!check(TokenType::Less) &&
            !check(TokenType::LeftBrace) &&
            !isAtEnd()) {
-        text += advance().value;
+        Token part = advance();
+        if (!text.empty() &&
+            (part.type == TokenType::Identifier ||
+             part.isKeyword() || part.isLiteral())) {
+            text += " ";
+        }
+        text += part.value;
     }
     
     if (!text.empty()) {
@@ -2076,4 +2182,3 @@ AssignmentExpr::Op tokenToAssignmentOp(TokenType type) {
 }
 
 } // namespace nova
-

@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+cmake_policy(SET CMP0091 NEW)
 project(NovaCompiler VERSION 1.4.0 LANGUAGES C CXX)
 
 # Clear implicit include directories to prevent system header conflicts on macOS
@@ -14,8 +15,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(NOVA_ENABLE_ASAN "Build Nova and its tests with AddressSanitizer" OFF)
+
 # Compiler flags
 if(MSVC)
+    # The official LLVM Windows archives use the release dynamic CRT even for
+    # clients built with debug information. Match that ABI in every Nova
+    # configuration while retaining Debug optimization/symbol settings.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+    add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
     add_compile_options(/W4 /WX /permissive-)
     add_compile_options(/utf-8)
     # Disable specific warnings from LLVM headers
@@ -29,6 +37,24 @@ else()
     endif()
 endif()
 
+if(NOVA_ENABLE_ASAN)
+    add_compile_definitions(NOVA_ENABLE_ASAN=1)
+    if(MSVC)
+        add_compile_options(/fsanitize=address /Zi)
+        add_link_options(/INCREMENTAL:NO /DEBUG)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_compile_options(
+            -fsanitize=address
+            -fno-omit-frame-pointer
+            -fno-optimize-sibling-calls
+        )
+        add_link_options(-fsanitize=address)
+    else()
+        message(FATAL_ERROR
+            "NOVA_ENABLE_ASAN is unsupported by ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endif()
+
 # Build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -37,8 +63,27 @@ endif()
 # Optimization flags for Release build
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     if(MSVC)
-        # MSVC aggressive optimization flags
-        add_compile_options(/O2 /Oi /Ot /Ob3 /GL /Gw /Gy)
+        # Multi-config generators share one configure step. Scope Release-only
+        # flags explicitly so Debug/ASan builds keep /RTC and symbols valid.
+        if(CMAKE_CONFIGURATION_TYPES)
+            add_compile_options(
+                $<$<CONFIG:Release>:/O2>
+                $<$<CONFIG:Release>:/Oi>
+                $<$<CONFIG:Release>:/Ot>
+                $<$<CONFIG:Release>:/Ob3>
+                $<$<CONFIG:Release>:/GL>
+                $<$<CONFIG:Release>:/Gw>
+                $<$<CONFIG:Release>:/Gy>
+            )
+            add_link_options(
+                $<$<CONFIG:Release>:/LTCG>
+                $<$<CONFIG:Release>:/OPT:REF>
+                $<$<CONFIG:Release>:/OPT:ICF>
+            )
+        else()
+            add_compile_options(/O2 /Oi /Ot /Ob3 /GL /Gw /Gy)
+            add_link_options(/LTCG /OPT:REF /OPT:ICF)
+        endif()
         # /O2 - Max optimization
         # /Oi - Intrinsic functions
         # /Ot - Favor fast code
@@ -46,7 +91,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
         # /GL - Whole program optimization
         # /Gw - Optimize global data
         # /Gy - Function-level linking
-        add_link_options(/LTCG /OPT:REF /OPT:ICF)
         # /LTCG - Link-time code generation
         # /OPT:REF - Eliminate unreferenced functions
         # /OPT:ICF - COMDAT folding
@@ -309,6 +353,12 @@ else()
     target_include_directories(nova SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 endif()
 target_link_libraries(nova novacore ${llvm_libs})
+if(MSVC)
+    set_property(
+        TARGET novacore nova
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+    )
+endif()
 
 # Windows-specific DIA SDK configuration
 if(MSVC)
@@ -347,6 +397,50 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/conformance"
     )
     set_tests_properties(nova-conformance PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        TIMEOUT 180
+    )
+
+    add_executable(
+        nova-parser-phase1-tests
+        tests/unit/ParserPhase1Test.cpp
+    )
+    target_link_libraries(
+        nova-parser-phase1-tests
+        PRIVATE novacore ${llvm_libs}
+    )
+    target_include_directories(
+        nova-parser-phase1-tests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    target_compile_definitions(
+        nova-parser-phase1-tests
+        PRIVATE NOVA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(MSVC)
+        set_property(
+            TARGET nova-parser-phase1-tests
+            PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+        )
+    endif()
+    add_test(
+        NAME nova-parser-phase1
+        COMMAND nova-parser-phase1-tests
+    )
+
+    add_test(
+        NAME nova-phase0-safety
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_all_tests.py"
+            --nova "$<TARGET_FILE:nova>"
+            --cache-mode compare
+            --safety-only
+            --failure-debug
+            "${CMAKE_CURRENT_BINARY_DIR}/phase0_fail_debug.txt"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/phase0"
+    )
+    set_tests_properties(nova-phase0-safety PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         TIMEOUT 180
     )

@@ -13,10 +13,10 @@
 extern "C" {
 
 // Forward declarations
-void* nova_value_array_create();
-void nova_value_array_push(void* arr, void* value);
+void* nova_value_array_create(int64_t length = 0);
+int64_t nova_value_array_push(void* arr, int64_t value);
 int64_t nova_value_array_length(void* arr);
-void* nova_value_array_at(void* arr, int64_t index);
+int64_t nova_value_array_at(void* arr, int64_t index);
 void* nova_create_string(const char* str);
 
 // Custom hash function for void* values
@@ -49,7 +49,7 @@ void* nova_set_create_from(void* iterable) {
     if (iterable) {
         int64_t len = nova_value_array_length(iterable);
         for (int64_t i = 0; i < len; i++) {
-            void* val = nova_value_array_at(iterable, i);
+            void* val = reinterpret_cast<void*>(nova_value_array_at(iterable, i));
             if (set->lookup.find(val) == set->lookup.end()) {
                 set->values.push_back(val);
                 set->lookup.insert(val);
@@ -130,7 +130,7 @@ void* nova_set_values(void* setPtr) {
 
     NovaSet* set = static_cast<NovaSet*>(setPtr);
     for (void* val : set->values) {
-        nova_value_array_push(result, val);
+        nova_value_array_push(result, reinterpret_cast<int64_t>(val));
     }
 
     return result;
@@ -149,9 +149,9 @@ void* nova_set_entries(void* setPtr) {
     NovaSet* set = static_cast<NovaSet*>(setPtr);
     for (void* val : set->values) {
         void* pair = nova_value_array_create();
-        nova_value_array_push(pair, val);
-        nova_value_array_push(pair, val);
-        nova_value_array_push(result, pair);
+        nova_value_array_push(pair, reinterpret_cast<int64_t>(val));
+        nova_value_array_push(pair, reinterpret_cast<int64_t>(val));
+        nova_value_array_push(result, reinterpret_cast<int64_t>(pair));
     }
 
     return result;

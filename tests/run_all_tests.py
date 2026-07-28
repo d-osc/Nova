@@ -79,6 +79,7 @@ class TestResult:
     stdout: str = ""
     stderr: str = ""
     return_code: int | None = None
+    failure_stage: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,7 +170,30 @@ def discover_tests(paths: list[str]) -> list[Path]:
     return sorted(discovered)
 
 
-def run_test(nova: Path, path: Path, timeout: float) -> TestResult:
+def classify_failure_stage(
+    mode: str, return_code: int | None, stdout: str, stderr: str
+) -> str:
+    """Classify where a failed test stopped without changing its diagnostics."""
+    output = "\n".join((stderr, stdout))
+    if "[NOVA_LINKER_FAILURE]" in output or "Error: Linking failed" in output:
+        return "linker"
+    if (
+        "LLVM IR verification failed" in output
+        or "Assertion failed:" in output and "llvm" in output.lower()
+        or "LLVM IR generation failed" in output
+        or "HIR generation failed" in output
+        or "MIR generation failed" in output
+        or COMPILER_DIAGNOSTIC_RE.search(output)
+    ):
+        return "compiler"
+    if return_code is not None and return_code != 0 and mode == "run":
+        return "emitted-program"
+    return "test-expectation"
+
+
+def run_test(
+    nova: Path, path: Path, timeout: float, cache_mode: str = "uncached"
+) -> TestResult:
     try:
         expected = load_expectations(path)
     except ValueError as exc:
@@ -178,7 +202,7 @@ def run_test(nova: Path, path: Path, timeout: float) -> TestResult:
         return TestResult(path, "SKIP", "no NOVA_EXPECT_EXIT directive")
 
     command = [str(nova), expected.mode, str(path)]
-    if expected.mode == "run":
+    if expected.mode == "run" and cache_mode == "uncached":
         # A compiler rebuild must exercise newly generated code. Nova's native
         # binary cache is keyed by source content, not by compiler version, so
         # cached executables could otherwise hide compiler regressions.
@@ -215,13 +239,84 @@ def run_test(nova: Path, path: Path, timeout: float) -> TestResult:
         if text not in completed.stderr:
             failures.append(f"stderr does not contain {text!r}")
 
+    status = "FAIL" if failures else "PASS"
     return TestResult(
         path,
-        "FAIL" if failures else "PASS",
+        status,
         "; ".join(failures),
         completed.stdout,
         completed.stderr,
         completed.returncode,
+        classify_failure_stage(
+            expected.mode, completed.returncode, completed.stdout, completed.stderr
+        )
+        if status == "FAIL"
+        else "",
+    )
+
+
+def result_signature(result: TestResult) -> tuple[object, ...]:
+    """Stable failure identity used to compare cached and uncached execution."""
+    return (
+        result.status,
+        result.return_code,
+        result.failure_stage,
+        tuple(failure_debug_rows(result)),
+    )
+
+
+def safety_only_result(result: TestResult) -> TestResult:
+    """Accept semantic mismatches while keeping every safety gate mandatory."""
+    if result.status != "FAIL":
+        return result
+    unsigned_code = (
+        result.return_code & 0xFFFFFFFF
+        if result.return_code is not None
+        else 0
+    )
+    unsafe = (
+        result.failure_stage in {"compiler", "linker", "determinism"}
+        or unsigned_code >= 0x80000000
+        or "timed out after" in result.detail
+        or "could not start Nova" in result.detail
+    )
+    if unsafe:
+        return result
+    return TestResult(
+        path=result.path,
+        status="PASS",
+        detail="semantic mismatch accepted by safety-only gate",
+        stdout=result.stdout,
+        stderr=result.stderr,
+        return_code=result.return_code,
+    )
+
+
+def run_test_compare(nova: Path, path: Path, timeout: float) -> TestResult:
+    uncached = run_test(nova, path, timeout, "uncached")
+    # The first cached invocation intentionally warms a compiler-versioned
+    # native cache; the second one verifies the actual cache-hit path.
+    run_test(nova, path, timeout, "cached")
+    cached = run_test(nova, path, timeout, "cached")
+    if result_signature(uncached) == result_signature(cached):
+        return uncached
+
+    return TestResult(
+        path=path,
+        status="FAIL",
+        detail=(
+            "cached/uncached mismatch: "
+            f"uncached={result_signature(uncached)!r}; "
+            f"cached={result_signature(cached)!r}"
+        ),
+        stdout=(
+            "[uncached]\n" + uncached.stdout + "\n[cached]\n" + cached.stdout
+        ),
+        stderr=(
+            "[uncached]\n" + uncached.stderr + "\n[cached]\n" + cached.stderr
+        ),
+        return_code=cached.return_code,
+        failure_stage="determinism",
     )
 
 
@@ -333,12 +428,27 @@ def native_crash_locations(result: TestResult) -> list[FailureDebug]:
             )
 
     if not rows:
+        # A native fault can happen before the runtime prints a generated
+        # symbol. Keep the report actionable by attributing it to main (or the
+        # first declared function) instead of emitting line 0.
+        fallback_line = 0
+        fallback_function = "<native-runtime>"
+        lines = source_lines(result.path)
+        for line_number, line in enumerate(lines, start=1):
+            name = declared_function(line)
+            if name == "main":
+                fallback_line = line_number
+                fallback_function = name
+                break
+            if name and fallback_line == 0:
+                fallback_line = line_number
+                fallback_function = name
         rows.append(
             FailureDebug(
                 relative_debug_path(result.path),
                 format_exit_code(result.return_code or 0),
-                0,
-                "<native-runtime>",
+                fallback_line,
+                fallback_function,
             )
         )
     return rows
@@ -558,6 +668,23 @@ def parse_args() -> argparse.Namespace:
         metavar="PATH",
         help="write file|code|line|function failure locations to PATH",
     )
+    parser.add_argument(
+        "--cache-mode",
+        choices=("uncached", "cached", "compare"),
+        default="uncached",
+        help=(
+            "run without cache, through the native cache, or require both "
+            "paths to produce the same result"
+        ),
+    )
+    parser.add_argument(
+        "--safety-only",
+        action="store_true",
+        help=(
+            "fail only for compiler/linker/native faults, timeouts, startup "
+            "errors, or cached/uncached nondeterminism"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -584,12 +711,20 @@ def main() -> int:
         print("ERROR: no tests found", file=sys.stderr)
         return 2
 
-    results = [run_test(nova, path, args.timeout) for path in tests]
+    if args.cache_mode == "compare":
+        results = [run_test_compare(nova, path, args.timeout) for path in tests]
+    else:
+        results = [
+            run_test(nova, path, args.timeout, args.cache_mode) for path in tests
+        ]
+    if args.safety_only:
+        results = [safety_only_result(result) for result in results]
     for result in results:
         relative = result.path.relative_to(REPO_ROOT)
         suffix = f" - {result.detail}" if result.status == "SKIP" else ""
         print(f"{result.status:4} {relative}{suffix}")
         if result.status == "FAIL":
+            print(f"  stage: {result.failure_stage or 'unknown'}")
             print_failure(result)
 
     failure_debug_path = Path(args.failure_debug).expanduser().resolve()

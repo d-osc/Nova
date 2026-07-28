@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cstdarg>
 #include <iostream>
+#include <string>
+#include <vector>
+#include <unordered_map>
 
 // ==================== ULTRA OPTIMIZATIONS ====================
 // Enable SIMD optimizations for array operations
@@ -525,39 +528,95 @@ const char* value_array_join(ValueArray* array, const char* delimiter) {
     if (!delimiter) delimiter = ",";
 
     size_t delim_len = std::strlen(delimiter);
-    
+
+    // Helper: render a single element into a heap-allocated string. The same
+    // ValueArray can carry raw int64 pointers, raw string pointers, or
+    // NaN-boxed JSValues depending on the producer. Detect at format time so
+    // join works for Object.keys (string ptrs), Object.values (mixed), and
+    // numeric arrays alike.
+    auto render_element = [](int64_t raw, std::string& out) {
+        // JSValue tag check (upper 16 bits). If it's a known tag, decode.
+        namespace r = nova::runtime;
+        r::JSValue v = static_cast<r::JSValue>(static_cast<std::uintptr_t>(raw));
+        if (r::js_value_has_tag(v, r::JS_VALUE_STRING_TAG)) {
+            const char* s = reinterpret_cast<const char*>(
+                static_cast<std::uintptr_t>(v & r::JS_VALUE_PAYLOAD_MASK));
+            out = s ? s : "";
+            return;
+        }
+        if (r::js_value_has_tag(v, r::JS_VALUE_FALSE)) { out = "false"; return; }
+        if (r::js_value_has_tag(v, r::JS_VALUE_TRUE)) { out = "true"; return; }
+        if (r::js_value_has_tag(v, r::JS_VALUE_UNDEFINED)) { out = "undefined"; return; }
+        if (r::js_value_has_tag(v, r::JS_VALUE_NULL)) { out = "null"; return; }
+        // Heuristic: if the value looks like a printable ASCII string pointer
+        // (low address, first byte is a letter/digit/underscore), treat as one.
+        // This catches raw `const char*` elements produced by Object.keys and
+        // friends without breaking the integer path.
+        auto ptrVal = static_cast<std::uintptr_t>(raw);
+        if (ptrVal > 0x10000 && (ptrVal & 0xFFFF000000000000) == 0) {
+            // Could be a real pointer to a C string. Probe carefully.
+            const char* s = reinterpret_cast<const char*>(ptrVal);
+            // Only treat as a string if the first byte is ASCII printable and
+            // not a digit (digits could be misinterpreted by other callers,
+            // but a digit-leading C string from Object.keys is impossible —
+            // keys are identifiers/string-literals).
+            char c = s[0];
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                c == '_' || c == '$' || c == '"' || c == '[') {
+                // Validate that the rest looks like a C string (printable or null).
+                bool looks_like_string = true;
+                for (size_t k = 0; k < 256; ++k) {
+                    char ch = s[k];
+                    if (ch == 0) break;
+                    if (ch < 32 || ch > 126) {
+                        looks_like_string = false;
+                        break;
+                    }
+                }
+                if (looks_like_string) {
+                    out = s;
+                    return;
+                }
+            }
+        }
+        // Otherwise, format as integer.
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%lld", (long long)raw);
+        out = buffer;
+    };
+
     // Calculate total length needed
     size_t total_len = 0;
+    std::vector<std::string> rendered;
+    rendered.reserve(static_cast<size_t>(array->length));
     for (int64 i = 0; i < array->length; i++) {
-        // Convert int64 to string to get length
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%lld", (long long)array->elements[i]);
-        total_len += std::strlen(buffer);
+        std::string s;
+        render_element(array->elements[i], s);
+        total_len += s.size();
+        rendered.push_back(std::move(s));
         if (i < array->length - 1) {
             total_len += delim_len;
         }
     }
-    
+
     // Allocate result
     char* result = static_cast<char*>(malloc(total_len + 1));
     if (!result) return "";
-    
+
     // Build the string
     size_t pos = 0;
     for (int64 i = 0; i < array->length; i++) {
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%lld", (long long)array->elements[i]);
-        size_t len = std::strlen(buffer);
-        std::memcpy(result + pos, buffer, len);
+        size_t len = rendered[i].size();
+        std::memcpy(result + pos, rendered[i].data(), len);
         pos += len;
-        
+
         if (i < array->length - 1) {
             std::memcpy(result + pos, delimiter, delim_len);
             pos += delim_len;
         }
     }
     result[total_len] = 0;
-    
+
     return result;
 }
 
@@ -706,6 +765,7 @@ static void write_back_to_metadata(void* metadata_ptr, nova::runtime::ValueArray
 
 int64_t nova_value_array_push(void* array_ptr, int64_t value) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    if (!array) return 0;  // Graceful no-op for null array (e.g. unresolved capture)
     nova::runtime::value_array_push(array, value);
     write_back_to_metadata(array_ptr, array);
     return array->length;  // Return new length (JavaScript behavior)

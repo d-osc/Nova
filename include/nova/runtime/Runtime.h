@@ -64,7 +64,28 @@ struct String {
 struct Object {
     ObjectHeader header;
     void* properties;
+    // [[Prototype]] link. Null for ordinary objects with no parent; for
+    // objects created via Object.create(proto) / __proto__ / class extends,
+    // points to the prototype object. Property reads (object_get, object_has)
+    // walk this chain when the key is not found locally.
+    void* proto;
+    // Integrity level: 0 = normal/extensible, 1 = sealed, 2 = frozen,
+    // 3 = non-extensible. Set by Object.preventExtensions/seal/freeze and
+    // consulted by object_set/object_delete to enforce invariants.
+    uint8 integrity;
 };
+
+// Property flags for descriptors. Stored in the upper bits of Property::type_id
+// so we don't change Property's layout.
+//   bit 0: writable
+//   bit 1: enumerable
+//   bit 2: configurable
+// A default data property is writable|enumerable|configurable = 0b111 = 7.
+inline constexpr uint32_t PROP_WRITABLE   = 1u << 0;
+inline constexpr uint32_t PROP_ENUMERABLE = 1u << 1;
+inline constexpr uint32_t PROP_CONFIGURABLE = 1u << 2;
+inline constexpr uint32_t PROP_DEFAULT_FLAGS =
+    PROP_WRITABLE | PROP_ENUMERABLE | PROP_CONFIGURABLE;
 
 // Function pointer type
 using FunctionPtr = void*(*)(void*, void**, size_t);

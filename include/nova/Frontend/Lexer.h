@@ -23,6 +23,7 @@ public:
     Token tryLexRegex();
 
     const std::vector<Token>& getAllTokens();
+    bool isJSXMode() const;
     
     bool hasErrors() const { return !errors_.empty(); }
     const std::vector<std::string>& getErrors() const { return errors_; }

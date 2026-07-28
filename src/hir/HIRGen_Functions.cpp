@@ -16,7 +16,14 @@ void HIRGenerator::visit(FunctionExpr& node) {
         currentOrdinaryFunctionUsesThis_ = false;
         const auto savedDynamicBindingNames = dynamicBindingNames_;
         const auto savedDynamicObjectVars = dynamicObjectVars_;
+        const auto savedForcedDynamic = forcedDynamicObjectVars_;
         dynamicObjectVars_.clear();
+        if (node.body) {
+            forcedDynamicObjectVars_ = scanForcedDynamicObjects(node.body.get());
+            for (const auto& forced : forcedDynamicObjectVars_) {
+                dynamicObjectVars_.insert(forced);
+            }
+        }
         dynamicBindingNames_ = analyzeDynamicBindings(node.body.get());
         // Function expression: let f = function(a, b) { return a + b; }
 
@@ -83,6 +90,8 @@ void HIRGenerator::visit(FunctionExpr& node) {
         static int funcExprCounter = 0;
         std::string funcName = node.name.empty() ?
             "__func_" + std::to_string(funcExprCounter++) : node.name;
+        functionParamCounts_[funcName] =
+            static_cast<int64_t>(node.params.size());
         if (!node.restParam.empty()) {
             module_->functionRestParams[funcName] = {
                 node.restParam, node.params.size()};
@@ -295,6 +304,7 @@ void HIRGenerator::visit(FunctionExpr& node) {
         lastValue_ = builder_->createStringConstant(funcName);
         dynamicBindingNames_ = savedDynamicBindingNames;
         dynamicObjectVars_ = savedDynamicObjectVars;
+        forcedDynamicObjectVars_ = savedForcedDynamic;
         currentFunctionIsArrow_ = savedFunctionIsArrow;
         currentOrdinaryFunctionUsesThis_ = savedOrdinaryFunctionUsesThis;
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Function " << funcName << " reference created" << std::endl;
@@ -306,7 +316,14 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
         currentFunctionIsArrow_ = true;
         const auto savedDynamicBindingNames = dynamicBindingNames_;
         const auto savedDynamicObjectVars = dynamicObjectVars_;
+        const auto savedForcedDynamic = forcedDynamicObjectVars_;
         dynamicObjectVars_.clear();
+        if (node.body) {
+            forcedDynamicObjectVars_ = scanForcedDynamicObjects(node.body.get());
+            for (const auto& forced : forcedDynamicObjectVars_) {
+                dynamicObjectVars_.insert(forced);
+            }
+        }
         dynamicBindingNames_ = analyzeDynamicBindings(node.body.get());
         // Arrow function: (a, b) => a + b
         // For now, treat as anonymous function with auto-generated name
@@ -368,6 +385,8 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
         // Generate unique name for arrow function
         static int arrowFuncCounter = 0;
         std::string funcName = "__arrow_" + std::to_string(arrowFuncCounter++);
+        functionParamCounts_[funcName] =
+            static_cast<int64_t>(node.params.size());
         if (!node.restParam.empty()) {
             module_->functionRestParams[funcName] = {
                 node.restParam, node.params.size()};
@@ -558,14 +577,19 @@ void HIRGenerator::visit(ArrowFunctionExpr& node) {
         lastValue_ = builder_->createStringConstant(funcName);
         dynamicBindingNames_ = savedDynamicBindingNames;
         dynamicObjectVars_ = savedDynamicObjectVars;
+        forcedDynamicObjectVars_ = savedForcedDynamic;
         currentFunctionIsArrow_ = savedFunctionIsArrow;
-
         if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Created arrow function '" << funcName << "' with "
                   << node.params.size() << " parameters" << std::endl;
     }
     
 
 void HIRGenerator::visit(FunctionDecl& node) {
+        // Ambient declarations and overload signatures describe types only;
+        // only the implementation signature owns executable code.
+        if (node.isDeclare || node.isOverload || !node.body) {
+            return;
+        }
         const bool savedFunctionIsArrow = currentFunctionIsArrow_;
         HIRValue* savedCurrentThis = currentThis_;
         const bool savedOrdinaryFunctionUsesThis =
@@ -574,7 +598,12 @@ void HIRGenerator::visit(FunctionDecl& node) {
         currentOrdinaryFunctionUsesThis_ = false;
         const auto savedDynamicBindingNames = dynamicBindingNames_;
         const auto savedDynamicObjectVars = dynamicObjectVars_;
+        const auto savedForcedDynamic = forcedDynamicObjectVars_;
         dynamicObjectVars_.clear();
+        forcedDynamicObjectVars_ = scanForcedDynamicObjects(node.body.get());
+        for (const auto& forced : forcedDynamicObjectVars_) {
+            dynamicObjectVars_.insert(forced);
+        }
         dynamicBindingNames_ = analyzeDynamicBindings(node.body.get());
 
         // Helper to convert AST Type::Kind to HIR HIRType::Kind
@@ -611,33 +640,57 @@ void HIRGenerator::visit(FunctionDecl& node) {
             paramTypes.push_back(std::make_shared<HIRType>(HIRType::Kind::I64));      // input
         }
 
-        for (size_t i = 0; i < node.params.size(); ++i) {
-            if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
-                appendPatternParameterTypes(
-                    node.paramPatterns[i].get(), paramTypes);
-                continue;
-            }
-            // Default to I64 for better type inference in closures
-            // JavaScript numbers are typically 64-bit floats, but we use i64 for integers
-            HIRType::Kind typeKind = HIRType::Kind::I64;  // Default to I64 instead of Any
+        // Generator bodies are resumed by nova_generator_next through the
+        // fixed (genPtr, input) ABI. Source arguments live in generator local
+        // slots populated when the generator object is created.
+        if (!node.isGenerator) {
+            for (size_t i = 0; i < node.params.size(); ++i) {
+                if (i < node.paramPatterns.size() && node.paramPatterns[i]) {
+                    appendPatternParameterTypes(
+                        node.paramPatterns[i].get(), paramTypes);
+                    continue;
+                }
 
-            // Use type annotation if available
-            if (i < node.paramTypes.size() && node.paramTypes[i]) {
-                typeKind = convertTypeKind(node.paramTypes[i]->kind);
-            } else if (auto inferred = inferredFunctionParameterTypes_.find(node.name);
-                       inferred != inferredFunctionParameterTypes_.end() &&
-                       i < inferred->second.size()) {
-                typeKind = inferred->second[i];
-            }
+                if (i < node.paramTypes.size() && node.paramTypes[i] &&
+                    node.paramTypes[i]->kind == Type::Kind::Array) {
+                    HIRType::Kind elementKind = HIRType::Kind::JSValue;
+                    if (node.paramTypes[i]->elementType) {
+                        elementKind = convertTypeKind(
+                            node.paramTypes[i]->elementType->kind);
+                        if (elementKind == HIRType::Kind::Any ||
+                            elementKind == HIRType::Kind::Unknown) {
+                            elementKind = HIRType::Kind::JSValue;
+                        }
+                    }
+                    auto elementType =
+                        std::make_shared<HIRType>(elementKind);
+                    auto arrayType =
+                        std::make_shared<HIRArrayType>(elementType, 0);
+                    paramTypes.push_back(
+                        std::make_shared<HIRPointerType>(arrayType, true));
+                    continue;
+                }
 
-            paramTypes.push_back(std::make_shared<HIRType>(typeKind));
+                HIRType::Kind typeKind = HIRType::Kind::I64;
+
+                if (i < node.paramTypes.size() && node.paramTypes[i]) {
+                    typeKind = convertTypeKind(node.paramTypes[i]->kind);
+                } else if (auto inferred =
+                               inferredFunctionParameterTypes_.find(node.name);
+                           inferred != inferredFunctionParameterTypes_.end() &&
+                           i < inferred->second.size()) {
+                    typeKind = inferred->second[i];
+                }
+
+                paramTypes.push_back(std::make_shared<HIRType>(typeKind));
+            }
         }
 
         // Lower a JavaScript rest parameter as one explicit trailing array
         // parameter. Call sites package all excess arguments into this array,
         // avoiding a platform-specific C varargs ABI while preserving the
         // JavaScript-visible rest value.
-        if (!node.restParam.empty()) {
+        if (!node.isGenerator && !node.restParam.empty()) {
             auto restElementType = std::make_shared<HIRType>(
                 HIRType::Kind::JSValue);
             auto restArrayType = std::make_shared<HIRArrayType>(
@@ -1103,6 +1156,7 @@ void HIRGenerator::visit(FunctionDecl& node) {
         lastFunctionName_ = savedFunctionName;  // Restore function name context
         dynamicBindingNames_ = savedDynamicBindingNames;
         dynamicObjectVars_ = savedDynamicObjectVars;
+        forcedDynamicObjectVars_ = savedForcedDynamic;
         currentFunctionIsArrow_ = savedFunctionIsArrow;
         currentOrdinaryFunctionUsesThis_ = savedOrdinaryFunctionUsesThis;
     }

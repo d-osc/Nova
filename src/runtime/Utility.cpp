@@ -1624,6 +1624,15 @@ int64_t nova_exception_pending() {
     return g_exception_pending ? 1 : 0;
 }
 
+// Read-only accessor for the current try-nesting depth. Used by throw
+// helpers in Error.cpp to decide whether to print the uncaught banner
+// (only when depth == 0 — i.e. the throw will actually exit) or stay
+// silent (depth > 0 — the throw will be caught by a pending-exception
+// poll in the HIR-generated code).
+int64_t nova_try_depth_state() {
+    return g_try_depth;
+}
+
 // Get exception value
 int64_t nova_get_exception() {
     return g_exception_value;

@@ -29,12 +29,17 @@ std::uint64_t nova_value_from_bool(std::int64_t value);
 std::uint64_t nova_value_from_string(const char* value);
 std::uint64_t nova_value_from_object(void* value);
 void* nova_value_to_object(std::uint64_t value);
+const char* nova_value_to_string_ptr(std::uint64_t value);
 std::int64_t nova_value_to_boolean(std::uint64_t value);
 std::int64_t nova_value_is_nullish(std::uint64_t value);
 std::int64_t nova_value_is_undefined(std::uint64_t value);
 std::int64_t nova_value_strict_equal(std::uint64_t lhs, std::uint64_t rhs);
 std::int64_t nova_value_abstract_equal(std::uint64_t lhs, std::uint64_t rhs);
 double nova_value_to_number(std::uint64_t value);
+std::int64_t nova_value_is_nan(std::uint64_t value);
+std::uint64_t nova_value_to_number_boxed(std::uint64_t value);
+const char* nova_value_to_string_alloc(std::uint64_t value);
+std::uint64_t nova_value_to_primitive(std::uint64_t value, std::int32_t hint);
 std::uint64_t nova_value_add(std::uint64_t lhs, std::uint64_t rhs);
 std::uint64_t nova_value_binary_numeric(std::uint64_t lhs, std::uint64_t rhs,
                                         std::int64_t operation);
@@ -43,4 +48,5 @@ std::int64_t nova_value_compare(std::uint64_t lhs, std::uint64_t rhs,
 std::uint64_t nova_value_unary_numeric(std::uint64_t value,
                                        std::int64_t operation);
 void nova_console_log_value(std::uint64_t value);
+std::int64_t nova_value_length(std::uint64_t value);
 }

@@ -49,6 +49,32 @@ double string_to_number(const char* text) {
     if (!text) return std::numeric_limits<double>::quiet_NaN();
     while (*text && std::isspace(static_cast<unsigned char>(*text))) ++text;
     if (!*text) return 0.0;
+    // Spec 7.1.4.1: StringToNumber with full grammar including Infinity and 0x.
+    if (std::strncmp(text, "Infinity", 8) == 0) {
+        const char* rest = text + 8;
+        while (*rest && std::isspace(static_cast<unsigned char>(*rest))) ++rest;
+        if (*rest == '\0') return std::numeric_limits<double>::infinity();
+    }
+    if (std::strncmp(text, "+Infinity", 9) == 0) {
+        const char* rest = text + 9;
+        while (*rest && std::isspace(static_cast<unsigned char>(*rest))) ++rest;
+        if (*rest == '\0') return std::numeric_limits<double>::infinity();
+    }
+    if (std::strncmp(text, "-Infinity", 9) == 0) {
+        const char* rest = text + 9;
+        while (*rest && std::isspace(static_cast<unsigned char>(*rest))) ++rest;
+        if (*rest == '\0') return -std::numeric_limits<double>::infinity();
+    }
+    // Hex literal: 0x... or 0X... (no sign allowed by spec for hex).
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        const char* hexStart = text + 2;
+        char* end = nullptr;
+        const unsigned long long value = std::strtoull(hexStart, &end, 16);
+        if (end == hexStart) return std::numeric_limits<double>::quiet_NaN();
+        while (*end && std::isspace(static_cast<unsigned char>(*end))) ++end;
+        if (*end != '\0') return std::numeric_limits<double>::quiet_NaN();
+        return static_cast<double>(value);
+    }
     char* end = nullptr;
     const double number = std::strtod(text, &end);
     if (end == text) return std::numeric_limits<double>::quiet_NaN();
@@ -110,6 +136,26 @@ void* nova_value_to_object(std::uint64_t value) {
     if (!js_value_has_tag(value, JS_VALUE_OBJECT_TAG)) return nullptr;
     return reinterpret_cast<void*>(static_cast<std::uintptr_t>(
         value & JS_VALUE_PAYLOAD_MASK));
+}
+
+const char* nova_value_to_string_ptr(std::uint64_t value) {
+    if (js_value_has_tag(value, JS_VALUE_STRING_TAG)) {
+        return string_payload(value);
+    }
+    static thread_local std::string converted;
+    converted = value_to_string(value);
+    return converted.c_str();
+}
+
+// Helper for the `in` operator: convert an integer key like 0, 1, 42 into a
+// heap-allocated C string. The lifetime is owned by the caller (the HIR
+// `in` path is a transient lookup), so we leak intentionally like other key
+// material generated during property access.
+const char* nova_value_key_to_string(std::int64_t value) {
+    std::string s = std::to_string(value);
+    char* buf = new char[s.size() + 1];
+    std::memcpy(buf, s.c_str(), s.size() + 1);
+    return buf;
 }
 
 std::int64_t nova_value_to_boolean(std::uint64_t value) {
@@ -174,6 +220,32 @@ std::int64_t nova_value_abstract_equal(std::uint64_t lhs, std::uint64_t rhs) {
 
 double nova_value_to_number(std::uint64_t value) {
     return value_to_number(value);
+}
+
+std::int64_t nova_value_is_nan(std::uint64_t value) {
+    if (!is_number(value)) return 0;
+    return std::isnan(bits_double(value)) ? 1 : 0;
+}
+
+std::uint64_t nova_value_to_number_boxed(std::uint64_t value) {
+    return double_bits(value_to_number(value));
+}
+
+const char* nova_value_to_string_alloc(std::uint64_t value) {
+    const std::string text = value_to_string(value);
+    char* storage = static_cast<char*>(std::malloc(text.size() + 1));
+    if (!storage) return "";
+    std::memcpy(storage, text.c_str(), text.size() + 1);
+    return storage;
+}
+
+std::uint64_t nova_value_to_primitive(std::uint64_t value, std::int32_t hint) {
+    // Phase 2.1 stub: objects need valueOf/toString dispatch (added in 2.2
+    // when the property storage and prototype chain land). For now, only
+    // primitive values are handled — objects return themselves so the
+    // existing arithmetic paths keep working for the common case.
+    (void)hint;
+    return value;
 }
 
 std::uint64_t nova_value_add(std::uint64_t lhs, std::uint64_t rhs) {
@@ -257,6 +329,33 @@ void nova_console_log_value(std::uint64_t value) {
         std::printf("%g", bits_double(value));
     }
     std::fflush(stdout);
+}
+
+// Returns the "length" of a JSValue-typed value, used by HIR when .length is
+// accessed on a value whose static type is not known (e.g. an unannotated
+// arrow-function parameter). Dispatches on the value's tag:
+//   - String: strlen of the payload
+//   - Object (ValueArray metadata or runtime Array): the length field at
+//     offset 24 of the metadata struct
+//   - Number: coerces to integer
+//   - Undefined/Null: 0
+std::int64_t nova_value_length(std::uint64_t value) {
+    if (value == JS_VALUE_UNDEFINED || value == JS_VALUE_NULL) return 0;
+    if (js_value_has_tag(value, JS_VALUE_STRING_TAG)) {
+        const char* s = string_payload(value);
+        return s ? static_cast<std::int64_t>(std::strlen(s)) : 0;
+    }
+    if (js_value_has_tag(value, JS_VALUE_OBJECT_TAG)) {
+        // Treat payload as a ValueArray metadata pointer and read the
+        // length field at offset 24 (after the 24-byte ObjectHeader).
+        void* payload = reinterpret_cast<void*>(
+            static_cast<std::uintptr_t>(value & JS_VALUE_PAYLOAD_MASK));
+        if (!payload) return 0;
+        const char* bytes = static_cast<const char*>(payload);
+        return *reinterpret_cast<const std::int64_t*>(bytes + 24);
+    }
+    // Numeric: truncate to int.
+    return static_cast<std::int64_t>(bits_double(value));
 }
 
 } // extern "C"

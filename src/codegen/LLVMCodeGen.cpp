@@ -347,10 +347,19 @@ bool LLVMCodeGen::emitExecutable(const std::string& filename) {
 
     // Step 3: Compile IR to executable using clang++ with runtime library
     std::string compileCmd;
-#ifdef _WIN32
-    compileCmd = "clang++ -O0 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lmsvcrt -lkernel32 -lWs2_32 -lAdvapi32 -Wno-override-module 2>&1";
+#ifdef NOVA_ENABLE_ASAN
+    const std::string sanitizerLinkFlags = " -fsanitize=address";
 #else
-    compileCmd = "clang++ -O0 \"" + irFile + "\" \"" + novacoreLib + "\" -o \"" + filename + "\" -lc -lstdc++ 2>&1";
+    const std::string sanitizerLinkFlags;
+#endif
+#ifdef _WIN32
+    compileCmd = "clang++ -O0 -g \"" + irFile + "\" \"" + novacoreLib +
+        "\" -o \"" + filename + "\"" + sanitizerLinkFlags +
+        " -lmsvcrt -lkernel32 -lWs2_32 -lAdvapi32 -Wno-override-module 2>&1";
+#else
+    compileCmd = "clang++ -O0 -g \"" + irFile + "\" \"" + novacoreLib +
+        "\" -o \"" + filename + "\"" + sanitizerLinkFlags +
+        " -lc -lstdc++ 2>&1";
 #endif
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Compile command: " << compileCmd << std::endl;
 
@@ -365,6 +374,8 @@ bool LLVMCodeGen::emitExecutable(const std::string& filename) {
     system(copyCmd.c_str());
 
     if (result != 0) {
+        std::cerr << "[NOVA_LINKER_FAILURE] native executable generation failed"
+                  << std::endl;
         if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Compilation failed with code " << result << std::endl;
         return false;
     }
@@ -546,10 +557,17 @@ int LLVMCodeGen::executeMain() {
 #endif
 
     std::string linkCmd;
-#ifdef _WIN32
-    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"" + novacoreLib + "\" -lmsvcrt -lkernel32";
+#ifdef NOVA_ENABLE_ASAN
+    const std::string sanitizerLinkFlags = " -fsanitize=address";
 #else
-    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"" + novacoreLib + "\" -lc -lstdc++";
+    const std::string sanitizerLinkFlags;
+#endif
+#ifdef _WIN32
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"" +
+        novacoreLib + "\"" + sanitizerLinkFlags + " -lmsvcrt -lkernel32";
+#else
+    linkCmd = "clang -o \"" + exeFile + "\" \"" + objFile + "\" \"" +
+        novacoreLib + "\"" + sanitizerLinkFlags + " -lc -lstdc++";
 #endif
     if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Running: " << linkCmd << std::endl;
     int linkResult = system(linkCmd.c_str());
@@ -6989,9 +7007,12 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
                 // Store the nested struct type using (parent struct, field index) as key
                 // This allows nested field access to work
                 nestedStructTypeMap[std::make_pair(structPtr, i)] = nestedStructTypes[i];
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Stored nested struct type for field " << i << " in nestedStructTypeMap: ";
-                nestedStructTypes[i]->print(llvm::errs());
-                std::cerr << std::endl;
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: Stored nested struct type for field "
+                              << i << " in nestedStructTypeMap: ";
+                    nestedStructTypes[i]->print(llvm::errs());
+                    std::cerr << std::endl;
+                }
             }
         }
 
@@ -7303,6 +7324,16 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                 }
                 isMetadataFieldAccess = true;
 
+                if (fieldIndex >= expectedMetadataType->getNumElements()) {
+                    std::cerr
+                        << "ERROR LLVM: array metadata field index "
+                        << fieldIndex << " is out of range for "
+                        << expectedMetadataType->getNumElements()
+                        << " fields" << std::endl;
+                    return llvm::ConstantInt::get(
+                        llvm::Type::getInt64Ty(*context), 0);
+                }
+
                 // Access the struct field directly without extracting elements pointer
                 llvm::Value* fieldPtr = builder->CreateStructGEP(
                     expectedMetadataType,
@@ -7400,6 +7431,22 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
 
                 if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Accessing regular struct field " << fieldIndex << " (actual index " << actualFieldIndex << " accounting for ObjectHeader)" << std::endl;
 
+                // Missing/dynamic JavaScript properties are represented as
+                // undefined. Never ask LLVM for a non-existent struct element:
+                // Debug builds assert and Release builds otherwise emit an
+                // invalid GEP that can become an access violation.
+                if (actualFieldIndex >= structType->getNumElements()) {
+                    if(NOVA_DEBUG) {
+                        std::cerr
+                            << "DEBUG LLVM: Struct field index "
+                            << actualFieldIndex << " is out of range for "
+                            << structType->getNumElements()
+                            << " fields; lowering as undefined" << std::endl;
+                    }
+                    return llvm::ConstantInt::get(
+                        llvm::Type::getInt64Ty(*context), 0);
+                }
+
                 // CRITICAL FIX: Use actualPtr (which has been converted from i64 to pointer if needed)
                 // instead of loadedArrayPtr (which may be an i64 integer value)
                 llvm::Value* structAccessPtr = actualPtr;
@@ -7433,9 +7480,12 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
                     auto nestedTypeIt = nestedStructTypeMap.find(nestedTypeKey);
 
                     if (nestedTypeIt != nestedStructTypeMap.end()) {
-                        if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found nested struct type in nestedStructTypeMap: ";
-                        nestedTypeIt->second->print(llvm::errs());
-                        std::cerr << std::endl;
+                        if(NOVA_DEBUG) {
+                            std::cerr << "DEBUG LLVM: Found nested struct type "
+                                         "in nestedStructTypeMap: ";
+                            nestedTypeIt->second->print(llvm::errs());
+                            std::cerr << std::endl;
+                        }
 
                         // Create a temporary alloca to store the loaded pointer
                         // This allows us to do GEP on it for nested field access
@@ -7472,6 +7522,24 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
         }
     }
 
+    // LLVM struct GEP indices must be compile-time constants. JavaScript can
+    // reach this path for unsupported dynamic object indexing (for example a
+    // custom iterable before its protocol lowering is selected). Returning
+    // undefined/zero keeps compilation deterministic instead of constructing
+    // invalid IR or dereferencing an invalid field in Release builds.
+    if (auto* structType = llvm::dyn_cast<llvm::StructType>(arrayType)) {
+        auto* constantIndex = llvm::dyn_cast<llvm::ConstantInt>(secondIndex);
+        if (!constantIndex ||
+            constantIndex->getZExtValue() >= structType->getNumElements()) {
+            if(NOVA_DEBUG) {
+                std::cerr << "DEBUG LLVM: refusing dynamic/out-of-range struct "
+                             "index; lowering as undefined" << std::endl;
+            }
+            return llvm::ConstantInt::get(
+                llvm::Type::getInt64Ty(*context), 0);
+        }
+    }
+
     std::vector<llvm::Value*> indices = {
         llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 0),  // Dereference pointer
         secondIndex                                                     // Element/field index
@@ -7492,9 +7560,12 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             unsigned fieldIndex = constIndex->getZExtValue();
             if (fieldIndex < structType->getNumElements()) {
                 elementType = structType->getElementType(fieldIndex);
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Field type at index " << fieldIndex << ": ";
-                elementType->print(llvm::errs());
-                std::cerr << std::endl;
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: Field type at index "
+                              << fieldIndex << ": ";
+                    elementType->print(llvm::errs());
+                    std::cerr << std::endl;
+                }
             }
         }
     } else if (auto* arrayType_llvm = llvm::dyn_cast<llvm::ArrayType>(arrayType)) {
@@ -7525,9 +7596,13 @@ llvm::Value* LLVMCodeGen::generateGetElement(mir::MIRGetElementRValue* getElemOp
             auto nestedTypeIt = nestedStructTypeMap.find(nestedTypeKey);
 
             if (nestedTypeIt != nestedStructTypeMap.end()) {
-                if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Found nested struct type in nestedStructTypeMap for field " << fieldIndex << ": ";
-                nestedTypeIt->second->print(llvm::errs());
-                std::cerr << std::endl;
+                if(NOVA_DEBUG) {
+                    std::cerr << "DEBUG LLVM: Found nested struct type in "
+                                 "nestedStructTypeMap for field "
+                              << fieldIndex << ": ";
+                    nestedTypeIt->second->print(llvm::errs());
+                    std::cerr << std::endl;
+                }
 
                 // Create a temporary alloca to store the loaded pointer
                 // This allows us to do GEP on it for nested field access

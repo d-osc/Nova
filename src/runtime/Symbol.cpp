@@ -316,4 +316,46 @@ int64_t nova_is_symbol(void* ptr) {
     return (sym->id >= 1 && sym->id < symbolCounter.load()) ? 1 : 0;
 }
 
+// Convert a symbol pointer to a stable string key for use as a property
+// name in the runtime Object property map. The resulting string includes
+// the unique id so two distinct symbols with the same description don't
+// collide. If the input isn't actually a Nova symbol (defensive: some
+// callers may pass string pointers via the same code path), we treat it
+// as a literal C string key.
+const char* nova_symbol_to_key(void* symPtr) {
+    if (!symPtr) {
+        char* buf = new char[16];
+        std::snprintf(buf, 16, "__sym_null");
+        return buf;
+    }
+    NovaSymbol* sym = static_cast<NovaSymbol*>(symPtr);
+    // Use a defensive range check; if the pointer doesn't look like a symbol
+    // (negative/zero id, or beyond the counter), treat it as a string.
+    if (sym->id >= 1 && sym->id < symbolCounter.load()) {
+        char* buf = new char[48];
+        std::snprintf(buf, 48, "__sym_%lld",
+            static_cast<long long>(sym->id));
+        return buf;
+    }
+    // Not a symbol: assume C-string key already.
+    return static_cast<const char*>(symPtr);
+}
+
+// Convert a string key back into a stable symbol identifier suitable for
+// comparison with `symbol` references. Returns true (1) when the key was
+// produced by nova_symbol_to_key and writes the original id to *outId.
+int64_t nova_symbol_key_id(const char* key, int64_t* outId) {
+    if (!key) return 0;
+    static const char prefix[] = "__sym_";
+    for (size_t i = 0; i < sizeof(prefix) - 1; ++i) {
+        if (key[i] != prefix[i]) return 0;
+    }
+    const char* rest = key + (sizeof(prefix) - 1);
+    char* end = nullptr;
+    long long parsed = std::strtoll(rest, &end, 10);
+    if (end == rest || *end != '\0') return 0;
+    if (outId) *outId = static_cast<int64_t>(parsed);
+    return 1;
+}
+
 } // extern "C"

@@ -232,6 +232,269 @@ std::unordered_set<std::string> HIRGenerator::analyzeDynamicBindings(Stmt* state
     return scanner.result;
 }
 
+namespace {
+// AST scanner that detects variables used in dynamic-object contexts.
+// Populates a set of variable names that must be emitted as runtime
+// nova::runtime::Object* instead of fixed-layout __obj_N structs.
+//
+// Detected patterns (where X is an Identifier reference):
+//   Object.create(X)               - X is a prototype
+//   Object.defineProperty(X,...)   - X is target
+//   Object.defineProperties(X,...) - X is target
+//   Object.preventExtensions(X)    - X is target
+//   Object.seal(X) / freeze(X)     - X is target
+//   Object.keys(X) / values(X) / entries(X) / getOwnPropertyNames(X)
+//   Object.getOwnPropertyDescriptor(X,...)
+//   Object.getPrototypeOf(X) / setPrototypeOf(X,...)
+//   Object.hasOwn(X,...) / Object.is(X, X)
+//   Reflect.ownKeys/get/set/has/deleteProperty(X,...) / getPrototypeOf(X)
+//   delete X.foo                   - X is receiver
+//   foo in X                       - X is receiver
+//   X.hasOwnProperty/isPrototypeOf/propertyIsEnumerable(...) - X is receiver
+//   new Proxy(X, ...)              - X is target
+//   new Proxy(..., X)              - X is handler
+//   Object.assign(target, source) - target/source dynamic if not literal {}
+class ForcedDynamicObjectScanner {
+public:
+    std::unordered_set<std::string> result;
+
+    void scanStatement(Stmt* statement) {
+        if (!statement) return;
+        if (auto* block = dynamic_cast<BlockStmt*>(statement)) {
+            for (auto& item : block->statements) scanStatement(item.get());
+        } else if (auto* expression = dynamic_cast<ExprStmt*>(statement)) {
+            scanExpression(expression->expression.get());
+        } else if (auto* variables = dynamic_cast<VarDeclStmt*>(statement)) {
+            for (auto& declarator : variables->declarations) {
+                scanExpression(declarator.init.get());
+            }
+        } else if (auto* conditional = dynamic_cast<IfStmt*>(statement)) {
+            scanExpression(conditional->test.get());
+            scanStatement(conditional->consequent.get());
+            scanStatement(conditional->alternate.get());
+        } else if (auto* whileLoop = dynamic_cast<WhileStmt*>(statement)) {
+            scanExpression(whileLoop->test.get());
+            scanStatement(whileLoop->body.get());
+        } else if (auto* doWhileLoop = dynamic_cast<DoWhileStmt*>(statement)) {
+            scanStatement(doWhileLoop->body.get());
+            scanExpression(doWhileLoop->test.get());
+        } else if (auto* forLoop = dynamic_cast<ForStmt*>(statement)) {
+            scanStatement(forLoop->init.get());
+            scanExpression(forLoop->test.get());
+            scanExpression(forLoop->update.get());
+            scanStatement(forLoop->body.get());
+        } else if (auto* forInLoop = dynamic_cast<ForInStmt*>(statement)) {
+            scanExpression(forInLoop->right.get());
+            scanStatement(forInLoop->body.get());
+        } else if (auto* forOfLoop = dynamic_cast<ForOfStmt*>(statement)) {
+            scanExpression(forOfLoop->right.get());
+            scanStatement(forOfLoop->body.get());
+        } else if (auto* returned = dynamic_cast<ReturnStmt*>(statement)) {
+            scanExpression(returned->argument.get());
+        } else if (auto* thrown = dynamic_cast<ThrowStmt*>(statement)) {
+            scanExpression(thrown->argument.get());
+        } else if (auto* labeled = dynamic_cast<LabeledStmt*>(statement)) {
+            scanStatement(labeled->statement.get());
+        } else if (auto* switchStatement = dynamic_cast<SwitchStmt*>(statement)) {
+            scanExpression(switchStatement->discriminant.get());
+            for (auto& item : switchStatement->cases) {
+                scanExpression(item->test.get());
+                for (auto& consequent : item->consequent) scanStatement(consequent.get());
+            }
+        } else if (auto* tryStatement = dynamic_cast<TryStmt*>(statement)) {
+            scanStatement(tryStatement->block.get());
+            if (tryStatement->handler) scanStatement(tryStatement->handler->body.get());
+            scanStatement(tryStatement->finalizer.get());
+        } else if (auto* declaration = dynamic_cast<DeclStmt*>(statement)) {
+            if (auto* function = dynamic_cast<FunctionDecl*>(declaration->declaration.get())) {
+                if (function->body) scanStatement(function->body.get());
+            } else if (auto* classDecl =
+                           dynamic_cast<ClassDecl*>(declaration->declaration.get())) {
+                for (auto& method : classDecl->methods) {
+                    if (method.body) scanStatement(method.body.get());
+                }
+            }
+        }
+    }
+
+private:
+    void scanExpression(Expr* expression) {
+        if (!expression) return;
+        if (auto* binary = dynamic_cast<BinaryExpr*>(expression)) {
+            // `foo in X` — X is RHS, must be dynamic.
+            if (binary->op == BinaryExpr::Op::In) {
+                addIfIdentifier(binary->right.get());
+            }
+            scanExpression(binary->left.get());
+            scanExpression(binary->right.get());
+        } else if (auto* unary = dynamic_cast<UnaryExpr*>(expression)) {
+            // `delete X.foo` — X must be dynamic.
+            if (unary->op == UnaryExpr::Op::Delete) {
+                if (auto* member = dynamic_cast<MemberExpr*>(unary->operand.get())) {
+                    addIfIdentifier(member->object.get());
+                }
+            }
+            scanExpression(unary->operand.get());
+        } else if (auto* update = dynamic_cast<UpdateExpr*>(expression)) {
+            scanExpression(update->argument.get());
+        } else if (auto* call = dynamic_cast<CallExpr*>(expression)) {
+            scanCall(call);
+            scanExpression(call->callee.get());
+            for (auto& argument : call->arguments) scanExpression(argument.get());
+        } else if (auto* member = dynamic_cast<MemberExpr*>(expression)) {
+            // X.isPrototypeOf(...) / X.hasOwnProperty(...) / X.propertyIsEnumerable(...)
+            // — receiver must be dynamic. The actual call visitor handles the
+            // call form; here we catch the member access alone in case it's
+            // passed around without being called.
+            if (auto* propIdent = dynamic_cast<Identifier*>(member->property.get())) {
+                if (propIdent->name == "isPrototypeOf" ||
+                    propIdent->name == "hasOwnProperty" ||
+                    propIdent->name == "propertyIsEnumerable") {
+                    addIfIdentifier(member->object.get());
+                }
+            }
+            scanExpression(member->object.get());
+            scanExpression(member->property.get());
+        } else if (auto* conditional = dynamic_cast<ConditionalExpr*>(expression)) {
+            scanExpression(conditional->test.get());
+            scanExpression(conditional->consequent.get());
+            scanExpression(conditional->alternate.get());
+        } else if (auto* array = dynamic_cast<ArrayExpr*>(expression)) {
+            for (auto& element : array->elements) scanExpression(element.get());
+        } else if (auto* object = dynamic_cast<ObjectExpr*>(expression)) {
+            for (auto& property : object->properties) {
+                if (property.isComputed) scanExpression(property.key.get());
+                scanExpression(property.value.get());
+            }
+        } else if (auto* parenthesized = dynamic_cast<ParenthesizedExpr*>(expression)) {
+            scanExpression(parenthesized->expression.get());
+        } else if (auto* sequence = dynamic_cast<SequenceExpr*>(expression)) {
+            for (auto& item : sequence->expressions) scanExpression(item.get());
+        } else if (auto* spread = dynamic_cast<SpreadExpr*>(expression)) {
+            scanExpression(spread->argument.get());
+        } else if (auto* awaited = dynamic_cast<AwaitExpr*>(expression)) {
+            scanExpression(awaited->argument.get());
+        } else if (auto* yielded = dynamic_cast<YieldExpr*>(expression)) {
+            scanExpression(yielded->argument.get());
+        } else if (auto* assertion = dynamic_cast<AsExpr*>(expression)) {
+            scanExpression(assertion->expression.get());
+        } else if (auto* satisfies = dynamic_cast<SatisfiesExpr*>(expression)) {
+            scanExpression(satisfies->expression.get());
+        } else if (auto* nonNull = dynamic_cast<NonNullExpr*>(expression)) {
+            scanExpression(nonNull->expression.get());
+        }
+    }
+
+    void scanCall(CallExpr* call) {
+        // Identify Object.X(...) and Reflect.X(...) static method calls.
+        auto* member = dynamic_cast<MemberExpr*>(call->callee.get());
+        if (!member) return;
+        auto* objectIdent = dynamic_cast<Identifier*>(member->object.get());
+        auto* propIdent = dynamic_cast<Identifier*>(member->property.get());
+        if (!objectIdent || !propIdent) return;
+
+        const auto& ns = objectIdent->name;
+        const auto& method = propIdent->name;
+
+        // Patterns where the FIRST argument is the target and must be dynamic.
+        // (These are the cases where we need real runtime Object semantics.)
+        if (ns == "Object") {
+            if (method == "create") {
+                // Object.create(proto) — proto is argument 0.
+                if (call->arguments.size() >= 1) {
+                    addIfIdentifier(call->arguments[0].get());
+                }
+                return;
+            }
+            if (method == "defineProperty" || method == "defineProperties" ||
+                method == "getOwnPropertyDescriptor" ||
+                method == "getOwnPropertyDescriptors" ||
+                method == "getOwnPropertyNames" || method == "getOwnPropertySymbols" ||
+                method == "keys" || method == "values" || method == "entries" ||
+                method == "hasOwn" || method == "getPrototypeOf" ||
+                method == "setPrototypeOf" || method == "isExtensible" ||
+                method == "preventExtensions" || method == "seal" || method == "freeze" ||
+                method == "isFrozen" || method == "isSealed" ||
+                method == "fromEntries" || method == "groupBy") {
+                if (!call->arguments.empty()) {
+                    addIfIdentifier(call->arguments[0].get());
+                }
+                return;
+            }
+            if (method == "assign") {
+                // Object.assign(target, source) — both args dynamic unless literal {}.
+                for (auto& arg : call->arguments) {
+                    if (!dynamic_cast<ObjectExpr*>(arg.get())) {
+                        addIfIdentifier(arg.get());
+                    }
+                }
+                return;
+            }
+            if (method == "is") {
+                // Object.is(a, b) — doesn't require dynamic, both can be primitives.
+                return;
+            }
+        }
+        if (ns == "Reflect") {
+            if (method == "get" || method == "set" || method == "has" ||
+                method == "deleteProperty" || method == "ownKeys" ||
+                method == "getPrototypeOf" || method == "apply" ||
+                method == "construct" || method == "defineProperty" ||
+                method == "isExtensible" || method == "preventExtensions") {
+                if (!call->arguments.empty()) {
+                    addIfIdentifier(call->arguments[0].get());
+                }
+                return;
+            }
+        }
+    }
+
+    void addIfIdentifier(Expr* expression) {
+        // Walk through common wrappers to find an Identifier.
+        while (auto* asExpr = dynamic_cast<AsExpr*>(expression)) {
+            expression = asExpr->expression.get();
+        }
+        while (auto* nonNull = dynamic_cast<NonNullExpr*>(expression)) {
+            expression = nonNull->expression.get();
+        }
+        while (auto* paren = dynamic_cast<ParenthesizedExpr*>(expression)) {
+            expression = paren->expression.get();
+        }
+        if (auto* ident = dynamic_cast<Identifier*>(expression)) {
+            result.insert(ident->name);
+        }
+    }
+};
+} // namespace
+
+std::unordered_set<std::string> HIRGenerator::scanForcedDynamicObjects(Stmt* statement) {
+    ForcedDynamicObjectScanner scanner;
+    scanner.scanStatement(statement);
+    return scanner.result;
+}
+
+bool HIRGenerator::targetForcedDynamic(Expr* expression) {
+    while (expression) {
+        if (auto* asExpr = dynamic_cast<AsExpr*>(expression)) {
+            expression = asExpr->expression.get();
+            continue;
+        }
+        if (auto* nonNull = dynamic_cast<NonNullExpr*>(expression)) {
+            expression = nonNull->expression.get();
+            continue;
+        }
+        if (auto* paren = dynamic_cast<ParenthesizedExpr*>(expression)) {
+            expression = paren->expression.get();
+            continue;
+        }
+        if (auto* ident = dynamic_cast<Identifier*>(expression)) {
+            return dynamicObjectVars_.count(ident->name) > 0;
+        }
+        return false;
+    }
+    return false;
+}
+
 bool HIRGenerator::hasHeterogeneousReturns(Stmt* statement) {
     DynamicBindingScanner scanner;
     scanner.scanStatement(statement);
@@ -761,8 +1024,77 @@ void HIRGenerator::visit(VarDeclStmt& node) {
             // Evaluate the initializer first to get its type
             HIRValue* initValue = nullptr;
             if (decl.init) {
+                // Tell the ObjectExpr visitor what name this variable will
+                // bind to, so it can decide whether to emit a runtime Object.
+                const std::string savedDeclName = currentDeclName_;
+                currentDeclName_ = decl.name;
                 decl.init->accept(*this);
+                currentDeclName_ = savedDeclName;
                 initValue = lastValue_;
+            }
+
+            // Preserve dynamic-object semantics through simple aliases and
+            // TypeScript `as` assertions, especially catch values such as
+            // `const wrapped = error as any`.
+            Expr* dynamicAliasSource = decl.init.get();
+            bool preservesDynamicObject = true;
+            while (auto* assertion =
+                       dynamic_cast<AsExpr*>(dynamicAliasSource)) {
+                if (!assertion->targetType ||
+                    assertion->targetType->kind != Type::Kind::Any) {
+                    preservesDynamicObject = false;
+                }
+                dynamicAliasSource = assertion->expression.get();
+            }
+            if (auto* source =
+                    dynamic_cast<Identifier*>(dynamicAliasSource);
+                preservesDynamicObject && source &&
+                dynamicObjectVars_.count(source->name) > 0) {
+                dynamicObjectVars_.insert(decl.name);
+            }
+            // Object.create / Object.fromEntries / Object.assign({}, ...)
+            // produce runtime Object* instances, not fixed-layout __obj_N
+            // structs. Register the resulting variable as dynamic so subsequent
+            // property access uses nova_dynamic_object_get_tagged and writes
+            // use nova_dynamic_object_set_tagged.
+            if (lastWasDynamicObjectResult_) {
+                dynamicObjectVars_.insert(decl.name);
+                lastWasDynamicObjectResult_ = false;
+            }
+            // Property accesses on a dynamic object (e.g. `const cause =
+            // err.cause`) yield a JSValue. Treat the new variable as a
+            // dynamic object too so subsequent property reads route through
+            // nova_dynamic_object_get_tagged instead of being elided.
+            // Exception: when the property access is known to return a
+            // strongly-typed value (runtime array via .errors, error name/
+            // message string, etc.), the visitor sets lastWasRuntimeArray_
+            // (or a strongly-typed flag) and the variable should NOT be
+            // promoted to dynamic — otherwise `.length` on the result would
+            // go through nova_dynamic_object_get_tagged and return undefined.
+            if (auto* member =
+                    dynamic_cast<MemberExpr*>(dynamicAliasSource)) {
+                // Walk past `as any` wrappers on the receiver too.
+                Expr* receiver = member->object.get();
+                while (auto* a = dynamic_cast<AsExpr*>(receiver)) {
+                    receiver = a->expression.get();
+                }
+                if (auto* baseIdent =
+                        dynamic_cast<Identifier*>(receiver)) {
+                    if (dynamicObjectVars_.count(baseIdent->name) > 0 &&
+                        !lastWasRuntimeArray_) {
+                        dynamicObjectVars_.insert(decl.name);
+                    }
+                }
+            }
+
+            // Builtin Error instances (NovaError*) expose their properties
+            // (name, message, cause, stack, errors) through the runtime
+            // special-case in nova_dynamic_object_get_tagged. Mark variables
+            // initialized from `new <BuiltinError>(...)` as dynamic so that
+            // property access routes through that runtime path instead of
+            // trying to read a class struct field that doesn't exist.
+            if (lastWasError_) {
+                dynamicObjectVars_.insert(decl.name);
             }
 
             if(NOVA_DEBUG) {
@@ -993,6 +1325,13 @@ void HIRGenerator::visit(VarDeclStmt& node) {
                 promiseVars_.insert(decl.name);
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered Promise variable: " << decl.name << std::endl;
                 lastWasPromise_ = false;  // Clear for next declaration
+            }
+
+            // Check if this is a Promise.withResolvers() result assignment
+            if (lastWasPromiseWithResolvers_) {
+                promiseWithResolversVars_.insert(decl.name);
+                if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered PromiseWithResolvers variable: " << decl.name << std::endl;
+                lastWasPromiseWithResolvers_ = false;
             }
 
             // Check if this is a Generator assignment

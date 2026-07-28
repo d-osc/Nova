@@ -8,6 +8,26 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (check(TokenType::At)) {
         decorators = parseDecorators();
     }
+
+    if (match(TokenType::Semicolon)) {
+        auto empty = std::make_unique<EmptyStmt>();
+        empty->location = peek(-1).location;
+        return empty;
+    }
+
+    // `declare` makes exactly one declaration ambient. Namespace members are
+    // also ambient and inherit this depth.
+    if (match(TokenType::KeywordDeclare)) {
+        ++ambientDepth_;
+        try {
+            auto declaration = parseStatement();
+            --ambientDepth_;
+            return declaration;
+        } catch (...) {
+            --ambientDepth_;
+            throw;
+        }
+    }
     
     // Declarations
     if (match(TokenType::KeywordVar) || match(TokenType::KeywordLet) || match(TokenType::KeywordConst)) {
@@ -30,11 +50,26 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         }
         return classDecl;
     }
+    if (match(TokenType::KeywordAbstract)) {
+        consume(TokenType::KeywordClass,
+                "Expected 'class' after 'abstract'");
+        auto classDecl = parseClassDeclaration();
+        if (auto* statement = dynamic_cast<DeclStmt*>(classDecl.get())) {
+            if (auto* cls =
+                    dynamic_cast<ClassDecl*>(statement->declaration.get())) {
+                cls->decorators = std::move(decorators);
+            }
+        }
+        return classDecl;
+    }
     if (match(TokenType::KeywordInterface)) {
         return parseInterfaceDeclaration();
     }
     if (match(TokenType::KeywordType)) {
         return parseTypeAliasDeclaration();
+    }
+    if (match(TokenType::KeywordNamespace)) {
+        return parseNamespaceDeclaration();
     }
     if (match(TokenType::KeywordEnum)) {
         return parseEnumDeclaration();
@@ -168,6 +203,7 @@ std::unique_ptr<Stmt> Parser::parseVariableDeclaration() {
 
     auto decl = std::make_unique<VarDeclStmt>(kind, std::move(declarators));
     decl->location = getCurrentLocation();
+    decl->isDeclare = ambientDepth_ > 0;
 
     return decl;
 }
@@ -221,6 +257,7 @@ std::unique_ptr<Stmt> Parser::parseVariableDeclarationWithoutSemicolon() {
     
     auto decl = std::make_unique<VarDeclStmt>(kind, std::move(declarators));
     decl->location = getCurrentLocation();
+    decl->isDeclare = ambientDepth_ > 0;
     
     return decl;
 }
@@ -240,28 +277,16 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     }
     
     // Name
-    Token name = consume(TokenType::Identifier, "Expected function name");
+    Token name = consumeBindingIdentifier("Expected function name");
     func->name = name.value;
+    func->isDeclare = ambientDepth_ > 0;
     
     // Type parameters (generics)
-    if (match(TokenType::Less)) {
-        while (!check(TokenType::Greater) && !isAtEnd()) {
-            Token typeParameter = consume(
-                TokenType::Identifier, "Expected type parameter name");
-            func->typeParams.push_back(typeParameter.value);
-            TypePtr constraint = nullptr;
-            if (match(TokenType::KeywordExtends)) {
-                constraint = parseTypeAnnotation();
-            }
-            func->typeParamConstraints.push_back(std::move(constraint));
-            if (match(TokenType::Equal)) {
-                parseTypeAnnotation();
-            }
-            if (!check(TokenType::Greater)) {
-                consume(TokenType::Comma, "Expected ',' between type parameters");
-            }
-        }
-        consume(TokenType::Greater, "Expected '>' after type parameters");
+    if (check(TokenType::Less)) {
+        parseTypeParameterList(
+            func->typeParams,
+            func->typeParamConstraints,
+            func->typeParamDefaults);
     }
     
     // Parameters
@@ -275,7 +300,8 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     while (!check(TokenType::RightParen) && !isAtEnd()) {
         // Check for rest parameter (...args)
         if (match(TokenType::DotDotDot)) {
-            Token restName = consume(TokenType::Identifier, "Expected rest parameter name");
+            Token restName = consumeBindingIdentifier(
+                "Expected rest parameter name");
             restParam = restName.value;
             // Optional type annotation for rest param
             if (match(TokenType::Colon)) {
@@ -290,10 +316,13 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
             params.push_back("__pattern_param_" + std::to_string(params.size()));
             paramPatterns.push_back(std::shared_ptr<Pattern>(std::move(pattern)));
         } else {
-            Token paramName = consume(TokenType::Identifier, "Expected parameter name");
+            Token paramName = consumeBindingIdentifier(
+                "Expected parameter name");
             params.push_back(paramName.value);
             paramPatterns.push_back(nullptr);
         }
+
+        match(TokenType::Question);
 
         // Optional type annotation
         TypePtr paramType = nullptr;
@@ -326,8 +355,13 @@ std::unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
         func->returnType = parseTypeAnnotation();
     }
     
-    // Body
-    func->body = parseBlockStatement();
+    if (check(TokenType::LeftBrace) && ambientDepth_ == 0) {
+        func->body = parseBlockStatement();
+    } else {
+        func->isOverload = ambientDepth_ == 0;
+        consume(TokenType::Semicolon,
+                "Expected function body or ';' after signature");
+    }
     
     // Wrap in DeclStmt
     auto declStmt = std::make_unique<DeclStmt>(std::move(func));
@@ -445,37 +479,43 @@ std::unique_ptr<Stmt> Parser::parseContinueStatement() {
 std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
     auto classDecl = std::make_unique<ClassDecl>();
     classDecl->location = getCurrentLocation();
+    classDecl->isAbstract =
+        peek(-2).type == TokenType::KeywordAbstract;
+    classDecl->isDeclare = ambientDepth_ > 0;
     
     // Parse class decorators (already consumed @tokens before calling this)
     // Decorators are passed from parseStatement
     
     // Class name
-    Token name = consume(TokenType::Identifier, "Expected class name");
+    Token name = consumeBindingIdentifier("Expected class name");
     classDecl->name = name.value;
     
-    // Type parameters (simplified)
-    if (match(TokenType::Less)) {
-        while (!check(TokenType::Greater) && !isAtEnd()) {
-            Token typeParam = consume(TokenType::Identifier, "Expected type parameter");
-            classDecl->typeParams.push_back(typeParam.value);
-            if (!check(TokenType::Greater)) {
-                match(TokenType::Comma);
-            }
-        }
-        consume(TokenType::Greater, "Expected '>' after type parameters");
+    if (check(TokenType::Less)) {
+        parseTypeParameterList(
+            classDecl->typeParams,
+            classDecl->typeParamConstraints,
+            classDecl->typeParamDefaults);
     }
     
     // Extends clause
     if (match(TokenType::KeywordExtends)) {
-        Token parent = consume(TokenType::Identifier, "Expected parent class name");
+        Token parent = consumeBindingIdentifier(
+            "Expected parent class name");
         classDecl->superclass = parent.value;
+        if (check(TokenType::Less)) {
+            parseTypeArgumentList();
+        }
     }
     
     // Implements clause
     if (match(TokenType::KeywordImplements)) {
         do {
-            Token iface = consume(TokenType::Identifier, "Expected interface name");
+            Token iface = consumeBindingIdentifier(
+                "Expected interface name");
             classDecl->interfaces.push_back(iface.value);
+            if (check(TokenType::Less)) {
+                parseTypeArgumentList();
+            }
         } while (match(TokenType::Comma));
     }
     
@@ -486,47 +526,53 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
         // Member decorators
         auto memberDecorators = parseDecorators();
         
-        // Private field with # prefix — may appear before OR after visibility
-        // modifiers (e.g., `readonly #owner`, `static #count`). Track and
-        // re-check after each modifier.
         bool isPrivateField = false;
-        if (match(TokenType::Hash)) {
-            isPrivateField = true;
+        bool isStatic = false;
+        bool isAbstract = false;
+        bool isReadonly = false;
+        bool isOverride = false;
+        bool isAsync = false;
+        bool isGetter = false;
+        bool isSetter = false;
+
+        // TypeScript permits modifiers in several valid orders. Consume them
+        // as a set, but retain contextual method names such as static() and
+        // async().
+        bool consumedModifier = true;
+        while (consumedModifier) {
+            consumedModifier = true;
+            if (match(TokenType::Hash)) {
+                isPrivateField = true;
+            } else if (match(TokenType::KeywordPublic) ||
+                       match(TokenType::KeywordPrivate) ||
+                       match(TokenType::KeywordProtected)) {
+                // Accessibility is type-only in this AST.
+            } else if (check(TokenType::KeywordStatic) &&
+                       peek(1).type != TokenType::LeftParen) {
+                advance();
+                isStatic = true;
+            } else if (match(TokenType::KeywordAbstract)) {
+                isAbstract = true;
+            } else if (match(TokenType::KeywordReadonly)) {
+                isReadonly = true;
+            } else if (match(TokenType::KeywordOverride)) {
+                isOverride = true;
+            } else if (check(TokenType::KeywordAsync) &&
+                       peek(1).type != TokenType::LeftParen) {
+                advance();
+                isAsync = true;
+            } else {
+                consumedModifier = false;
+            }
         }
 
-        // Visibility modifiers
-        /*bool isPublic =*/ match(TokenType::KeywordPublic);
-        /*bool isPrivate =*/ match(TokenType::KeywordPrivate) || isPrivateField;
-        /*bool isProtected =*/ match(TokenType::KeywordProtected);
-
-        // After visibility, # may still appear
-        if (!isPrivateField && match(TokenType::Hash)) {
-            isPrivateField = true;
+        if ((check(TokenType::KeywordGet) ||
+             check(TokenType::KeywordSet)) &&
+            peek(1).type != TokenType::LeftParen) {
+            isGetter = check(TokenType::KeywordGet);
+            isSetter = check(TokenType::KeywordSet);
+            advance();
         }
-
-        // Static
-        bool isStatic = match(TokenType::KeywordStatic);
-
-        // After static, # may still appear
-        if (!isPrivateField && match(TokenType::Hash)) {
-            isPrivateField = true;
-        }
-
-        // Abstract/Readonly
-        bool isAbstract = match(TokenType::KeywordAbstract);
-        bool isReadonly = match(TokenType::KeywordReadonly);
-
-        // After readonly, # may still appear
-        if (!isPrivateField && match(TokenType::Hash)) {
-            isPrivateField = true;
-        }
-        
-        // Async
-        bool isAsync = match(TokenType::KeywordAsync);
-        
-        // Getter/Setter
-        bool isGetter = match(TokenType::KeywordGet);
-        bool isSetter = match(TokenType::KeywordSet);
         
         // Member name
         bool isComputed = false;
@@ -561,6 +607,7 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
             method.isStatic = isStatic;
             method.isAsync = isAsync;
             method.isAbstract = isAbstract;
+            method.isOverride = isOverride;
             method.isComputed = isComputed;
             if (isComputed) method.computedKey = std::move(computedKeyExpr);
             
@@ -578,13 +625,27 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
             consume(TokenType::LeftParen, "Expected '(' after method name");
             
             while (!check(TokenType::RightParen) && !isAtEnd()) {
-                Token param = consume(TokenType::Identifier, "Expected parameter name");
+                // Constructor parameter properties may carry accessibility or
+                // readonly modifiers.
+                match(TokenType::KeywordPublic);
+                match(TokenType::KeywordPrivate);
+                match(TokenType::KeywordProtected);
+                match(TokenType::KeywordReadonly);
+                Token param = consumeBindingIdentifier(
+                    "Expected parameter name");
                 method.params.push_back(param.value);
-                
+
+                match(TokenType::Question);
                 if (match(TokenType::Colon)) {
-                    parseTypeAnnotation();
+                    method.paramTypes.push_back(parseTypeAnnotation());
+                } else {
+                    method.paramTypes.push_back(nullptr);
                 }
-                
+
+                if (match(TokenType::Equal)) {
+                    parseAssignmentExpression();
+                }
+
                 if (!check(TokenType::RightParen)) {
                     consume(TokenType::Comma, "Expected ',' between parameters");
                 }
@@ -598,10 +659,11 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
             }
             
             // Method body (unless abstract)
-            if (!isAbstract) {
+            if (!isAbstract && ambientDepth_ == 0) {
                 method.body = parseBlockStatement();
             } else {
-                match(TokenType::Semicolon);
+                consume(TokenType::Semicolon,
+                        "Expected ';' after ambient or abstract method");
             }
             
             // Attach decorators to method
@@ -618,7 +680,9 @@ std::unique_ptr<Stmt> Parser::parseClassDeclaration() {
             prop.isComputed = isComputed;
             if (isComputed) prop.computedKey = std::move(computedKeyExpr);
             
-            // Type annotation
+            prop.isOptional = match(TokenType::Question);
+            match(TokenType::Exclamation);
+
             if (match(TokenType::Colon)) {
                 prop.type = parseTypeAnnotation();
             }
@@ -651,26 +715,26 @@ std::unique_ptr<Stmt> Parser::parseInterfaceDeclaration() {
     iface->location = getCurrentLocation();
     
     // Interface name
-    Token name = consume(TokenType::Identifier, "Expected interface name");
+    Token name = consumeBindingIdentifier("Expected interface name");
     iface->name = name.value;
     
     // Type parameters
-    if (match(TokenType::Less)) {
-        while (!check(TokenType::Greater) && !isAtEnd()) {
-            Token typeParam = consume(TokenType::Identifier, "Expected type parameter");
-            iface->typeParams.push_back(typeParam.value);
-            if (!check(TokenType::Greater)) {
-                match(TokenType::Comma);
-            }
-        }
-        consume(TokenType::Greater, "Expected '>' after type parameters");
+    if (check(TokenType::Less)) {
+        parseTypeParameterList(
+            iface->typeParams,
+            iface->typeParamConstraints,
+            iface->typeParamDefaults);
     }
     
     // Extends clause
     if (match(TokenType::KeywordExtends)) {
         do {
-            Token parent = consume(TokenType::Identifier, "Expected interface name");
+            Token parent = consumeBindingIdentifier(
+                "Expected interface name");
             iface->extends.push_back(parent.value);
+            if (check(TokenType::Less)) {
+                parseTypeArgumentList();
+            }
         } while (match(TokenType::Comma));
     }
     
@@ -678,7 +742,8 @@ std::unique_ptr<Stmt> Parser::parseInterfaceDeclaration() {
     
     // Parse interface members
     while (!check(TokenType::RightBrace) && !isAtEnd()) {
-        Token memberName = consume(TokenType::Identifier, "Expected member name");
+        const bool isReadonly = match(TokenType::KeywordReadonly);
+        Token memberName = consumeIdentifierName("Expected member name");
         
         if (check(TokenType::LeftParen)) {
             // Method signature
@@ -688,9 +753,11 @@ std::unique_ptr<Stmt> Parser::parseInterfaceDeclaration() {
             consume(TokenType::LeftParen, "Expected '(' after method name");
             
             while (!check(TokenType::RightParen) && !isAtEnd()) {
-                Token param = consume(TokenType::Identifier, "Expected parameter name");
+                Token param = consumeBindingIdentifier(
+                    "Expected parameter name");
                 method.params.push_back(param.value);
-                
+
+                match(TokenType::Question);
                 if (match(TokenType::Colon)) {
                     parseTypeAnnotation();
                 }
@@ -713,6 +780,7 @@ std::unique_ptr<Stmt> Parser::parseInterfaceDeclaration() {
             // Property signature
             InterfaceDecl::PropertySignature prop;
             prop.name = memberName.value;
+            prop.isReadonly = isReadonly;
             
             if (match(TokenType::Question)) {
                 prop.isOptional = true;
@@ -742,19 +810,15 @@ std::unique_ptr<Stmt> Parser::parseTypeAliasDeclaration() {
     typeAlias->location = getCurrentLocation();
     
     // Type name
-    Token name = consume(TokenType::Identifier, "Expected type name");
+    Token name = consumeBindingIdentifier("Expected type name");
     typeAlias->name = name.value;
     
     // Type parameters
-    if (match(TokenType::Less)) {
-        while (!check(TokenType::Greater) && !isAtEnd()) {
-            Token typeParam = consume(TokenType::Identifier, "Expected type parameter");
-            typeAlias->typeParams.push_back(typeParam.value);
-            if (!check(TokenType::Greater)) {
-                match(TokenType::Comma);
-            }
-        }
-        consume(TokenType::Greater, "Expected '>' after type parameters");
+    if (check(TokenType::Less)) {
+        parseTypeParameterList(
+            typeAlias->typeParams,
+            typeAlias->typeParamConstraints,
+            typeAlias->typeParamDefaults);
     }
     
     consume(TokenType::Equal, "Expected '=' in type alias");
@@ -771,12 +835,48 @@ std::unique_ptr<Stmt> Parser::parseTypeAliasDeclaration() {
     return declStmt;
 }
 
+std::unique_ptr<Stmt> Parser::parseNamespaceDeclaration() {
+    auto name = consumeBindingIdentifier("Expected namespace name");
+    auto namespaceDecl = std::make_unique<NamespaceDecl>();
+    namespaceDecl->location = name.location;
+    namespaceDecl->name = name.value;
+    namespaceDecl->isDeclare = ambientDepth_ > 0;
+
+    while (match(TokenType::Dot)) {
+        namespaceDecl->name += "." +
+            consumeIdentifierName(
+                "Expected namespace name after '.'").value;
+    }
+
+    consume(TokenType::LeftBrace, "Expected '{' before namespace body");
+    ++ambientDepth_;
+    try {
+        while (!check(TokenType::RightBrace) && !isAtEnd()) {
+            auto statement = parseStatement();
+            if (statement) {
+                namespaceDecl->body.push_back(std::move(statement));
+            }
+        }
+        consume(TokenType::RightBrace, "Expected '}' after namespace body");
+        --ambientDepth_;
+    } catch (...) {
+        --ambientDepth_;
+        throw;
+    }
+    match(TokenType::Semicolon);
+
+    auto statement = std::make_unique<DeclStmt>(
+        std::move(namespaceDecl));
+    statement->location = getCurrentLocation();
+    return statement;
+}
+
 std::unique_ptr<Stmt> Parser::parseEnumDeclaration() {
     auto enumDecl = std::make_unique<EnumDecl>();
     enumDecl->location = getCurrentLocation();
     
     // Enum name
-    Token name = consume(TokenType::Identifier, "Expected enum name");
+    Token name = consumeBindingIdentifier("Expected enum name");
     enumDecl->name = name.value;
     
     consume(TokenType::LeftBrace, "Expected '{' before enum body");
@@ -785,7 +885,8 @@ std::unique_ptr<Stmt> Parser::parseEnumDeclaration() {
     while (!check(TokenType::RightBrace) && !isAtEnd()) {
         EnumDecl::Member member;
         
-        Token memberName = consume(TokenType::Identifier, "Expected enum member name");
+        Token memberName = consumeIdentifierName(
+            "Expected enum member name");
         member.name = memberName.value;
         
         // Initializer - use parseAssignmentExpression to not consume comma
@@ -815,10 +916,12 @@ std::unique_ptr<Stmt> Parser::parseImportDeclaration() {
 
     auto parseNamedImports = [&]() {
         while (!check(TokenType::RightBrace) && !isAtEnd()) {
-            Token imported = consume(TokenType::Identifier, "Expected import name");
+            Token imported = consumeIdentifierName(
+                "Expected import name");
             std::string local = imported.value;
             if (match(TokenType::KeywordAs)) {
-                Token localName = consume(TokenType::Identifier, "Expected local name");
+                Token localName = consumeBindingIdentifier(
+                    "Expected local name");
                 local = localName.value;
             }
             ImportDecl::Specifier spec;

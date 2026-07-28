@@ -131,6 +131,7 @@ public:
     // Declarations
     void visit(InterfaceDecl& node) override;
     void visit(TypeAliasDecl& node) override;
+    void visit(NamespaceDecl& node) override;
     void visit(EnumDecl& node) override;
     void visit(ImportDecl& node) override;
     void visit(ExportDecl& node) override;
@@ -192,6 +193,19 @@ private:
     bool hasHeterogeneousReturns(Stmt* statement);
     std::unordered_map<std::string, std::vector<HIRType::Kind>>
         analyzeFunctionParameterTypes(Program& program);
+    // Scans a statement (typically a function body) for variables that are
+    // used in dynamic-object contexts (Object.create/defineProperty/keys,
+    // delete, in, hasOwnProperty, etc.) and returns the set of variable names
+    // that must be materialized as runtime nova::runtime::Object* instead of
+    // fixed-layout __obj_N structs.
+    std::unordered_set<std::string> scanForcedDynamicObjects(Stmt* statement);
+    // Emit a runtime nova::runtime::Object* from an object literal. Used when
+    // the destination variable is in forcedDynamicObjectVars_.
+    void emitRuntimeObjectLiteral(ObjectExpr& node);
+    // True if an expression will resolve to a runtime Object* at runtime
+    // (forced-dynamic variable, Object.create result, etc.). Walks past
+    // common wrappers like `as any`.
+    bool targetForcedDynamic(Expr* expression);
 
     // Core module and builder
     HIRModule* module_;
@@ -209,6 +223,12 @@ private:
     std::unordered_map<std::string, HIRValue*> symbolTable_;
     std::unordered_set<std::string> dynamicBindingNames_;
     std::unordered_set<std::string> dynamicObjectVars_;
+    // Populated by scanForcedDynamicObjects() before local HIR emission.
+    // Variables in this set MUST be emitted as runtime nova::runtime::Object*
+    // instead of fixed-layout __obj_N structs, because they are used in a
+    // context that requires runtime semantics (Object.create, Object.defineProperty,
+    // Object.keys, delete, in, hasInstance via prototype, etc.).
+    std::unordered_set<std::string> forcedDynamicObjectVars_;
     std::unordered_map<std::string, std::vector<HIRType::Kind>>
         inferredFunctionParameterTypes_;
     // Preserve statically known null/undefined through allocas, whose current
@@ -334,6 +354,12 @@ private:
     // Promise tracking (ES2015)
     std::unordered_set<std::string> promiseVars_;
     bool lastWasPromise_ = false;
+
+    // Promise.withResolvers() result tracking (ES2024). Vars here hold a
+    // PromiseWithResolvers* — accessing .promise/.resolve/.reject routes
+    // through the runtime helpers.
+    std::unordered_set<std::string> promiseWithResolversVars_;
+    bool lastWasPromiseWithResolvers_ = false;
 
     // Generator tracking (ES2015)
     std::unordered_set<std::string> generatorVars_;
@@ -515,6 +541,18 @@ private:
         propertyEnumerable_;
     std::unordered_map<std::string, std::unordered_map<std::string, bool>>
         propertyConfigurable_;
+
+    // Set when the most recent expression produced a runtime Object* (via
+    // Object.create, Object.fromEntries, Object.assign({}, ...), etc.). The
+    // next VariableDeclarator using this value registers its name in
+    // dynamicObjectVars_ so subsequent property access routes through the
+    // runtime helpers instead of treating it as a fixed-layout __obj_N struct.
+    bool lastWasDynamicObjectResult_ = false;
+
+    // Name of the variable currently being declared (set by VarDeclStmt,
+    // read by ObjectExpr) so the object literal visitor can decide whether
+    // to emit a runtime Object instead of a fixed-layout __obj_N struct.
+    std::string currentDeclName_;
 
     // Multi-file module system
     std::string currentFilePath_;    // Current file being compiled
