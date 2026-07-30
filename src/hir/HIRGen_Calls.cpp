@@ -15031,14 +15031,19 @@ void HIRGenerator::visit(CallExpr& node) {
                     std::string savedFilePath = currentFilePath_;
                     currentFilePath_ = resolvedPath;
 
-                    // First: emit all top-level function declarations so they
-                    // become callable compiled functions.
+                    // First: register all top-level function declarations so
+                    // they can be referenced. We do NOT call accept() here
+                    // because that would compile them inside the current
+                    // function's HIR context (e.g. main), which corrupts
+                    // the builder state. Instead, we register them by name
+                    // so that later property accesses can resolve them.
                     for (auto& stmt : moduleAst->body) {
                         if (auto* ds = dynamic_cast<DeclStmt*>(stmt.get())) {
                             if (auto* fd = dynamic_cast<FunctionDecl*>(
                                     ds->declaration.get())) {
-                                // Compile the function into the module.
-                                fd->accept(*this);
+                                // Register the function name in the current
+                                // scope so it can be looked up.
+                                functionReferences_[fd->name] = fd->name;
                             }
                         }
                     }
@@ -15073,22 +15078,46 @@ void HIRGenerator::visit(CallExpr& node) {
                                     if (base && prop &&
                                         base->name == "module" &&
                                         prop->name == "exports") {
-                                        // The RHS is the exports value.
-                                        // Evaluate it and use the result
-                                        // as the exports object instead.
-                                        assign->right->accept(*this);
-                                        if (lastValue_ && lastValue_->type &&
-                                            lastValue_->type->kind ==
-                                                HIRType::Kind::Pointer) {
-                                            exportsObj = lastValue_;
+                                        // If RHS is an object literal, extract
+                                        // its properties and set them on the
+                                        // exports object at compile time.
+                                        auto* objLit = dynamic_cast<ObjectExpr*>(
+                                            assign->right.get());
+                                        if (objLit) {
+                                            for (auto& objProp : objLit->properties) {
+                                                // Extract key name from Identifier or StringLiteral.
+                                                std::string keyName;
+                                                if (auto* keyId = dynamic_cast<Identifier*>(objProp.key.get())) {
+                                                    keyName = keyId->name;
+                                                } else if (auto* keyStr = dynamic_cast<StringLiteral*>(objProp.key.get())) {
+                                                    keyName = keyStr->value;
+                                                }
+                                                if (keyName.empty()) continue;
+                                                HIRValue* keyConst =
+                                                    builder_->createStringConstant(keyName);
+                                                // Evaluate the value expression.
+                                                objProp.value->accept(*this);
+                                                HIRValue* val = lastValue_;
+                                                if (val) {
+                                                    HIRValue* valI64 = val;
+                                                    if (!val->type ||
+                                                        val->type->kind != HIRType::Kind::I64) {
+                                                        auto i64T = std::make_shared<HIRType>(HIRType::Kind::I64);
+                                                        valI64 = builder_->createCast(
+                                                            val, i64T.get(), "exports.val.cast");
+                                                    }
+                                                    builder_->createCall(
+                                                        setTaggedFn,
+                                                        {exportsObj, keyConst, valI64},
+                                                        "exports.set");
+                                                }
+                                            }
                                         }
                                         continue;
                                     }
                                 }
                             }
-                        }
-                        // For `exports.foo = ...` patterns, register name.
-                        if (auto* es = dynamic_cast<ExprStmt*>(stmt.get())) {
+                            // For `exports.foo = value` patterns.
                             if (auto* assign = dynamic_cast<AssignmentExpr*>(
                                     es->expression.get())) {
                                 auto* lhs = dynamic_cast<MemberExpr*>(
@@ -15100,23 +15129,23 @@ void HIRGenerator::visit(CallExpr& node) {
                                         lhs->property.get());
                                     if (base && prop &&
                                         base->name == "exports") {
-                                        // exports.foo = value
                                         assign->right->accept(*this);
                                         HIRValue* val = lastValue_;
-                                        // Store on exports object.
-                                        HIRValue* keyConst =
-                                            builder_->createStringConstant(prop->name);
-                                        HIRValue* valI64 = val;
-                                        if (!val->type ||
-                                            val->type->kind != HIRType::Kind::I64) {
-                                            auto i64T = std::make_shared<HIRType>(HIRType::Kind::I64);
-                                            valI64 = builder_->createCast(
-                                                val, i64T.get(), "exports.val.cast");
+                                        if (val) {
+                                            HIRValue* keyConst =
+                                                builder_->createStringConstant(prop->name);
+                                            HIRValue* valI64 = val;
+                                            if (!val->type ||
+                                                val->type->kind != HIRType::Kind::I64) {
+                                                auto i64T = std::make_shared<HIRType>(HIRType::Kind::I64);
+                                                valI64 = builder_->createCast(
+                                                    val, i64T.get(), "exports.val.cast");
+                                            }
+                                            builder_->createCall(
+                                                setTaggedFn,
+                                                {exportsObj, keyConst, valI64},
+                                                "exports.set");
                                         }
-                                        builder_->createCall(
-                                            setTaggedFn,
-                                            {exportsObj, keyConst, valI64},
-                                            "exports.set");
                                     }
                                 }
                             }
