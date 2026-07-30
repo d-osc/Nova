@@ -3,9 +3,13 @@
 // This file contains the massive CallExpr visitor that handles all built-in function calls
 
 #include "nova/HIR/HIRGen_Internal.h"
+#include "nova/Frontend/Lexer.h"
+#include "nova/Frontend/Parser.h"
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <filesystem>
+#include <iterator>
 #define NOVA_DEBUG 0
 
 namespace nova::hir {
@@ -14902,6 +14906,237 @@ void HIRGenerator::visit(CallExpr& node) {
                     }
                 }
             }
+        }
+
+        // Pre-compile CommonJS require(): `require("module")` is resolved and
+        // inlined at compile time. The module file is read, parsed, and its
+        // top-level declarations (functions, variables, and module.exports)
+        // are extracted. A runtime Object* is built representing the exports
+        // and returned as the require() result. This makes require() work in
+        // an AOT compiler without a runtime JS interpreter.
+        if (auto* reqId = dynamic_cast<Identifier*>(node.callee.get());
+            reqId && reqId->name == "require" && !node.arguments.empty()) {
+
+            // Extract the module specifier (must be a string literal).
+            auto* specLit = dynamic_cast<StringLiteral*>(node.arguments[0].get());
+            if (specLit) {
+                const std::string& spec = specLit->value;
+
+                // Resolve the module path relative to the current file.
+                std::filesystem::path baseDir =
+                    !currentFilePath_.empty()
+                        ? std::filesystem::path(currentFilePath_).parent_path()
+                        : std::filesystem::current_path();
+
+                // Try relative path first, then node_modules walk.
+                std::string resolvedPath;
+                std::vector<std::string> candidates;
+                // Direct relative path with extensions.
+                for (const auto& ext : {".js", ".ts", ".jsx", ".tsx", ""}) {
+                    candidates.push_back((baseDir / (spec + ext)).string());
+                }
+                // node_modules walk.
+                {
+                    std::filesystem::path dir = baseDir;
+                    std::filesystem::path prev;
+                    int walkCount = 0;
+                    while (!dir.empty() && dir != prev && walkCount < 20) {
+                        prev = dir;
+                        ++walkCount;
+                        if (dir.filename() != "node_modules") {
+                            auto nm = dir / "node_modules" / spec;
+                            for (const auto& ext : {".js", ".ts", ""}) {
+                                candidates.push_back((nm.string() + ext));
+                            }
+                            // package.json main lookup.
+                            std::string pkgPath = (dir / "node_modules" / spec / "package.json").string();
+                            if (std::filesystem::exists(pkgPath)) {
+                                std::ifstream pf(pkgPath);
+                                if (pf.is_open()) {
+                                    std::string content((std::istreambuf_iterator<char>(pf)),
+                                                        std::istreambuf_iterator<char>());
+                                    pf.close();
+                                    size_t mp = content.find("\"main\"");
+                                    if (mp != std::string::npos) {
+                                        size_t cp = content.find(':', mp);
+                                        size_t sq = content.find('"', cp + 1);
+                                        size_t eq = content.find('"', sq + 1);
+                                        if (sq != std::string::npos && eq != std::string::npos) {
+                                            std::string main = content.substr(sq + 1, eq - sq - 1);
+                                            candidates.push_back((dir / "node_modules" / spec / main).string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        dir = dir.parent_path();
+                    }
+                }
+
+                for (const auto& cand : candidates) {
+                    if (std::filesystem::exists(cand)) {
+                        resolvedPath = cand;
+                        break;
+                    }
+                }
+
+                if (!resolvedPath.empty()) {
+                    // Check cache — already loaded modules return the same exports.
+                    auto cached = precompiledRequires_.find(resolvedPath);
+                    if (cached != precompiledRequires_.end()) {
+                        lastValue_ = cached->second;
+                        lastWasDynamicObjectResult_ = true;
+                        return;
+                    }
+
+                    // Read and parse the module file.
+                    std::ifstream mf(resolvedPath);
+                    if (!mf.is_open()) {
+                        lastValue_ = builder_->createNullConstant(
+                            std::make_shared<HIRType>(HIRType::Kind::Pointer).get());
+                        return;
+                    }
+                    std::string moduleSource((std::istreambuf_iterator<char>(mf)),
+                                             std::istreambuf_iterator<char>());
+                    mf.close();
+
+                    // Parse the module.
+                    nova::Lexer lexer(resolvedPath, moduleSource);
+                    nova::Parser parser(lexer);
+                    auto moduleAst = parser.parseProgram();
+
+                    // Build the exports object by evaluating the module body
+                    // and collecting what gets assigned to module.exports or
+                    // declared at top level. For simplicity, we create a
+                    // dynamic runtime Object and populate it with the module's
+                    // exported function/variable names.
+                    //
+                    // Create a runtime Object* to represent module.exports.
+                    auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                    HIRFunction* createObj = nullptr;
+                    if (auto existing = module_->getFunction("nova_dynamic_object_create")) {
+                        createObj = existing.get();
+                    } else {
+                        auto* ft = new HIRFunctionType({}, ptrType);
+                        auto created = module_->createFunction("nova_dynamic_object_create", ft);
+                        created->linkage = HIRFunction::Linkage::External;
+                        createObj = created.get();
+                    }
+                    HIRValue* exportsObj = builder_->createCall(
+                        createObj, {}, "require.exports");
+
+                    // Process the module AST: hoist function declarations
+                    // into the compilation unit and register exported names
+                    // on the exports object.
+                    std::string savedFilePath = currentFilePath_;
+                    currentFilePath_ = resolvedPath;
+
+                    // First: emit all top-level function declarations so they
+                    // become callable compiled functions.
+                    for (auto& stmt : moduleAst->body) {
+                        if (auto* ds = dynamic_cast<DeclStmt*>(stmt.get())) {
+                            if (auto* fd = dynamic_cast<FunctionDecl*>(
+                                    ds->declaration.get())) {
+                                // Compile the function into the module.
+                                fd->accept(*this);
+                            }
+                        }
+                    }
+
+                    // Second: for each `module.exports = { ... }` assignment,
+                    // extract the property names and set them on the exports
+                    // object via nova_dynamic_object_set_tagged.
+                    std::string setTagName = "nova_dynamic_object_set_tagged";
+                    HIRFunction* setTaggedFn = module_->getFunction(setTagName).get();
+                    if (!setTaggedFn) {
+                        auto strType = std::make_shared<HIRType>(HIRType::Kind::String);
+                        auto i64Type = std::make_shared<HIRType>(HIRType::Kind::I64);
+                        auto* ft = new HIRFunctionType({ptrType, strType, i64Type},
+                                                       std::make_shared<HIRType>(HIRType::Kind::Void));
+                        auto created = module_->createFunction(setTagName, ft);
+                        created->linkage = HIRFunction::Linkage::External;
+                        setTaggedFn = created.get();
+                    }
+
+                    for (auto& stmt : moduleAst->body) {
+                        if (auto* es = dynamic_cast<ExprStmt*>(stmt.get())) {
+                            // Look for module.exports = { ... }
+                            if (auto* assign = dynamic_cast<AssignmentExpr*>(
+                                    es->expression.get())) {
+                                auto* lhs = dynamic_cast<MemberExpr*>(
+                                    assign->left.get());
+                                if (lhs) {
+                                    auto* base = dynamic_cast<Identifier*>(
+                                        lhs->object.get());
+                                    auto* prop = dynamic_cast<Identifier*>(
+                                        lhs->property.get());
+                                    if (base && prop &&
+                                        base->name == "module" &&
+                                        prop->name == "exports") {
+                                        // The RHS is the exports value.
+                                        // Evaluate it and use the result
+                                        // as the exports object instead.
+                                        assign->right->accept(*this);
+                                        if (lastValue_ && lastValue_->type &&
+                                            lastValue_->type->kind ==
+                                                HIRType::Kind::Pointer) {
+                                            exportsObj = lastValue_;
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        // For `exports.foo = ...` patterns, register name.
+                        if (auto* es = dynamic_cast<ExprStmt*>(stmt.get())) {
+                            if (auto* assign = dynamic_cast<AssignmentExpr*>(
+                                    es->expression.get())) {
+                                auto* lhs = dynamic_cast<MemberExpr*>(
+                                    assign->left.get());
+                                if (lhs) {
+                                    auto* base = dynamic_cast<Identifier*>(
+                                        lhs->object.get());
+                                    auto* prop = dynamic_cast<Identifier*>(
+                                        lhs->property.get());
+                                    if (base && prop &&
+                                        base->name == "exports") {
+                                        // exports.foo = value
+                                        assign->right->accept(*this);
+                                        HIRValue* val = lastValue_;
+                                        // Store on exports object.
+                                        HIRValue* keyConst =
+                                            builder_->createStringConstant(prop->name);
+                                        HIRValue* valI64 = val;
+                                        if (!val->type ||
+                                            val->type->kind != HIRType::Kind::I64) {
+                                            auto i64T = std::make_shared<HIRType>(HIRType::Kind::I64);
+                                            valI64 = builder_->createCast(
+                                                val, i64T.get(), "exports.val.cast");
+                                        }
+                                        builder_->createCall(
+                                            setTaggedFn,
+                                            {exportsObj, keyConst, valI64},
+                                            "exports.set");
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    currentFilePath_ = savedFilePath;
+
+                    // Cache and return.
+                    precompiledRequires_[resolvedPath] = exportsObj;
+                    lastValue_ = exportsObj;
+                    lastWasDynamicObjectResult_ = true;
+                    return;
+                }
+            }
+
+            // Fallback: if we can't resolve at compile time, return null.
+            lastValue_ = builder_->createNullConstant(
+                std::make_shared<HIRType>(HIRType::Kind::Pointer).get());
+            return;
         }
 
         // Check if this is an instance class method call: obj.method(...)

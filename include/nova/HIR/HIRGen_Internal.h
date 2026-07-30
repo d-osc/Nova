@@ -574,7 +574,8 @@ private:
 
     // Multi-file module system
     std::string currentFilePath_;    // Current file being compiled
-    std::unordered_set<std::string> importedModules_;  // Already imported module paths (prevent circular imports)
+    std::unordered_set<std::string> importedModules_;  // Already imported module paths (prevent circular deps)
+    std::unordered_map<std::string, HIRValue*> precompiledRequires_;  // Pre-compiled CJS require() cache
 };
 
 } // namespace nova::hir
