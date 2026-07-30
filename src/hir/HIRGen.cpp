@@ -314,6 +314,58 @@ void HIRGenerator::visit(Identifier& node) {
         lastValue_ = builder_->createUndefinedConstant(undefType.get());
         return;
     }
+    static const std::unordered_set<std::string> errorConstructors = {
+        "Error", "TypeError", "RangeError", "ReferenceError",
+        "SyntaxError", "URIError", "AggregateError"
+    };
+    if (errorConstructors.count(node.name) > 0) {
+        auto stringType =
+            std::make_shared<HIRType>(HIRType::Kind::String);
+        auto jsValueType =
+            std::make_shared<HIRType>(HIRType::Kind::JSValue);
+        HIRFunction* boxer = nullptr;
+        if (auto existing =
+                module_->getFunction("nova_value_from_string")) {
+            boxer = existing.get();
+        } else {
+            auto* type =
+                new HIRFunctionType({stringType}, jsValueType);
+            auto created = module_->createFunction(
+                "nova_value_from_string", type);
+            created->linkage = HIRFunction::Linkage::External;
+            boxer = created.get();
+        }
+        lastValue_ = builder_->createCall(
+            boxer, {builder_->createStringConstant(node.name)},
+            "error.constructor");
+        lastValue_->type = jsValueType;
+        return;
+    }
+    if (node.name == "escape" || node.name == "unescape") {
+        auto stringType =
+            std::make_shared<HIRType>(HIRType::Kind::String);
+        auto jsValueType =
+            std::make_shared<HIRType>(HIRType::Kind::JSValue);
+        HIRFunction* getter = nullptr;
+        if (auto existing =
+                module_->getFunction(
+                    "nova_global_object_get_tagged")) {
+            getter = existing.get();
+        } else {
+            auto* type = new HIRFunctionType(
+                {stringType}, jsValueType);
+            auto created = module_->createFunction(
+                "nova_global_object_get_tagged", type);
+            created->linkage = HIRFunction::Linkage::External;
+            getter = created.get();
+        }
+        lastValue_ = builder_->createCall(
+            getter,
+            {builder_->createStringConstant(node.name)},
+            "global.function");
+        lastValue_->type = jsValueType;
+        return;
+    }
 
     if (auto imported = importedNumberConstants_.find(node.name);
         imported != importedNumberConstants_.end()) {

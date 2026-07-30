@@ -383,13 +383,17 @@ void* nova_map_keys(void* mapPtr) {
     void* arr = nova_create_array(0);
     if (!mapPtr) return arr;
     NovaMap* map = static_cast<NovaMap*>(mapPtr);
-
     for (const auto& entry : *map->entries) {
         if (!entry.deleted) {
             if (entry.keyType == NovaMapEntry::KeyType::Number) {
                 nova_array_push(arr, entry.numKey);
             } else if (entry.keyType == NovaMapEntry::KeyType::String) {
-                nova_array_push_string(arr, entry.strKey);
+                nova_array_push(
+                    arr, static_cast<int64_t>(
+                        reinterpret_cast<uintptr_t>(entry.strKey)));
+            } else if (entry.keyType == NovaMapEntry::KeyType::Object) {
+                nova_array_push(
+                    arr, entry.numKey);
             }
         }
     }
@@ -403,13 +407,16 @@ void* nova_map_values(void* mapPtr) {
     void* arr = nova_create_array(0);
     if (!mapPtr) return arr;
     NovaMap* map = static_cast<NovaMap*>(mapPtr);
-
     for (const auto& entry : *map->entries) {
         if (!entry.deleted) {
             if (entry.valueType == NovaMapEntry::ValueType::Number) {
                 nova_array_push(arr, entry.numValue);
             } else if (entry.valueType == NovaMapEntry::ValueType::String) {
-                nova_array_push_string(arr, entry.strValue);
+                nova_array_push(
+                    arr, static_cast<int64_t>(
+                        reinterpret_cast<uintptr_t>(entry.strValue)));
+            } else if (entry.valueType == NovaMapEntry::ValueType::Object) {
+                nova_array_push(arr, entry.numValue);
             }
         }
     }
@@ -508,7 +515,9 @@ void* nova_map_groupby(void* items_ptr, void* callback_ptr) {
                     tmp.push_back(c);
                 }
                 if (ok && !tmp.empty()) {
-                    elementJs = nova_value_from_string(tmp.c_str());
+                    // strPtr points at the source array's stable string
+                    // literal. `tmp.c_str()` would dangle before callback().
+                    elementJs = nova_value_from_string(strPtr);
                     tagged = true;
                 }
             }
@@ -525,7 +534,17 @@ void* nova_map_groupby(void* items_ptr, void* callback_ptr) {
         bool keyIsString = false;
         std::string strKey;
         int64_t numKey = 0;
-        if (keyRaw > 0x10000) {
+        const auto keyBits = static_cast<std::uint64_t>(keyRaw);
+        if (nova::runtime::js_value_has_tag(
+                keyBits, nova::runtime::JS_VALUE_STRING_TAG)) {
+            keyIsString = true;
+            const char* decoded = nova_value_to_string_ptr(keyBits);
+            strKey = decoded ? decoded : "";
+        } else if ((keyBits & nova::runtime::JS_VALUE_TAG_MASK) != 0 &&
+                   keyRaw > (1LL << 31)) {
+            numKey = static_cast<int64_t>(
+                nova_value_to_number(keyBits));
+        } else if (keyRaw > 0x10000) {
             const char* strPtr =
                 reinterpret_cast<const char*>(static_cast<uintptr_t>(keyRaw));
             std::string tmp;
@@ -562,6 +581,7 @@ void* nova_map_groupby(void* items_ptr, void* callback_ptr) {
             // work uniformly across Object.groupBy and Map.groupBy results.
             nova::runtime::ValueArray* groupArray =
                 nova::runtime::create_value_array(8);
+            groupArray->length = 0;
             groupMeta = nova::runtime::create_metadata_from_value_array(groupArray);
 
             NovaMapEntry entry;

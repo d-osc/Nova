@@ -1,0 +1,88 @@
+{
+  "name": "typescript-local-profile",
+  "exclusions": "../exclusions/typescript.json",
+  "timeout_seconds": 45,
+  "budgets": {
+    "max_case_ms": 45000,
+    "max_peak_memory_kb": 524288
+  },
+  "cases": [
+    {
+      "name": "parser-tsx",
+      "category": "parser",
+      "command": [
+        "{nova}",
+        "check",
+        "{root}/tests/conformance/ts_spec_jsx.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "binder-ambient",
+      "category": "binder",
+      "command": [
+        "{nova}",
+        "check",
+        "{root}/tests/conformance/ts_spec_ambient_modules.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "checker-diagnostics",
+      "category": "checker",
+      "command": [
+        "{nova}",
+        "check",
+        "{root}/tests/conformance/ts_spec_negative.ts"
+      ],
+      "exit": 1,
+      "diagnostics": [
+        {"code": "TS2322", "line": 18, "contains": "not assignable"},
+        {"code": "TS2540", "line": 18, "contains": "read-only"},
+        {"code": "TS2344", "line": 21, "contains": "constraint"},
+        {"code": "TS2769", "line": 29, "contains": "overload"}
+      ]
+    },
+    {
+      "name": "module-resolution-mts",
+      "category": "module-resolution",
+      "command": [
+        "{nova}",
+        "run",
+        "{root}/tests/conformance/ts_spec_module_extension.mts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "emit-project",
+      "category": "emit",
+      "command": [
+        "{python}",
+        "-B",
+        "{root}/tests/test_phase6_project_tooling.py"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "fourslash-generic-smoke",
+      "category": "fourslash",
+      "command": [
+        "{nova}",
+        "check",
+        "{root}/tests/qualification/fixtures/typescript/fourslash/generic.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "project-references",
+      "category": "project",
+      "command": [
+        "{python}",
+        "-B",
+        "{root}/tests/test_phase6_project_tooling.py",
+        "Phase6ProjectToolingTests.test_composite_project_reference_builds_dependency_first"
+      ],
+      "exit": 0
+    }
+  ]
+}

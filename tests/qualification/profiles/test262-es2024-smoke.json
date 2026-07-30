@@ -1,0 +1,19 @@
+{
+  "name": "test262-es2024-smoke",
+  "edition": "ES2024",
+  "root": "../fixtures/test262",
+  "pattern": "**/*.js",
+  "harness": "../fixtures/test262-harness",
+  "exclusions": "../exclusions/test262.json",
+  "features": [
+    "Array.prototype.at",
+    "optional-chaining",
+    "Promise",
+    "destructuring-binding"
+  ],
+  "timeout_seconds": 15,
+  "budgets": {
+    "max_case_ms": 15000,
+    "max_peak_memory_kb": 262144
+  }
+}

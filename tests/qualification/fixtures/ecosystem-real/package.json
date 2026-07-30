@@ -1,0 +1,15 @@
+{
+  "name": "nova-real-ecosystem-qualification",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "5.2.1",
+    "lodash": "4.18.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "rxjs": "7.8.2",
+    "vite": "8.1.5",
+    "vue": "3.5.40",
+    "zod": "4.4.3"
+  }
+}

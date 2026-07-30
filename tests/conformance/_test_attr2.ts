@@ -1,3 +1,6 @@
+// NOVA_TEST_MODE: run
+// NOVA_EXPECT_EXIT: 0
+
 function main(): number {
     let computed = { first: 1, second: 2 };
     Object.defineProperty(computed, "first", { writable: false });

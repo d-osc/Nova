@@ -8,6 +8,9 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <iterator>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -178,7 +181,34 @@ static std::string tryPackage(const std::string& dir) {
     std::string pkgPath = joinPath(dir, "package.json");
     if (!fileExists(pkgPath)) return "";
 
-    // Simplified: assume main is "index.js"
+    // Read package.json and extract the "main" field.
+    std::ifstream pkgFile(pkgPath);
+    if (pkgFile.is_open()) {
+        std::string pkgContent((std::istreambuf_iterator<char>(pkgFile)),
+                               std::istreambuf_iterator<char>());
+        pkgFile.close();
+        // Simple JSON "main" extraction (no full JSON parser needed).
+        size_t mainPos = pkgContent.find("\"main\"");
+        if (mainPos != std::string::npos) {
+            size_t colonPos = pkgContent.find(':', mainPos);
+            if (colonPos != std::string::npos) {
+                size_t startQuote = pkgContent.find('"', colonPos + 1);
+                if (startQuote != std::string::npos) {
+                    size_t endQuote = pkgContent.find('"', startQuote + 1);
+                    if (endQuote != std::string::npos) {
+                        std::string mainField = pkgContent.substr(
+                            startQuote + 1, endQuote - startQuote - 1);
+                        std::string mainPath = joinPath(dir, mainField);
+                        // Try the main field directly and with extensions.
+                        std::string result = tryExtensions(mainPath);
+                        if (!result.empty()) return result;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: assume main is "index.js"
     std::string mainPath = joinPath(dir, "index.js");
     if (fileExists(mainPath)) return mainPath;
 

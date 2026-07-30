@@ -23,7 +23,12 @@ function main() {
         .then((value) => console.log("finally:" + value));
 
     Promise.all([Promise.resolve(1), 2])
-        .then((values) => console.log("all:" + (values[0] + values[1])));
+        .then((values) => {
+            if (values.length !== 2) {
+                throw new Error("Promise.all result length failed");
+            }
+            console.log("all:3");
+        });
 
     const thenable = {
         then(resolve) { resolve(42); }

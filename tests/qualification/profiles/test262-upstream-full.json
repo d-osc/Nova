@@ -1,0 +1,19 @@
+{
+  "name": "test262-upstream-full",
+  "edition": "upstream-main",
+  "root": "../../../build/qualification/upstream/test262/test",
+  "pattern": "**/*.js",
+  "harness": "../../../build/qualification/upstream/test262/harness",
+  "official_harness": true,
+  "default_includes": [
+    "assert.js",
+    "sta.js"
+  ],
+  "exclusions": "../exclusions/test262-upstream.json",
+  "timeout_seconds": 30,
+  "detail_limit": 4000,
+  "budgets": {
+    "max_case_ms": 30000,
+    "max_peak_memory_kb": 1048576
+  }
+}

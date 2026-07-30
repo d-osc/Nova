@@ -8,6 +8,7 @@
 namespace nova::hir {
 
 void HIRGenerator::visit(FunctionExpr& node) {
+        const bool retainDynamicThisABI = forceDynamicThisABI_;
         const bool savedFunctionIsArrow = currentFunctionIsArrow_;
         HIRValue* savedCurrentThis = currentThis_;
         const bool savedOrdinaryFunctionUsesThis =
@@ -18,8 +19,8 @@ void HIRGenerator::visit(FunctionExpr& node) {
         const auto savedDynamicObjectVars = dynamicObjectVars_;
         const auto savedForcedDynamic = forcedDynamicObjectVars_;
         dynamicObjectVars_.clear();
-        if (node.body) {
-            forcedDynamicObjectVars_ = scanForcedDynamicObjects(node.body.get());
+    if (node.body) {
+        forcedDynamicObjectVars_ = scanForcedDynamicObjects(node.body.get());
             for (const auto& forced : forcedDynamicObjectVars_) {
                 dynamicObjectVars_.insert(forced);
             }
@@ -272,7 +273,8 @@ void HIRGenerator::visit(FunctionExpr& node) {
         }
 
         if (tentativeThisParam) {
-            if (currentOrdinaryFunctionUsesThis_) {
+            if (currentOrdinaryFunctionUsesThis_ ||
+                retainDynamicThisABI) {
                 dynamicThisFunctions_.insert(funcName);
             } else if (!func->parameters.empty() &&
                        func->parameters.front() == tentativeThisParam) {
@@ -590,6 +592,7 @@ void HIRGenerator::visit(FunctionDecl& node) {
         if (node.isDeclare || node.isOverload || !node.body) {
             return;
         }
+        functionDeclarations_[node.name] = &node;
         const bool savedFunctionIsArrow = currentFunctionIsArrow_;
         HIRValue* savedCurrentThis = currentThis_;
         const bool savedOrdinaryFunctionUsesThis =
@@ -603,6 +606,12 @@ void HIRGenerator::visit(FunctionDecl& node) {
         forcedDynamicObjectVars_ = scanForcedDynamicObjects(node.body.get());
         for (const auto& forced : forcedDynamicObjectVars_) {
             dynamicObjectVars_.insert(forced);
+        }
+        dynamicObjectParameterIndices_[node.name].clear();
+        for (size_t i = 0; i < node.params.size(); ++i) {
+            if (forcedDynamicObjectVars_.count(node.params[i]) > 0) {
+                dynamicObjectParameterIndices_[node.name].insert(i);
+            }
         }
         dynamicBindingNames_ = analyzeDynamicBindings(node.body.get());
 
@@ -680,6 +689,17 @@ void HIRGenerator::visit(FunctionDecl& node) {
                            inferred != inferredFunctionParameterTypes_.end() &&
                            i < inferred->second.size()) {
                     typeKind = inferred->second[i];
+                }
+                // A parameter used as an object receiver by delete,
+                // descriptor operations, Proxy/Reflect, or other forced
+                // dynamic-object syntax must use the pointer ABI even when
+                // call-site inference only observed an opaque integer marker.
+                // Otherwise computed writes such as `obj[name] = value`
+                // operate on an integer and never reach the runtime property
+                // store.
+                if (i < node.params.size() &&
+                    forcedDynamicObjectVars_.count(node.params[i]) > 0) {
+                    typeKind = HIRType::Kind::Pointer;
                 }
 
                 paramTypes.push_back(std::make_shared<HIRType>(typeKind));
@@ -813,8 +833,19 @@ void HIRGenerator::visit(FunctionDecl& node) {
                         node.paramPatterns[i].get(), func->parameters,
                         parameterCursor, parameterDefault);
                 } else if (parameterCursor < func->parameters.size()) {
-                    symbolTable_[node.params[i]] =
-                        func->parameters[parameterCursor++];
+                    auto* parameter = func->parameters[parameterCursor++];
+                    symbolTable_[node.params[i]] = parameter;
+                    // `any`/JSValue parameters are the normal boundary for
+                    // descriptor objects, thenables and other structurally
+                    // dynamic JavaScript values. Property reads/writes must
+                    // use the runtime property map rather than static class
+                    // field lookup.
+                    if (parameter->type &&
+                        (parameter->type->kind == HIRType::Kind::Any ||
+                         parameter->type->kind ==
+                             HIRType::Kind::JSValue)) {
+                        dynamicObjectVars_.insert(node.params[i]);
+                    }
                 }
             }
         }

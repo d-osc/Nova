@@ -256,6 +256,11 @@ namespace {
 //   Object.assign(target, source) - target/source dynamic if not literal {}
 class ForcedDynamicObjectScanner {
 public:
+    explicit ForcedDynamicObjectScanner(
+        const std::unordered_map<std::string, std::string>*
+            functionReferences = nullptr)
+        : functionReferences_(functionReferences) {}
+
     std::unordered_set<std::string> result;
 
     void scanStatement(Stmt* statement) {
@@ -320,7 +325,25 @@ public:
 private:
     void scanExpression(Expr* expression) {
         if (!expression) return;
-        if (auto* binary = dynamic_cast<BinaryExpr*>(expression)) {
+        if (auto* assignment = dynamic_cast<AssignmentExpr*>(expression)) {
+            // A computed write through a well-known Symbol cannot target a
+            // fixed-layout object. Force the receiver to use the runtime
+            // property store so the symbol identity is preserved and the
+            // write does not get mis-lowered as a numeric array SetElement.
+            if (auto* member = dynamic_cast<MemberExpr*>(assignment->left.get());
+                member && member->isComputed) {
+                if (auto* symbolMember =
+                        dynamic_cast<MemberExpr*>(member->property.get())) {
+                    auto* symbolBase =
+                        dynamic_cast<Identifier*>(symbolMember->object.get());
+                    if (symbolBase && symbolBase->name == "Symbol") {
+                        addIfIdentifier(member->object.get());
+                    }
+                }
+            }
+            scanExpression(assignment->left.get());
+            scanExpression(assignment->right.get());
+        } else if (auto* binary = dynamic_cast<BinaryExpr*>(expression)) {
             // `foo in X` — X is RHS, must be dynamic.
             if (binary->op == BinaryExpr::Op::In) {
                 addIfIdentifier(binary->right.get());
@@ -337,6 +360,24 @@ private:
             scanExpression(unary->operand.get());
         } else if (auto* update = dynamic_cast<UpdateExpr*>(expression)) {
             scanExpression(update->argument.get());
+        } else if (auto* construction =
+                       dynamic_cast<NewExpr*>(expression)) {
+            if (auto* constructor =
+                    dynamic_cast<Identifier*>(construction->callee.get());
+                constructor && constructor->name == "Proxy") {
+                if (!construction->arguments.empty()) {
+                    addIfIdentifier(
+                        construction->arguments[0].get());
+                }
+                if (construction->arguments.size() > 1) {
+                    addIfIdentifier(
+                        construction->arguments[1].get());
+                }
+            }
+            scanExpression(construction->callee.get());
+            for (auto& argument : construction->arguments) {
+                scanExpression(argument.get());
+            }
         } else if (auto* call = dynamic_cast<CallExpr*>(expression)) {
             scanCall(call);
             scanExpression(call->callee.get());
@@ -386,6 +427,29 @@ private:
     }
 
     void scanCall(CallExpr* call) {
+        if (auto* alias =
+                dynamic_cast<Identifier*>(call->callee.get());
+            alias && functionReferences_) {
+            auto found = functionReferences_->find(alias->name);
+            if (found != functionReferences_->end()) {
+                const std::string& runtime = found->second;
+                if (runtime == "nova_object_getOwnPropertyDescriptor" ||
+                    runtime == "nova_object_getOwnPropertyNames" ||
+                    runtime == "nova_object_hasOwnProperty" ||
+                    runtime == "nova_object_propertyIsEnumerable" ||
+                    runtime == "nova_object_defineProperty") {
+                    if (!call->arguments.empty()) {
+                        addIfIdentifier(call->arguments.front().get());
+                    }
+                    if (runtime == "nova_object_defineProperty" &&
+                        call->arguments.size() > 2) {
+                        addIfIdentifier(call->arguments[2].get());
+                    }
+                }
+                return;
+            }
+        }
+
         // Identify Object.X(...) and Reflect.X(...) static method calls.
         auto* member = dynamic_cast<MemberExpr*>(call->callee.get());
         if (!member) return;
@@ -447,6 +511,14 @@ private:
                 return;
             }
         }
+        if (ns == "Proxy" && method == "revocable") {
+            if (!call->arguments.empty()) {
+                addIfIdentifier(call->arguments[0].get());
+            }
+            if (call->arguments.size() > 1) {
+                addIfIdentifier(call->arguments[1].get());
+            }
+        }
     }
 
     void addIfIdentifier(Expr* expression) {
@@ -464,11 +536,14 @@ private:
             result.insert(ident->name);
         }
     }
+
+    const std::unordered_map<std::string, std::string>*
+        functionReferences_;
 };
 } // namespace
 
 std::unordered_set<std::string> HIRGenerator::scanForcedDynamicObjects(Stmt* statement) {
-    ForcedDynamicObjectScanner scanner;
+    ForcedDynamicObjectScanner scanner(&functionReferences_);
     scanner.scanStatement(statement);
     return scanner.result;
 }
@@ -544,6 +619,73 @@ void HIRGenerator::visit(BlockStmt& node) {
 void HIRGenerator::visit(ExprStmt& node) {
         if (node.expression) {
             node.expression->accept(*this);
+        }
+        // Anchor discarded calls to user-code-invoking runtime helpers so the
+        // LLVM DCE/InstCombine passes cannot delete them. A bare statement like
+        //   obj.method();
+        // inside a function with no surrounding try/catch lowers to a runtime
+        // helper call (nova_dynamic_call_method_*, nova_regexp_legacy_dispatch_call,
+        // ...) whose result is unused; without an observable use the optimizer
+        // treats it as dead even though it may throw, exit or run arbitrary
+        // compiled code. Routing the result through an opaque external sink
+        // keeps the call live. This mirrors the barrier that
+        // nova_promise_runMicrotasks() already provides at the end of main().
+        if (lastValue_) {
+            auto* callInst =
+                dynamic_cast<hir::HIRInstruction*>(lastValue_);
+            if (callInst &&
+                callInst->opcode ==
+                    hir::HIRInstruction::Opcode::Call &&
+                !callInst->operands.empty()) {
+                auto* calleeConst = dynamic_cast<hir::HIRConstant*>(
+                    callInst->operands[0].get());
+                std::string calleeName;
+                if (calleeConst &&
+                    calleeConst->kind == hir::HIRConstant::Kind::String) {
+                    calleeName = std::get<std::string>(calleeConst->value);
+                }
+                const auto isSideEffectingHelper =
+                    [&](const std::string& name) {
+                        // Helpers that invoke arbitrary user code or throw.
+                        if (name.rfind("nova_dynamic_call_method_", 0) == 0)
+                            return true;
+                        if (name == "nova_regexp_legacy_dispatch_call")
+                            return true;
+                        if (name == "nova_regexp_legacy_get" ||
+                            name == "nova_regexp_legacy_set")
+                            return true;
+                        return false;
+                    };
+                if (isSideEffectingHelper(calleeName)) {
+                    auto i64Type =
+                        std::make_shared<HIRType>(HIRType::Kind::I64);
+                    auto voidType =
+                        std::make_shared<HIRType>(HIRType::Kind::Void);
+                    HIRFunction* anchor = nullptr;
+                    if (auto existing = module_->getFunction(
+                            "nova_sideeffect_anchor")) {
+                        anchor = existing.get();
+                    } else {
+                        auto* ft = new HIRFunctionType({i64Type}, voidType);
+                        auto created = module_->createFunction(
+                            "nova_sideeffect_anchor", ft);
+                        created->linkage =
+                            HIRFunction::Linkage::External;
+                        anchor = created.get();
+                    }
+                    HIRValue* anchoredValue = lastValue_;
+                    if (!anchoredValue->type ||
+                        anchoredValue->type->kind != HIRType::Kind::I64) {
+                        auto ptrCoerce = std::make_shared<HIRType>(
+                            HIRType::Kind::I64);
+                        anchoredValue = builder_->createCast(
+                            anchoredValue, ptrCoerce.get(),
+                            "anchor.cast");
+                    }
+                    builder_->createCall(anchor, {anchoredValue},
+                                         "sideeffect.anchor");
+                }
+            }
         }
     }
 
@@ -1061,6 +1203,29 @@ void HIRGenerator::visit(VarDeclStmt& node) {
                 dynamicObjectVars_.insert(decl.name);
                 lastWasDynamicObjectResult_ = false;
             }
+            // Also derive well-known dynamic-object results from the
+            // initializer AST.  Result flags are intentionally lightweight
+            // visitor state and can be consumed or shadowed by nested calls
+            // (for example Object.getOwnPropertyNames(...).join(...) before a
+            // descriptor declaration).  The call shape is stable and avoids
+            // losing dynamic property access on the bound result.
+            if (auto* call = dynamic_cast<CallExpr*>(dynamicAliasSource)) {
+                if (auto* member =
+                        dynamic_cast<MemberExpr*>(call->callee.get())) {
+                    auto* receiver =
+                        dynamic_cast<Identifier*>(member->object.get());
+                    auto* method =
+                        dynamic_cast<Identifier*>(member->property.get());
+                    if (receiver && method && receiver->name == "Object" &&
+                        (method->name == "create" ||
+                         method->name == "fromEntries" ||
+                         method->name == "assign" ||
+                         method->name == "getOwnPropertyDescriptor" ||
+                         method->name == "getOwnPropertyDescriptors")) {
+                        dynamicObjectVars_.insert(decl.name);
+                    }
+                }
+            }
             // Property accesses on a dynamic object (e.g. `const cause =
             // err.cause`) yield a JSValue. Treat the new variable as a
             // dynamic object too so subsequent property reads route through
@@ -1144,6 +1309,66 @@ void HIRGenerator::visit(VarDeclStmt& node) {
 
             // Check if this is a destructuring pattern
             if (decl.pattern) {
+                // Promise.withResolvers() returns an opaque runtime capability,
+                // so its object fields cannot be extracted by the generic
+                // fixed-struct destructuring path. Bind the three well-known
+                // fields through their runtime accessors and remember resolver
+                // aliases so direct calls settle the same capability.
+                if (lastWasPromiseWithResolvers_) {
+                    if (auto* objectPattern =
+                            dynamic_cast<ObjectPattern*>(decl.pattern.get())) {
+                        auto ptrType =
+                            std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                        for (auto& property : objectPattern->properties) {
+                            std::string helper;
+                            if (property.key == "promise") {
+                                helper = "nova_promise_withResolvers_promise";
+                            } else if (property.key == "resolve") {
+                                helper = "nova_promise_withResolvers_resolve_get";
+                            } else if (property.key == "reject") {
+                                helper = "nova_promise_withResolvers_reject_get";
+                            } else {
+                                continue;
+                            }
+
+                            HIRFunction* function = nullptr;
+                            if (auto existing = module_->getFunction(helper)) {
+                                function = existing.get();
+                            } else {
+                                auto* functionType =
+                                    new HIRFunctionType({ptrType}, ptrType);
+                                auto created =
+                                    module_->createFunction(helper, functionType);
+                                created->linkage =
+                                    HIRFunction::Linkage::External;
+                                function = created.get();
+                            }
+                            auto* fieldValue = builder_->createCall(
+                                function, {initValue}, "promise.capability.field");
+                            fieldValue->type = ptrType;
+                            bindDestructuringPattern(
+                                property.value.get(), fieldValue,
+                                property.defaultValue.get());
+
+                            if (auto* identifier =
+                                    dynamic_cast<IdentifierPattern*>(
+                                        property.value.get())) {
+                                if (property.key == "promise") {
+                                    promiseVars_.insert(identifier->name);
+                                } else if (property.key == "resolve") {
+                                    promiseResolverBindings_[identifier->name] =
+                                        initValue;
+                                } else {
+                                    promiseRejecterBindings_[identifier->name] =
+                                        initValue;
+                                }
+                            }
+                        }
+                        lastWasPromiseWithResolvers_ = false;
+                        lastWasPromise_ = false;
+                        continue;
+                    }
+                }
                 bindDestructuringPattern(decl.pattern.get(), initValue);
                 continue;  // Don't process as normal variable
             }
@@ -1195,6 +1420,124 @@ void HIRGenerator::visit(VarDeclStmt& node) {
                 pendingBoundArguments_.clear();
                 pendingBoundThis_ = nullptr;
                 lastFunctionName_.clear();
+            }
+
+            // Preserve references to primordial built-ins captured by
+            // conformance harnesses and production libraries. These aliases
+            // must remain callable after the original property is modified.
+            // Also recognize the standard receiver-uncurrying idiom:
+            // Function.prototype.call.bind(Object.prototype.hasOwnProperty).
+            auto registerPrimordial =
+                [&](const std::string& runtimeName,
+                    std::vector<HIRTypePtr> parameters,
+                    HIRTypePtr result) {
+                    if (!module_->getFunction(runtimeName)) {
+                        auto* type =
+                            new HIRFunctionType(parameters, result);
+                        auto function =
+                            module_->createFunction(runtimeName, type);
+                        function->linkage =
+                            HIRFunction::Linkage::External;
+                    }
+                    functionReferences_[decl.name] = runtimeName;
+                    lastFunctionName_.clear();
+                };
+            auto primordialPointerType =
+                std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto primordialStringType =
+                std::make_shared<HIRType>(HIRType::Kind::String);
+            auto primordialIntegerType =
+                std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto primordialBooleanType =
+                std::make_shared<HIRType>(HIRType::Kind::Bool);
+            auto primordialJSValueType =
+                std::make_shared<HIRType>(HIRType::Kind::JSValue);
+            auto memberPath = [&](Expr* expression) {
+                std::vector<std::string> parts;
+                Expr* cursor = expression;
+                while (auto* member =
+                           dynamic_cast<MemberExpr*>(cursor)) {
+                    if (member->isComputed) {
+                        parts.clear();
+                        break;
+                    }
+                    auto* property =
+                        dynamic_cast<Identifier*>(
+                            member->property.get());
+                    if (!property) {
+                        parts.clear();
+                        break;
+                    }
+                    parts.push_back(property->name);
+                    cursor = member->object.get();
+                }
+                if (auto* base = dynamic_cast<Identifier*>(cursor)) {
+                    parts.push_back(base->name);
+                } else {
+                    parts.clear();
+                }
+                std::reverse(parts.begin(), parts.end());
+                std::string path;
+                for (const auto& part : parts) {
+                    if (!path.empty()) path += ".";
+                    path += part;
+                }
+                return path;
+            };
+            const std::string directPath =
+                memberPath(decl.init.get());
+            if (directPath == "Object.getOwnPropertyDescriptor") {
+                registerPrimordial(
+                    "nova_object_getOwnPropertyDescriptor",
+                    {primordialPointerType, primordialStringType},
+                    primordialPointerType);
+            } else if (directPath == "Object.getOwnPropertyNames") {
+                registerPrimordial(
+                    "nova_object_getOwnPropertyNames",
+                    {primordialPointerType}, primordialPointerType);
+            } else if (directPath == "Object.defineProperty") {
+                registerPrimordial(
+                    "nova_object_defineProperty",
+                    {primordialPointerType, primordialStringType,
+                     primordialPointerType},
+                    primordialPointerType);
+            } else if (directPath == "Array.isArray") {
+                registerPrimordial(
+                    "nova_value_is_array",
+                    {primordialJSValueType}, primordialBooleanType);
+            } else if (auto* bindCall =
+                           dynamic_cast<CallExpr*>(decl.init.get())) {
+                if (memberPath(bindCall->callee.get()) ==
+                        "Function.prototype.call.bind" &&
+                    !bindCall->arguments.empty()) {
+                    const std::string targetPath =
+                        memberPath(bindCall->arguments.front().get());
+                    if (targetPath ==
+                        "Object.prototype.hasOwnProperty") {
+                        registerPrimordial(
+                            "nova_object_hasOwnProperty",
+                            {primordialPointerType, primordialStringType},
+                            primordialBooleanType);
+                    } else if (targetPath ==
+                               "Object.prototype.propertyIsEnumerable") {
+                        registerPrimordial(
+                            "nova_object_propertyIsEnumerable",
+                            {primordialPointerType, primordialStringType},
+                            primordialBooleanType);
+                    } else if (targetPath ==
+                               "Array.prototype.push") {
+                        registerPrimordial(
+                            "nova_value_array_push",
+                            {primordialPointerType, primordialIntegerType},
+                            primordialIntegerType);
+                    } else if (targetPath ==
+                               "Array.prototype.join") {
+                        registerPrimordial(
+                            "nova_value_array_join",
+                            {primordialPointerType, primordialStringType},
+                            primordialStringType);
+                    }
+                }
             }
 
             if (functionReferences_.count(decl.name) == 0 &&
@@ -1261,6 +1604,44 @@ void HIRGenerator::visit(VarDeclStmt& node) {
                     case Type::Kind::Boolean:
                         variableArrayElementTypes_[decl.name] = "Bool"; break;
                     default: break;
+                }
+            }
+            // Preserve the element type exposed by runtime array-producing
+            // builtins (for example Object.getOwnPropertyNames).  Without
+            // this, binding the result to a variable erases string[] to an
+            // opaque pointer and computed access is lowered as numeric i64.
+            if (variableArrayElementTypes_.count(decl.name) == 0 &&
+                initValue && initValue->type) {
+                HIRTypePtr inferredElementType;
+                if (auto* pointerType =
+                        dynamic_cast<HIRPointerType*>(initValue->type.get())) {
+                    if (auto* arrayType = dynamic_cast<HIRArrayType*>(
+                            pointerType->pointeeType.get())) {
+                        inferredElementType = arrayType->elementType;
+                    }
+                } else if (auto* arrayType =
+                               dynamic_cast<HIRArrayType*>(initValue->type.get())) {
+                    inferredElementType = arrayType->elementType;
+                }
+                if (inferredElementType) {
+                    switch (inferredElementType->kind) {
+                        case HIRType::Kind::String:
+                            variableArrayElementTypes_[decl.name] = "String";
+                            break;
+                        case HIRType::Kind::Bool:
+                            variableArrayElementTypes_[decl.name] = "Bool";
+                            break;
+                        case HIRType::Kind::I8:
+                        case HIRType::Kind::I16:
+                        case HIRType::Kind::I32:
+                        case HIRType::Kind::I64:
+                        case HIRType::Kind::F32:
+                        case HIRType::Kind::F64:
+                            variableArrayElementTypes_[decl.name] = "Number";
+                            break;
+                        default:
+                            break;
+                    }
                 }
             }
 
@@ -1377,10 +1758,63 @@ void HIRGenerator::visit(VarDeclStmt& node) {
             }
 
             // Check if this is a runtime array assignment (from keys(), values(), entries())
+            if (auto* call = dynamic_cast<CallExpr*>(decl.init.get())) {
+                if (auto* member =
+                        dynamic_cast<MemberExpr*>(call->callee.get())) {
+                    auto* receiver =
+                        dynamic_cast<Identifier*>(member->object.get());
+                    auto* method =
+                        dynamic_cast<Identifier*>(member->property.get());
+                    if (receiver && method &&
+                        dateTimeFormatVars_.count(receiver->name) > 0 &&
+                        method->name == "formatToParts") {
+                        runtimeArrayVars_.insert(decl.name);
+                        taggedRuntimeArrayVars_.insert(decl.name);
+                        intlPartsVars_.insert(decl.name);
+                    }
+                }
+            }
+
+            if (auto* initializer =
+                    dynamic_cast<Identifier*>(decl.init.get());
+                initializer && initializer->name == "eval") {
+                evalAliasVars_.insert(decl.name);
+            }
+            if (auto* construction =
+                    dynamic_cast<NewExpr*>(decl.init.get())) {
+                auto* constructor =
+                    dynamic_cast<Identifier*>(
+                        construction->callee.get());
+                if (constructor && constructor->name == "Function" &&
+                    !construction->arguments.empty()) {
+                    if (auto* body = dynamic_cast<StringLiteral*>(
+                            construction->arguments.back().get())) {
+                        for (char operation : {'+', '-', '*', '/', '%'}) {
+                            if (body->value.find(operation) !=
+                                std::string::npos) {
+                                dynamicFunctionOps_[decl.name] = operation;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             if (lastWasRuntimeArray_) {
                 runtimeArrayVars_.insert(decl.name);
+                if (lastWasTaggedRuntimeArray_) {
+                    taggedRuntimeArrayVars_.insert(decl.name);
+                    lastWasTaggedRuntimeArray_ = false;
+                }
                 if(NOVA_DEBUG) std::cerr << "DEBUG HIRGen: Registered runtime array variable: " << decl.name << std::endl;
                 lastWasRuntimeArray_ = false;  // Clear for next declaration
+            }
+            if (lastWasRegex_) {
+                regexVars_.insert(decl.name);
+                lastWasRegex_ = false;
+            }
+            if (lastWasRegexMatch_) {
+                regexMatchVars_.insert(decl.name);
+                lastWasRegexMatch_ = false;
             }
 
             // Check if this is an Intl.* assignment

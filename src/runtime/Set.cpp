@@ -9,6 +9,8 @@
 #include <vector>
 #include <unordered_set>
 #include <functional>
+#include "nova/runtime/Runtime.h"
+#include "nova/runtime/Value.h"
 
 extern "C" {
 
@@ -48,8 +50,18 @@ void* nova_set_create_from(void* iterable) {
 
     if (iterable) {
         int64_t len = nova_value_array_length(iterable);
+        const bool boxedElements =
+            static_cast<nova::runtime::ObjectHeader*>(iterable)
+                ->value_encoding == 1;
         for (int64_t i = 0; i < len; i++) {
-            void* val = reinterpret_cast<void*>(nova_value_array_at(iterable, i));
+            std::uint64_t bits = static_cast<std::uint64_t>(
+                nova_value_array_at(iterable, i));
+            if (!boxedElements) {
+                bits = nova_value_from_i64(
+                    static_cast<std::int64_t>(bits));
+            }
+            void* val = reinterpret_cast<void*>(
+                static_cast<std::uintptr_t>(bits));
             if (set->lookup.find(val) == set->lookup.end()) {
                 set->values.push_back(val);
                 set->lookup.insert(val);
@@ -127,6 +139,7 @@ void nova_set_clear(void* setPtr) {
 void* nova_set_values(void* setPtr) {
     void* result = nova_value_array_create();
     if (!setPtr) return result;
+    static_cast<nova::runtime::ObjectHeader*>(result)->value_encoding = 1;
 
     NovaSet* set = static_cast<NovaSet*>(setPtr);
     for (void* val : set->values) {

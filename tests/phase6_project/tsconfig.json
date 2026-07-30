@@ -1,0 +1,5 @@
+{
+  "extends": "./base.json",
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts", "src/**/*.cts"],
+  "exclude": ["dist", "node_modules"]
+}

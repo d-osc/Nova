@@ -260,6 +260,8 @@ private:
     std::unordered_map<std::string, const std::vector<ExprPtr>*> functionDefaultValues_;  // Maps function names to default values
     std::unordered_map<std::string, std::vector<std::shared_ptr<Pattern>>>
         functionParameterPatterns_;
+    std::unordered_map<std::string, std::unordered_set<size_t>>
+        dynamicObjectParameterIndices_;
     std::unordered_set<std::string> functionVars_;  // Set of variable names that are functions
     std::unordered_map<std::string, int64_t> functionParamCounts_;  // Function name -> param count
 
@@ -282,6 +284,9 @@ private:
     std::unordered_map<std::string, std::string> classInheritance_;  // Maps className -> parent className
     std::unordered_map<std::string, hir::HIRStructType*> classStructTypes_;  // Maps className -> struct type
     std::unordered_map<std::string, std::unordered_set<std::string>> classOwnMethods_;  // Maps className -> method names defined in that class (for inheritance resolution)
+    std::unordered_map<std::string, FunctionDecl*> functionDeclarations_;
+    std::unordered_map<std::string, int64_t>
+        legacyDecoratedMethodResultMultipliers_;
 
     // Store field initial literal values for inheritance
     struct FieldInitValue {
@@ -354,11 +359,15 @@ private:
     // Promise tracking (ES2015)
     std::unordered_set<std::string> promiseVars_;
     bool lastWasPromise_ = false;
+    std::unordered_set<std::string> evalAliasVars_;
+    std::unordered_map<std::string, char> dynamicFunctionOps_;
 
     // Promise.withResolvers() result tracking (ES2024). Vars here hold a
     // PromiseWithResolvers* — accessing .promise/.resolve/.reject routes
     // through the runtime helpers.
     std::unordered_set<std::string> promiseWithResolversVars_;
+    std::unordered_map<std::string, HIRValue*> promiseResolverBindings_;
+    std::unordered_map<std::string, HIRValue*> promiseRejecterBindings_;
     bool lastWasPromiseWithResolvers_ = false;
 
     // Generator tracking (ES2015)
@@ -366,6 +375,7 @@ private:
     std::unordered_set<std::string> generatorFuncs_;
     std::unordered_set<std::string> asyncFuncs_;
     bool forceTaggedFunctionABI_ = false;
+    bool forceDynamicThisABI_ = false;
     bool forcePromiseExecutorABI_ = false;
     std::string promiseExecutorResolveName_;
     std::string promiseExecutorRejectName_;
@@ -404,6 +414,12 @@ private:
     // Runtime array tracking
     std::unordered_set<std::string> runtimeArrayVars_;
     std::unordered_set<std::string> taggedRuntimeArrayVars_;
+    std::unordered_set<std::string> intlPartsVars_;
+    std::unordered_set<std::string> regexVars_;
+    std::unordered_set<std::string> regexMatchVars_;
+    bool lastWasRegex_ = false;
+    bool lastWasRegexMatch_ = false;
+    bool lastWasTaggedRuntimeArray_ = false;
     bool lastWasRuntimeArray_ = false;
 
     // Label support
@@ -459,6 +475,8 @@ private:
 
     // Map tracking (ES2015)
     std::unordered_set<std::string> mapVars_;
+    std::unordered_map<std::string, std::string> mapKeyElementTypes_;
+    std::unordered_map<std::string, std::string> mapValueElementTypes_;
     bool lastWasMap_ = false;
 
     // Set tracking (ES2015)

@@ -1,0 +1,59 @@
+{
+  "name": "ecosystem-real-matrix-2026-07-29",
+  "exclusions": "../exclusions/ecosystem-real.json",
+  "timeout_seconds": 120,
+  "budgets": {
+    "max_case_ms": 120000,
+    "max_peak_memory_kb": 1048576
+  },
+  "cases": [
+    {
+      "name": "lodash-4.18.1",
+      "tier": "utility",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/lodash.js"],
+      "contains": ["lodash-ok"]
+    },
+    {
+      "name": "zod-4.4.3",
+      "tier": "validation",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/zod.js"],
+      "contains": ["zod-ok"]
+    },
+    {
+      "name": "rxjs-7.8.2",
+      "tier": "reactive",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/rxjs.js"],
+      "contains": ["rxjs-ok"]
+    },
+    {
+      "name": "express-5.2.1",
+      "tier": "server-framework",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/express.js"],
+      "contains": ["express-ok"]
+    },
+    {
+      "name": "react-19.2.8",
+      "tier": "ui-framework",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/react.js"],
+      "contains": ["react-ok"]
+    },
+    {
+      "name": "react-dom-19.2.8",
+      "tier": "ui-renderer",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/react-dom.js"],
+      "contains": ["react-dom-ok"]
+    },
+    {
+      "name": "vue-3.5.40",
+      "tier": "ui-framework",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/vue.js"],
+      "contains": ["vue-ok"]
+    },
+    {
+      "name": "vite-8.1.5",
+      "tier": "build-tool",
+      "command": ["{nova}", "run", "{root}/tests/qualification/fixtures/ecosystem-real/vite.mjs"],
+      "contains": ["vite-ok"]
+    }
+  ]
+}

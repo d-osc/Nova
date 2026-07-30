@@ -5248,6 +5248,39 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                                 false);
                             callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
                         }
+                        // Map numeric/object keys share an opaque 64-bit key ABI.  Do not
+                        // infer these declarations from the first call: a Map may be used
+                        // with NaN (double), object identity (ptr), and integer keys in the
+                        // same function.  The argument conversion below normalizes all of
+                        // them to i64 before calling the runtime.
+                        if (!callee &&
+                            (funcName == "nova_map_set_num_num" ||
+                             funcName == "nova_map_set_num_str")) {
+                            llvm::Type* valueType = nullptr;
+                            if (funcName == "nova_map_set_num_str") {
+                                valueType = llvm::PointerType::getUnqual(*context);
+                            } else {
+                                valueType = llvm::Type::getInt64Ty(*context);
+                            }
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::PointerType::getUnqual(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context), valueType},
+                                false);
+                            callee = llvm::Function::Create(
+                                funcType, llvm::Function::ExternalLinkage,
+                                funcName, module.get());
+                        }
+                        if (!callee && funcName == "nova_map_get_num_jsvalue") {
+                            llvm::FunctionType* funcType = llvm::FunctionType::get(
+                                llvm::Type::getInt64Ty(*context),
+                                {llvm::PointerType::getUnqual(*context),
+                                 llvm::Type::getInt64Ty(*context)},
+                                false);
+                            callee = llvm::Function::Create(
+                                funcType, llvm::Function::ExternalLinkage,
+                                funcName, module.get());
+                        }
                         if (!callee && funcName == "nova_iterator_result_value") {
                             llvm::FunctionType* funcType = llvm::FunctionType::get(
                                 llvm::Type::getInt64Ty(*context),
@@ -5457,6 +5490,34 @@ void LLVMCodeGen::generateTerminator(mir::MIRTerminator* terminator) {
                             if(NOVA_DEBUG) std::cerr << "DEBUG LLVM: Adding variadic argument " << (argIdx-1) << std::endl;
                             args.push_back(argValue);
                         }
+                    }
+                }
+
+                // JavaScript functions accept fewer arguments than their
+                // declared parameter count; each omitted argument observes
+                // `undefined`. LLVM requires exact fixed-arity calls, so pad
+                // calls to generated (non-declaration) functions with the
+                // ABI representation appropriate for each remaining slot.
+                // External runtime declarations remain strict so a broken
+                // compiler/runtime ABI is still reported by the verifier.
+                if (!callee->isDeclaration()) {
+                    while (paramIt != callee->arg_end()) {
+                        llvm::Type* expectedType = paramIt->getType();
+                        llvm::Value* missing = nullptr;
+                        if (expectedType->isPointerTy()) {
+                            missing = llvm::ConstantPointerNull::get(
+                                llvm::cast<llvm::PointerType>(expectedType));
+                        } else if (expectedType->isIntegerTy(64)) {
+                            missing = llvm::ConstantInt::get(
+                                expectedType, 0x7ff9000000000000ULL);
+                        } else if (expectedType->isIntegerTy()) {
+                            missing = llvm::ConstantInt::get(expectedType, 0);
+                        } else if (expectedType->isFloatingPointTy()) {
+                            missing = llvm::ConstantFP::getNaN(expectedType);
+                        }
+                        if (!missing) break;
+                        args.push_back(missing);
+                        ++paramIt;
                     }
                 }
 
@@ -6476,8 +6537,23 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
 
         // CRITICAL FIX: Allocate array in function entry block, not at current insertion point
         // Creating allocas inside loops causes undefined behavior and segfaults
-        llvm::AllocaInst* arrayAlloca = nullptr;
-        if (currentFunction && !currentFunction->empty()) {
+        llvm::Value* arrayAlloca = nullptr;
+        const bool arrayEscapesCallback =
+            currentFunction &&
+            currentFunction->getName().starts_with("__arrow_");
+        if (arrayEscapesCallback) {
+            auto mallocFn = module->getOrInsertFunction(
+                "malloc",
+                llvm::FunctionType::get(
+                    llvm::PointerType::get(*context, 0),
+                    {llvm::Type::getInt64Ty(*context)}, false));
+            arrayAlloca = builder->CreateCall(
+                mallocFn,
+                {llvm::ConstantInt::get(
+                    llvm::Type::getInt64Ty(*context),
+                    std::max<std::size_t>(arraySize, 1) * sizeof(std::int64_t))},
+                "array_heap");
+        } else if (currentFunction && !currentFunction->empty()) {
             llvm::IRBuilderBase::InsertPoint savedIP = builder->saveIP();
             llvm::BasicBlock& entryBlock = currentFunction->getEntryBlock();
             builder->SetInsertPoint(&entryBlock, entryBlock.getFirstInsertionPt());
@@ -6599,8 +6675,19 @@ llvm::Value* LLVMCodeGen::generateAggregate(mir::MIRAggregateRValue* aggOp) {
         llvm::StructType* arrayMetadataType = llvm::StructType::get(*context, arrayMetadataFields);
 
         // CRITICAL FIX: Allocate metadata in entry block to avoid loop allocation issues
-        llvm::AllocaInst* metadataAlloca = nullptr;
-        if (currentFunction && !currentFunction->empty()) {
+        llvm::Value* metadataAlloca = nullptr;
+        if (arrayEscapesCallback) {
+            auto mallocFn = module->getOrInsertFunction(
+                "malloc",
+                llvm::FunctionType::get(
+                    llvm::PointerType::get(*context, 0),
+                    {llvm::Type::getInt64Ty(*context)}, false));
+            metadataAlloca = builder->CreateCall(
+                mallocFn,
+                {llvm::ConstantInt::get(
+                    llvm::Type::getInt64Ty(*context), 48)},
+                "array_meta_heap");
+        } else if (currentFunction && !currentFunction->empty()) {
             llvm::IRBuilderBase::InsertPoint savedIP2 = builder->saveIP();
             llvm::BasicBlock& entryBlock2 = currentFunction->getEntryBlock();
             builder->SetInsertPoint(&entryBlock2, entryBlock2.getFirstInsertionPt());

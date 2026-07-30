@@ -541,13 +541,17 @@ std::unique_ptr<Expr> Parser::parseEqualityExpression() {
 
 std::unique_ptr<Expr> Parser::parseRelationalExpression() {
     auto left = parseShiftExpression();
-    
-    while (match(TokenType::Less) || 
-           match(TokenType::Greater) ||
-           match(TokenType::LessEqual) ||
-           match(TokenType::GreaterEqual) ||
-           match(TokenType::KeywordInstanceof) ||
-           match(TokenType::KeywordIn)) {
+
+    while (true) {
+        bool matched = match(TokenType::Less) ||
+            match(TokenType::Greater) ||
+            match(TokenType::LessEqual) ||
+            match(TokenType::GreaterEqual) ||
+            match(TokenType::KeywordInstanceof);
+        if (!matched && allowInOperator_) {
+            matched = match(TokenType::KeywordIn);
+        }
+        if (!matched) break;
         Token op = peek(-1);
         auto right = parseShiftExpression();
         
@@ -1132,6 +1136,43 @@ std::unique_ptr<Expr> Parser::parsePrimaryExpression() {
         }
         
         auto callee = parsePrimaryExpression();
+
+        // A constructor target is a member expression, not merely a primary
+        // expression. Without consuming this chain here,
+        // `new Intl.NumberFormat(...)` was parsed as
+        // `(new Intl).NumberFormat(...)`, bypassing NewExpr lowering.
+        while (true) {
+            if (match(TokenType::Dot)) {
+                Token property;
+                if (check(TokenType::Identifier) || peek().isKeyword()) {
+                    property = advance();
+                } else {
+                    property = consume(
+                        TokenType::Identifier,
+                        "Expected constructor property name");
+                }
+                auto propertyExpr =
+                    std::make_unique<Identifier>(property.value);
+                propertyExpr->location = property.location;
+                auto member = std::make_unique<MemberExpr>(
+                    std::move(callee), std::move(propertyExpr),
+                    false, false);
+                member->location = property.location;
+                callee = std::move(member);
+                continue;
+            }
+            if (match(TokenType::LeftBracket)) {
+                auto property = parseExpression();
+                consume(TokenType::RightBracket, "Expected ']'");
+                auto member = std::make_unique<MemberExpr>(
+                    std::move(callee), std::move(property),
+                    true, false);
+                member->location = getCurrentLocation();
+                callee = std::move(member);
+                continue;
+            }
+            break;
+        }
 
         // Optional type arguments on constructor calls: new Set<number>(...).
         // Try to parse them; if parsing fails or doesn't end in `(`, roll back

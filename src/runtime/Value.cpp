@@ -1,4 +1,5 @@
 #include "nova/runtime/Value.h"
+#include "nova/runtime/Runtime.h"
 
 #include <cmath>
 #include <cctype>
@@ -103,8 +104,11 @@ std::string value_to_string(JSValue value) {
         return text ? text : "";
     }
     if (js_value_has_tag(value, JS_VALUE_OBJECT_TAG)) return "[object Object]";
+    const double number = bits_double(value);
+    if (std::isnan(number)) return "NaN";
+    if (std::isinf(number)) return number < 0 ? "-Infinity" : "Infinity";
     char buffer[64] = {};
-    std::snprintf(buffer, sizeof(buffer), "%.15g", bits_double(value));
+    std::snprintf(buffer, sizeof(buffer), "%.15g", number);
     return buffer;
 }
 
@@ -130,6 +134,49 @@ std::uint64_t nova_value_from_string(const char* value) {
 
 std::uint64_t nova_value_from_object(void* value) {
     return value ? pointer_value(JS_VALUE_OBJECT_TAG, value) : JS_VALUE_NULL;
+}
+
+std::int64_t nova_value_is_array(std::uint64_t value) {
+    if (!js_value_has_tag(value, JS_VALUE_OBJECT_TAG)) return 0;
+    auto* header = reinterpret_cast<nova::runtime::ObjectHeader*>(
+        static_cast<std::uintptr_t>(
+            value & JS_VALUE_PAYLOAD_MASK));
+    return header &&
+            header->type_id ==
+                static_cast<std::uint32_t>(
+                    nova::runtime::TypeId::ARRAY)
+        ? 1
+        : 0;
+}
+
+const char* nova_value_typeof(std::uint64_t value) {
+    if (value == JS_VALUE_UNDEFINED) return "undefined";
+    if (value == JS_VALUE_NULL) return "object";
+    if (value == JS_VALUE_TRUE || value == JS_VALUE_FALSE) {
+        return "boolean";
+    }
+    if (js_value_has_tag(value, JS_VALUE_STRING_TAG)) return "string";
+    if (js_value_has_tag(value, JS_VALUE_OBJECT_TAG)) {
+        auto* payload = reinterpret_cast<char*>(
+            static_cast<std::uintptr_t>(
+                value & JS_VALUE_PAYLOAD_MASK));
+        // runtime::allocate returns the payload immediately after its GC
+        // header. Inspecting the payload as a header reads the embedded
+        // Object storage instead and misclassifies callable intrinsics as
+        // ordinary objects.
+        auto* header = payload
+            ? reinterpret_cast<nova::runtime::ObjectHeader*>(
+                  payload - sizeof(nova::runtime::ObjectHeader))
+            : nullptr;
+        if (header &&
+            header->type_id ==
+                static_cast<std::uint32_t>(
+                    nova::runtime::TypeId::FUNCTION)) {
+            return "function";
+        }
+        return "object";
+    }
+    return "number";
 }
 
 void* nova_value_to_object(std::uint64_t value) {

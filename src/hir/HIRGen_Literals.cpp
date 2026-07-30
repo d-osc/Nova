@@ -96,6 +96,7 @@ void HIRGenerator::visit(RegexLiteralExpr& node) {
     }
 
     lastValue_ = builder_->createCall(regexCreateFunc, args, "regex");
+    lastWasRegex_ = true;
 }
 
 // BooleanLiteral - handles true/false constants

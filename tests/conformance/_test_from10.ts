@@ -1,3 +1,6 @@
+// NOVA_TEST_MODE: run
+// NOVA_EXPECT_EXIT: 0
+
 function main(): number {
     console.log("start");
     let object = Object.fromEntries([

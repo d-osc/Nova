@@ -19,5 +19,12 @@ function main(): number {
     let iteratorB = Symbol.iterator;
     if (!(iteratorA === iteratorB)) return 8;
     if (!(typeof iteratorA === "symbol")) return 9;
+
+    let iterable = {};
+    function iteratorMarker(): number {
+        return 42;
+    }
+    iterable[Symbol.iterator] = iteratorMarker;
+    if (!(iterable[Symbol.iterator] === iteratorMarker)) return 10;
     return 0;
 }

@@ -14,7 +14,6 @@
 namespace nova::hir {
 
 void HIRGenerator::visit(SpreadExpr& node) {
-        std::cerr << "=== SPREAD EXPR VISITOR CALLED ===" << std::endl;
         // Spread operator: ...expr
         // Evaluate the argument - the array/iterable to spread
         // The actual unpacking/spreading is handled by the context:
@@ -24,6 +23,61 @@ void HIRGenerator::visit(SpreadExpr& node) {
         // This visitor just evaluates the argument and passes it through
         if (node.argument) {
             node.argument->accept(*this);
+            if (auto* identifier =
+                    dynamic_cast<Identifier*>(node.argument.get());
+                identifier && setVars_.count(identifier->name) > 0) {
+                auto pointerType =
+                    std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto existing = module_->getFunction("nova_set_values");
+                HIRFunction* function =
+                    existing ? existing.get() : nullptr;
+                if (!function) {
+                    auto* functionType =
+                        new HIRFunctionType({pointerType}, pointerType);
+                    auto created = module_->createFunction(
+                        "nova_set_values", functionType);
+                    created->linkage = HIRFunction::Linkage::External;
+                    function = created.get();
+                }
+                lastValue_ = builder_->createCall(
+                    function, {lastValue_}, "set.spread.array");
+                lastValue_->type = pointerType;
+                lastWasRuntimeArray_ = true;
+                return;
+            }
+            bool generatorSpread = false;
+            if (auto* call =
+                    dynamic_cast<CallExpr*>(node.argument.get())) {
+                if (auto* callee =
+                        dynamic_cast<Identifier*>(call->callee.get())) {
+                    generatorSpread =
+                        generatorFuncs_.count(callee->name) > 0;
+                }
+            } else if (auto* identifier =
+                           dynamic_cast<Identifier*>(node.argument.get())) {
+                generatorSpread =
+                    generatorVars_.count(identifier->name) > 0;
+            }
+            if (generatorSpread) {
+                auto pointerType =
+                    std::make_shared<HIRType>(HIRType::Kind::Pointer);
+                auto existing =
+                    module_->getFunction("nova_generator_to_array");
+                HIRFunction* function =
+                    existing ? existing.get() : nullptr;
+                if (!function) {
+                    auto* functionType =
+                        new HIRFunctionType({pointerType}, pointerType);
+                    auto created = module_->createFunction(
+                        "nova_generator_to_array", functionType);
+                    created->linkage = HIRFunction::Linkage::External;
+                    function = created.get();
+                }
+                lastValue_ = builder_->createCall(
+                    function, {lastValue_}, "generator.spread.array");
+                lastValue_->type = pointerType;
+                lastWasRuntimeArray_ = true;
+            }
             // lastValue_ now contains the array/iterable to spread
             // The parent expression (ArrayExpr, CallExpr, etc.) is responsible for unpacking
         }
@@ -358,10 +412,16 @@ void HIRGenerator::visit(YieldExpr& node) {
             // Continue code generation in the resume block
             builder_->setInsertPoint(resumeBlock);
 
-            // For yield expressions that return a value (like let x = yield 5),
-            // the value comes from gen.next(value) - load from generator input
-            // For now, just use 0
-            lastValue_ = builder_->createIntConstant(0);
+            // The second hidden generator parameter is the value supplied by
+            // the resuming `next(value)` call.  Yield is an expression, so
+            // this must become its result after control reaches the resume
+            // block (rather than the historical hard-coded zero).
+            if (currentFunction_ &&
+                currentFunction_->parameters.size() > 1) {
+                lastValue_ = currentFunction_->parameters[1];
+            } else {
+                lastValue_ = builder_->createIntConstant(0);
+            }
         } else {
             // Fallback: yield without generator context
             lastValue_ = yieldValue;
@@ -1340,14 +1400,365 @@ void HIRGenerator::visit(Program& node) {
             }
         }
 
+        // Hoisted function bodies may reference primordial built-ins captured
+        // by top-level variables declared earlier in source. Since Nova emits
+        // all FunctionDecl bodies before top-level initializers, pre-register
+        // these aliases here so calls inside those bodies do not collapse to
+        // placeholders.
+        auto memberPath = [](Expr* expression) {
+            std::vector<std::string> parts;
+            Expr* cursor = expression;
+            while (auto* member =
+                       dynamic_cast<MemberExpr*>(cursor)) {
+                if (member->isComputed) {
+                    parts.clear();
+                    break;
+                }
+                auto* property = dynamic_cast<Identifier*>(
+                    member->property.get());
+                if (!property) {
+                    parts.clear();
+                    break;
+                }
+                parts.push_back(property->name);
+                cursor = member->object.get();
+            }
+            if (auto* base = dynamic_cast<Identifier*>(cursor)) {
+                parts.push_back(base->name);
+            } else {
+                parts.clear();
+            }
+            std::reverse(parts.begin(), parts.end());
+            std::string path;
+            for (const auto& part : parts) {
+                if (!path.empty()) path += ".";
+                path += part;
+            }
+            return path;
+        };
+        auto pointerType =
+            std::make_shared<HIRType>(HIRType::Kind::Pointer);
+        auto stringType =
+            std::make_shared<HIRType>(HIRType::Kind::String);
+        auto integerType =
+            std::make_shared<HIRType>(HIRType::Kind::I64);
+        auto booleanType =
+            std::make_shared<HIRType>(HIRType::Kind::Bool);
+        auto jsValueType =
+            std::make_shared<HIRType>(HIRType::Kind::JSValue);
+        auto registerPrimordial =
+            [&](const std::string& alias,
+                const std::string& runtimeName,
+                std::vector<HIRTypePtr> parameters,
+                HIRTypePtr result) {
+                if (!module_->getFunction(runtimeName)) {
+                    auto* type =
+                        new HIRFunctionType(parameters, result);
+                    auto function =
+                        module_->createFunction(runtimeName, type);
+                    function->linkage =
+                        HIRFunction::Linkage::External;
+                }
+                functionReferences_[alias] = runtimeName;
+            };
+        for (const auto& statement : node.body) {
+            auto* variables =
+                dynamic_cast<VarDeclStmt*>(statement.get());
+            if (!variables) continue;
+            for (const auto& declaration : variables->declarations) {
+                if (declaration.name.empty() || !declaration.init) {
+                    continue;
+                }
+                const std::string direct =
+                    memberPath(declaration.init.get());
+                if (direct == "Object.getOwnPropertyDescriptor") {
+                    registerPrimordial(
+                        declaration.name,
+                        "nova_object_getOwnPropertyDescriptor",
+                        {pointerType, stringType}, pointerType);
+                } else if (direct == "Object.getOwnPropertyNames") {
+                    registerPrimordial(
+                        declaration.name,
+                        "nova_object_getOwnPropertyNames",
+                        {pointerType}, pointerType);
+                } else if (direct == "Object.defineProperty") {
+                    registerPrimordial(
+                        declaration.name,
+                        "nova_object_defineProperty",
+                        {pointerType, stringType, pointerType},
+                        pointerType);
+                } else if (direct == "Array.isArray") {
+                    registerPrimordial(
+                        declaration.name,
+                        "nova_value_is_array",
+                        {jsValueType}, booleanType);
+                } else if (auto* bind =
+                               dynamic_cast<CallExpr*>(
+                                   declaration.init.get())) {
+                    if (memberPath(bind->callee.get()) !=
+                            "Function.prototype.call.bind" ||
+                        bind->arguments.empty()) {
+                        continue;
+                    }
+                    const std::string target =
+                        memberPath(bind->arguments.front().get());
+                    if (target ==
+                        "Object.prototype.hasOwnProperty") {
+                        registerPrimordial(
+                            declaration.name,
+                            "nova_object_hasOwnProperty",
+                            {pointerType, stringType}, booleanType);
+                    } else if (target ==
+                               "Object.prototype.propertyIsEnumerable") {
+                        registerPrimordial(
+                            declaration.name,
+                            "nova_object_propertyIsEnumerable",
+                            {pointerType, stringType}, booleanType);
+                    } else if (target ==
+                               "Array.prototype.push") {
+                        registerPrimordial(
+                            declaration.name,
+                            "nova_value_array_push",
+                            {pointerType, integerType}, integerType);
+                    } else if (target ==
+                               "Array.prototype.join") {
+                        registerPrimordial(
+                            declaration.name,
+                            "nova_value_array_join",
+                            {pointerType, stringType}, stringType);
+                    }
+                }
+            }
+        }
+
         // Resolve imports before local function bodies so imported bindings are
         // visible while those bodies are generated.
         for (size_t idx : importDeclIndices) {
             node.body[idx]->accept(*this);
         }
 
-        // Process function/class declarations first (they can be used anywhere)
+        // Emit ordinary function declarations in dependency order. The
+        // previous single hoisting pass generated a caller body before a
+        // later-declared callee existed in the HIR module, so valid forward
+        // calls silently reused a stale expression value. A dependency walk
+        // preserves JavaScript function hoisting while retaining the existing
+        // one-pass body generator.
+        std::unordered_map<std::string, size_t> functionIndexByName;
         for (size_t idx : functionDeclIndices) {
+            auto* statement =
+                dynamic_cast<DeclStmt*>(node.body[idx].get());
+            auto* function = statement
+                ? dynamic_cast<FunctionDecl*>(
+                      statement->declaration.get())
+                : nullptr;
+            if (function) {
+                functionIndexByName[function->name] = idx;
+                // Classes are emitted before ordinary function bodies so
+                // their layouts are available to `main`. Register the AST
+                // declarations up front as well, allowing class decorators
+                // to inspect a decorator declared later in the source.
+                functionDeclarations_[function->name] = function;
+            }
+        }
+        std::unordered_map<size_t, std::unordered_set<std::string>>
+            functionDependencies;
+        std::function<void(Expr*, std::unordered_set<std::string>&)>
+            scanExpression;
+        std::function<void(Stmt*, std::unordered_set<std::string>&)>
+            scanStatement;
+        scanExpression =
+            [&](Expr* expression,
+                std::unordered_set<std::string>& dependencies) {
+                if (!expression) return;
+                if (auto* call =
+                        dynamic_cast<CallExpr*>(expression)) {
+                    if (auto* identifier =
+                            dynamic_cast<Identifier*>(
+                                call->callee.get())) {
+                        if (functionIndexByName.count(
+                                identifier->name) > 0) {
+                            dependencies.insert(identifier->name);
+                        }
+                    }
+                    scanExpression(call->callee.get(), dependencies);
+                    for (auto& argument : call->arguments) {
+                        scanExpression(argument.get(), dependencies);
+                    }
+                } else if (auto* binary =
+                               dynamic_cast<BinaryExpr*>(expression)) {
+                    scanExpression(binary->left.get(), dependencies);
+                    scanExpression(binary->right.get(), dependencies);
+                } else if (auto* unary =
+                               dynamic_cast<UnaryExpr*>(expression)) {
+                    scanExpression(unary->operand.get(), dependencies);
+                } else if (auto* assignment =
+                               dynamic_cast<AssignmentExpr*>(expression)) {
+                    scanExpression(assignment->left.get(), dependencies);
+                    scanExpression(assignment->right.get(), dependencies);
+                } else if (auto* update =
+                               dynamic_cast<UpdateExpr*>(expression)) {
+                    scanExpression(update->argument.get(), dependencies);
+                } else if (auto* member =
+                               dynamic_cast<MemberExpr*>(expression)) {
+                    scanExpression(member->object.get(), dependencies);
+                    scanExpression(member->property.get(), dependencies);
+                } else if (auto* conditional =
+                               dynamic_cast<ConditionalExpr*>(expression)) {
+                    scanExpression(conditional->test.get(), dependencies);
+                    scanExpression(
+                        conditional->consequent.get(), dependencies);
+                    scanExpression(
+                        conditional->alternate.get(), dependencies);
+                } else if (auto* array =
+                               dynamic_cast<ArrayExpr*>(expression)) {
+                    for (auto& element : array->elements) {
+                        scanExpression(element.get(), dependencies);
+                    }
+                } else if (auto* object =
+                               dynamic_cast<ObjectExpr*>(expression)) {
+                    for (auto& property : object->properties) {
+                        scanExpression(
+                            property.value.get(), dependencies);
+                    }
+                } else if (auto* parenthesized =
+                               dynamic_cast<ParenthesizedExpr*>(
+                                   expression)) {
+                    scanExpression(
+                        parenthesized->expression.get(),
+                        dependencies);
+                } else if (auto* sequence =
+                               dynamic_cast<SequenceExpr*>(expression)) {
+                    for (auto& item : sequence->expressions) {
+                        scanExpression(item.get(), dependencies);
+                    }
+                } else if (auto* awaited =
+                               dynamic_cast<AwaitExpr*>(expression)) {
+                    scanExpression(awaited->argument.get(), dependencies);
+                } else if (auto* yielded =
+                               dynamic_cast<YieldExpr*>(expression)) {
+                    scanExpression(yielded->argument.get(), dependencies);
+                }
+            };
+        scanStatement =
+            [&](Stmt* statement,
+                std::unordered_set<std::string>& dependencies) {
+                if (!statement) return;
+                if (auto* block = dynamic_cast<BlockStmt*>(statement)) {
+                    for (auto& item : block->statements) {
+                        scanStatement(item.get(), dependencies);
+                    }
+                } else if (auto* expression =
+                               dynamic_cast<ExprStmt*>(statement)) {
+                    scanExpression(
+                        expression->expression.get(), dependencies);
+                } else if (auto* variables =
+                               dynamic_cast<VarDeclStmt*>(statement)) {
+                    for (auto& declaration : variables->declarations) {
+                        scanExpression(
+                            declaration.init.get(), dependencies);
+                    }
+                } else if (auto* conditional =
+                               dynamic_cast<IfStmt*>(statement)) {
+                    scanExpression(
+                        conditional->test.get(), dependencies);
+                    scanStatement(
+                        conditional->consequent.get(), dependencies);
+                    scanStatement(
+                        conditional->alternate.get(), dependencies);
+                } else if (auto* whileLoop =
+                               dynamic_cast<WhileStmt*>(statement)) {
+                    scanExpression(
+                        whileLoop->test.get(), dependencies);
+                    scanStatement(
+                        whileLoop->body.get(), dependencies);
+                } else if (auto* forLoop =
+                               dynamic_cast<ForStmt*>(statement)) {
+                    scanStatement(
+                        forLoop->init.get(), dependencies);
+                    scanExpression(
+                        forLoop->test.get(), dependencies);
+                    scanExpression(
+                        forLoop->update.get(), dependencies);
+                    scanStatement(
+                        forLoop->body.get(), dependencies);
+                } else if (auto* returned =
+                               dynamic_cast<ReturnStmt*>(statement)) {
+                    scanExpression(
+                        returned->argument.get(), dependencies);
+                } else if (auto* thrown =
+                               dynamic_cast<ThrowStmt*>(statement)) {
+                    scanExpression(thrown->argument.get(), dependencies);
+                } else if (auto* attempted =
+                               dynamic_cast<TryStmt*>(statement)) {
+                    scanStatement(attempted->block.get(), dependencies);
+                    if (attempted->handler) {
+                        scanStatement(
+                            attempted->handler->body.get(),
+                            dependencies);
+                    }
+                    scanStatement(
+                        attempted->finalizer.get(), dependencies);
+                }
+            };
+        for (const auto& entry : functionIndexByName) {
+            auto* declaration = dynamic_cast<DeclStmt*>(
+                node.body[entry.second].get());
+            auto* function = declaration
+                ? dynamic_cast<FunctionDecl*>(
+                      declaration->declaration.get())
+                : nullptr;
+            if (function) {
+                scanStatement(
+                    function->body.get(),
+                    functionDependencies[entry.second]);
+            }
+        }
+        std::vector<size_t> orderedFunctionDeclIndices;
+        // Class/enum/type metadata must exist before any function body that
+        // constructs or inspects those declarations. They do not participate
+        // in the ordinary-function dependency graph.
+        for (size_t idx : functionDeclIndices) {
+            auto* declaration =
+                dynamic_cast<DeclStmt*>(node.body[idx].get());
+            if (!declaration ||
+                !dynamic_cast<FunctionDecl*>(
+                    declaration->declaration.get())) {
+                orderedFunctionDeclIndices.push_back(idx);
+            }
+        }
+        std::unordered_set<size_t> visiting;
+        std::unordered_set<size_t> visited;
+        std::function<void(size_t)> visitDependency =
+            [&](size_t index) {
+                if (visited.count(index) > 0) return;
+                if (visiting.count(index) > 0) return;
+                visiting.insert(index);
+                for (const auto& dependency :
+                     functionDependencies[index]) {
+                    auto found =
+                        functionIndexByName.find(dependency);
+                    if (found != functionIndexByName.end() &&
+                        found->second != index) {
+                        visitDependency(found->second);
+                    }
+                }
+                visiting.erase(index);
+                visited.insert(index);
+                orderedFunctionDeclIndices.push_back(index);
+            };
+        for (size_t idx : functionDeclIndices) {
+            if (functionDependencies.count(idx) > 0 ||
+                std::any_of(
+                    functionIndexByName.begin(),
+                    functionIndexByName.end(),
+                    [&](const auto& item) {
+                        return item.second == idx;
+                    })) {
+                visitDependency(idx);
+            }
+        }
+        // Process function/class declarations first (they can be used anywhere)
+        for (size_t idx : orderedFunctionDeclIndices) {
             node.body[idx]->accept(*this);
         }
 

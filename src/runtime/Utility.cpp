@@ -1638,11 +1638,28 @@ int64_t nova_get_exception() {
     return g_exception_value;
 }
 
+// Mark the current exception as consumed while preserving its value and
+// class-name metadata for catch-body operations such as `instanceof`.
+void nova_consume_exception() {
+    g_exception_pending = false;
+}
+
 // Clear exception
 void nova_clear_exception() {
     g_exception_pending = false;
     g_exception_value = 0;
     g_exception_class_name = nullptr;
+}
+
+// Side-effect anchor used by the HIR expression-statement lowering to keep
+// discarded calls to user-code-invoking runtime helpers (for example
+// nova_dynamic_call_method_*, nova_regexp_legacy_dispatch_call) live across the
+// LLVM DCE/InstCombine passes. Such helpers can throw, exit or run arbitrary
+// compiled code, so a bare `obj.method();` whose result is unused must still
+// execute. The anchor is an opaque external sink: the optimizer cannot prove
+// it is dead, so it (and the call whose result it consumes) is retained.
+void nova_sideeffect_anchor([[maybe_unused]] int64_t value) {
+    // Intentionally empty: only the call's existence matters.
 }
 
 // eval() - evaluates JavaScript code at runtime (ES1)

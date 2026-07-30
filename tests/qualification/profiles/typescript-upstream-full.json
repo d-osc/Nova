@@ -1,0 +1,14 @@
+{
+  "name": "typescript-upstream-full",
+  "root": "../../../build/qualification/upstream/TypeScript/tests/cases",
+  "baselines": "../../../build/qualification/upstream/TypeScript/tests/baselines/reference",
+  "executable_categories": [
+    "compiler",
+    "conformance"
+  ],
+  "timeout_seconds": 30,
+  "budgets": {
+    "max_case_ms": 30000,
+    "max_peak_memory_kb": 1048576
+  }
+}

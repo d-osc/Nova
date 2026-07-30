@@ -169,6 +169,8 @@ struct CompilerOptions {
 
 struct TSConfig {
     CompilerOptions compilerOptions;
+    std::set<std::string> specifiedCompilerOptions;
+    std::set<std::string> specifiedTopLevel;
     std::vector<std::string> include;
     std::vector<std::string> exclude;
     std::vector<std::string> files;       // Explicit file list
@@ -265,7 +267,8 @@ private:
     std::string transformImports(const std::string& source);
     std::string transformExports(const std::string& source);
     std::string transformJSX(const std::string& source);
-    std::string transformPaths(const std::string& source);
+    std::string transformPaths(
+        const std::string& source, const std::string& filename);
     std::string downlevelToTarget(const std::string& source);
     std::string minifyCode(const std::string& source);
     std::string generateSourceMap(const std::string& source, const std::string& output, const std::string& filename);
@@ -275,6 +278,7 @@ private:
     std::vector<std::string> findSourceFiles(const std::string& projectPath);
     bool matchesGlob(const std::string& path, const std::string& pattern);
     std::string resolveOutputPath(const std::string& inputPath, const std::string& ext);
+    std::string resolveConfigRelativePath(const std::string& path) const;
 
     // Config helpers
     bool loadConfigRecursive(const std::string& configPath, std::set<std::string>& visited);

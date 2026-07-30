@@ -12,6 +12,13 @@ Parser::Parser(Lexer& lexer)
         token = lexer_.nextToken();
         tokens_.push_back(token);
     } while (token.type != TokenType::EndOfFile);
+    // Track a top-level strict directive for grammar productions whose
+    // Annex-B behavior differs between strict and non-strict scripts.
+    if (!tokens_.empty() &&
+        tokens_.front().type == TokenType::StringLiteral &&
+        tokens_.front().value == "use strict") {
+        strictMode_ = true;
+    }
 }
 
 std::unique_ptr<Program> Parser::parseProgram() {
@@ -184,8 +191,8 @@ void Parser::synchronize() {
 void Parser::reportError(const std::string& message) {
     auto loc = getCurrentLocation();
     std::stringstream ss;
-    ss << loc.filename << ":" << loc.line << ":" << loc.column 
-       << ": error: " << message;
+    ss << loc.filename << ":" << loc.line << ":" << loc.column
+       << ": error SyntaxError: " << message;
     errors_.push_back(ss.str());
 }
 

@@ -1,0 +1,21 @@
+{
+  "test262": {
+    "repository": "https://github.com/tc39/test262.git",
+    "revision": "defaaf1571cd13b183e3f505c6a06e8db316e593",
+    "js_files": 53741
+  },
+  "typescript": {
+    "repository": "https://github.com/microsoft/TypeScript.git",
+    "revision": "b465fdbfe175304d9b977da137b2c178ae1091d3",
+    "case_files": {
+      "compiler": 6537,
+      "conformance": 5908,
+      "fourslash": 6568,
+      "project": 316,
+      "projects": 233,
+      "transpile": 22,
+      "unittests": 1
+    }
+  },
+  "captured": "2026-07-29"
+}

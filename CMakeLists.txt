@@ -444,6 +444,81 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         TIMEOUT 180
     )
+
+    add_test(
+        NAME nova-phase5-typescript
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_all_tests.py"
+            --nova "$<TARGET_FILE:nova>"
+            --prefix ts_spec_structural_generics
+            --prefix ts_spec_narrowing
+            --prefix ts_spec_type_operators
+            --prefix ts_spec_classes_overloads
+            --prefix ts_spec_negative
+            --failure-debug
+            "${CMAKE_CURRENT_BINARY_DIR}/phase5_fail_debug.txt"
+    )
+    set_tests_properties(nova-phase5-typescript PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        TIMEOUT 60
+    )
+
+    add_test(
+        NAME nova-phase6-isolated
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_all_tests.py"
+            --nova "$<TARGET_FILE:nova>"
+            --prefix ts_spec_declarations
+            --prefix ts_spec_ambient_modules
+            --prefix ts_spec_jsx
+            --prefix ts_spec_module_extension
+            --failure-debug
+            "${CMAKE_CURRENT_BINARY_DIR}/phase6_fail_debug.txt"
+    )
+    add_test(
+        NAME nova-phase6-project
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "-B"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_phase6_project_tooling.py"
+            "-v"
+    )
+    set_tests_properties(
+        nova-phase6-isolated nova-phase6-project
+        PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            TIMEOUT 90
+            ENVIRONMENT "NOVA_TEST_EXECUTABLE=$<TARGET_FILE:nova>"
+    )
+
+    add_test(
+        NAME nova-phase7-runner-unit
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "-B"
+            "-m"
+            "unittest"
+            "tests.test_qualification_runners"
+            "-v"
+    )
+    add_test(
+        NAME nova-phase7-qualification
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "-B"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/qualification/run_qualification.py"
+            --nova "$<TARGET_FILE:nova>"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/qualification"
+    )
+    set_tests_properties(
+        nova-phase7-runner-unit nova-phase7-qualification
+        PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            TIMEOUT 300
+            LABELS "phase7;qualification"
+    )
 endif()
 
 # Documentation

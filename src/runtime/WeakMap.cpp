@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "nova/runtime/Value.h"
 
 extern "C" {
 
@@ -144,6 +145,24 @@ void* nova_weakmap_set_obj_obj(void* mapPtr, void* key, void* value) {
         map->entries->push_back(entry);
     }
     return mapPtr;
+}
+
+void* nova_weakmap_set_obj_jsvalue(
+    void* mapPtr, void* key, std::uint64_t value) {
+    return nova_weakmap_set_obj_num(
+        mapPtr, key, static_cast<int64_t>(value));
+}
+
+std::uint64_t nova_weakmap_get_jsvalue(void* mapPtr, void* key) {
+    if (!mapPtr || !key) return nova::runtime::JS_VALUE_UNDEFINED;
+    NovaWeakMap* map = static_cast<NovaWeakMap*>(mapPtr);
+    int64_t idx = findWeakMapEntry(map, key);
+    if (idx < 0) return nova::runtime::JS_VALUE_UNDEFINED;
+    const NovaWeakMapEntry& entry = (*map->entries)[idx];
+    if (entry.isStringValue) {
+        return nova_value_from_string(entry.strValue);
+    }
+    return static_cast<std::uint64_t>(entry.numValue);
 }
 
 // ============================================================================

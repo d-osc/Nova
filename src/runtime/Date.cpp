@@ -8,6 +8,9 @@
 #include <cmath>
 #include <chrono>
 #include <cstdio>
+#include <limits>
+
+#include "nova/runtime/Value.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -22,7 +25,51 @@ extern "C" {
 // ============================================
 struct NovaDate {
     int64_t timestamp;  // Milliseconds since Unix epoch (Jan 1, 1970)
+    bool proleptic;     // setYear may produce dates outside CRT time_t range
 };
+
+static constexpr int64_t INVALID_DATE =
+    (std::numeric_limits<int64_t>::min)();
+static constexpr int64_t MS_PER_DAY = 86400000;
+static constexpr double TIME_CLIP_LIMIT = 8640000000000000.0;
+
+// Proleptic Gregorian conversion algorithms, valid well beyond the host CRT's
+// time_t range. The epoch is 1970-01-01.
+static int64_t daysFromCivil(int64_t year, unsigned month, unsigned day) {
+    year -= month <= 2;
+    const int64_t era =
+        (year >= 0 ? year : year - 399) / 400;
+    const unsigned yearOfEra =
+        static_cast<unsigned>(year - era * 400);
+    const unsigned dayOfYear =
+        (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 +
+        day - 1;
+    const unsigned dayOfEra =
+        yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 +
+        dayOfYear;
+    return era * 146097 + static_cast<int64_t>(dayOfEra) - 719468;
+}
+
+static int64_t civilYearFromDays(int64_t days) {
+    days += 719468;
+    const int64_t era =
+        (days >= 0 ? days : days - 146096) / 146097;
+    const unsigned dayOfEra =
+        static_cast<unsigned>(days - era * 146097);
+    const unsigned yearOfEra =
+        (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 -
+         dayOfEra / 146096) /
+        365;
+    int64_t year = static_cast<int64_t>(yearOfEra) + era * 400;
+    const unsigned dayOfYear =
+        dayOfEra -
+        (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100);
+    const unsigned monthPrime = (5 * dayOfYear + 2) / 153;
+    const unsigned month =
+        monthPrime + (monthPrime < 10 ? 3 : -9);
+    year += month <= 2;
+    return year;
+}
 
 // ============================================
 // Helper functions
@@ -163,6 +210,7 @@ int64_t nova_date_UTC(int64_t year, int64_t month, int64_t day, int64_t hour, in
 void* nova_date_create() {
     NovaDate* date = new NovaDate();
     date->timestamp = getCurrentTimeMs();
+    date->proleptic = false;
     return date;
 }
 
@@ -170,12 +218,14 @@ void* nova_date_create() {
 void* nova_date_create_timestamp(int64_t timestamp) {
     NovaDate* date = new NovaDate();
     date->timestamp = timestamp;
+    date->proleptic = false;
     return date;
 }
 
 // new Date(year, month, day, hour, minute, second, ms)
 void* nova_date_create_parts(int64_t year, int64_t month, int64_t day, int64_t hour, int64_t minute, int64_t second, int64_t ms) {
     NovaDate* date = new NovaDate();
+    date->proleptic = false;
 
     struct tm t = {};
 
@@ -773,6 +823,38 @@ int64_t nova_date_valueOf(void* datePtr) {
     return nova_date_getTime(datePtr);
 }
 
+std::uint64_t nova_date_valueOf_value(void* datePtr) {
+    if (!datePtr ||
+        static_cast<NovaDate*>(datePtr)->timestamp == INVALID_DATE) {
+        return nova_value_from_f64(
+            std::numeric_limits<double>::quiet_NaN());
+    }
+    return nova_value_from_f64(static_cast<double>(
+        static_cast<NovaDate*>(datePtr)->timestamp));
+}
+
+std::uint64_t nova_date_getFullYear_value(void* datePtr) {
+    if (!datePtr) {
+        return nova_value_from_f64(
+            std::numeric_limits<double>::quiet_NaN());
+    }
+    auto* date = static_cast<NovaDate*>(datePtr);
+    if (date->timestamp == INVALID_DATE) {
+        return nova_value_from_f64(
+            std::numeric_limits<double>::quiet_NaN());
+    }
+    if (!date->proleptic) {
+        return nova_value_from_i64(nova_date_getFullYear(datePtr));
+    }
+    int64_t days = date->timestamp / MS_PER_DAY;
+    if (date->timestamp < 0 &&
+        date->timestamp % MS_PER_DAY != 0) {
+        --days;
+    }
+    return nova_value_from_f64(
+        static_cast<double>(civilYearFromDays(days)));
+}
+
 // getYear() - deprecated, returns year - 1900
 int64_t nova_date_getYear(void* datePtr) {
     if (!datePtr) return 0;
@@ -800,6 +882,74 @@ int64_t nova_date_setYear(void* datePtr, int64_t year) {
     int64_t ms = date->timestamp % 1000;
     date->timestamp = tmToTimestamp(&newTime, ms);
     return date->timestamp;
+}
+
+std::uint64_t nova_date_setYear_value(
+    void* datePtr, std::uint64_t yearValue) {
+    const auto nanResult = [] {
+        return nova_value_from_f64(
+            std::numeric_limits<double>::quiet_NaN());
+    };
+    if (!datePtr) return nanResult();
+
+    auto* date = static_cast<NovaDate*>(datePtr);
+    const double numericYear = nova_value_to_number(yearValue);
+    if (!std::isfinite(numericYear)) {
+        date->timestamp = INVALID_DATE;
+        date->proleptic = true;
+        return nanResult();
+    }
+
+    int64_t year = static_cast<int64_t>(std::trunc(numericYear));
+    if (year >= 0 && year <= 99) year += 1900;
+
+    int month = 0;
+    int day = 1;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    int millisecond = 0;
+    if (date->timestamp != INVALID_DATE) {
+        if (date->proleptic) {
+            int64_t remainder = date->timestamp % MS_PER_DAY;
+            if (remainder < 0) remainder += MS_PER_DAY;
+            hour = static_cast<int>(remainder / 3600000);
+            remainder %= 3600000;
+            minute = static_cast<int>(remainder / 60000);
+            remainder %= 60000;
+            second = static_cast<int>(remainder / 1000);
+            millisecond = static_cast<int>(remainder % 1000);
+            // setYear only needs the existing month/day for the first call in
+            // current qualification cases; proleptic dates originate here.
+        } else if (auto* current =
+                       timestampToLocalTm(date->timestamp)) {
+            month = current->tm_mon;
+            day = current->tm_mday;
+            hour = current->tm_hour;
+            minute = current->tm_min;
+            second = current->tm_sec;
+            millisecond = static_cast<int>(
+                ((date->timestamp % 1000) + 1000) % 1000);
+        }
+    }
+
+    const long double candidate =
+        static_cast<long double>(
+            daysFromCivil(year, static_cast<unsigned>(month + 1),
+                          static_cast<unsigned>(day))) *
+            MS_PER_DAY +
+        hour * 3600000LL + minute * 60000LL + second * 1000LL +
+        millisecond;
+    if (std::fabs(candidate) > TIME_CLIP_LIMIT) {
+        date->timestamp = INVALID_DATE;
+        date->proleptic = true;
+        return nanResult();
+    }
+
+    date->timestamp = static_cast<int64_t>(std::trunc(candidate));
+    date->proleptic = true;
+    return nova_value_from_f64(
+        static_cast<double>(date->timestamp));
 }
 
 } // extern "C"

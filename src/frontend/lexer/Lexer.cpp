@@ -385,6 +385,48 @@ Token Lexer::lexString(char quote) {
                     case '\\': value += '\\'; break;  // backslash
                     case '\'': value += '\''; break;  // single quote
                     case '"':  value += '"';  break;  // double quote
+                    case 'x': {
+                        // HexEscape \xHH — two hexadecimal digits. ES requires
+                        // both digits; if fewer follow, fall back to literal
+                        // (non-strict Annex B keeps the backslash). Read up to
+                        // two hex digits and emit the code point (1 byte for
+                        // <= 0x7F, UTF-8 otherwise).
+                        advance();  // consume 'x'
+                        std::string hex;
+                        for (int k = 0; k < 2 && position_ < source_.length(); ++k) {
+                            char hc = currentChar();
+                            if (std::isxdigit(static_cast<unsigned char>(hc))) {
+                                hex += hc;
+                                advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        if (hex.size() == 2) {
+                            uint32_t codepoint = 0;
+                            try {
+                                codepoint = static_cast<uint32_t>(
+                                    std::stoul(hex, nullptr, 16));
+                            } catch (...) {
+                                codepoint = 0xFFFD;
+                            }
+                            if (codepoint <= 0x7F) {
+                                value += static_cast<char>(codepoint);
+                            } else if (codepoint <= 0x7FF) {
+                                value += static_cast<char>(0xC0 | (codepoint >> 6));
+                                value += static_cast<char>(0x80 | (codepoint & 0x3F));
+                            } else {
+                                value += static_cast<char>(0xE0 | (codepoint >> 12));
+                                value += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                                value += static_cast<char>(0x80 | (codepoint & 0x3F));
+                            }
+                            continue;  // already advanced past the digits
+                        }
+                        // Fewer than 2 hex digits: treat as literal `\x`.
+                        value += '\\';
+                        value += 'x';
+                        break;
+                    }
                     case 'u': {
                         // \uXXXX or \u{...} Unicode escape.
                         advance();  // consume 'u'
@@ -707,7 +749,8 @@ SourceLocation Lexer::currentLocation() const {
 
 void Lexer::reportError(const std::string& message) {
     std::stringstream ss;
-    ss << filename_ << ":" << line_ << ":" << column_ << ": error: " << message;
+    ss << filename_ << ":" << line_ << ":" << column_
+       << ": error SyntaxError: " << message;
     errors_.push_back(ss.str());
 }
 

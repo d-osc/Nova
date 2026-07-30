@@ -1090,6 +1090,31 @@ std::unique_ptr<Stmt> Parser::parseForStatement() {
         advance();
         if (check(TokenType::Identifier)) {
             advance();
+            // Annex B (non-strict) allows a for-in/for-of binding to have an
+            // initializer: `for (var x = expr in obj)` / `for (var x = expr of iter)`.
+            // Skip past `= expr` (a single assignment expression, balanced on
+            // parens/brackets/braces) before checking for `in`/`of`.
+            if (check(TokenType::Equal)) {
+                advance();
+                int depth = 0;
+                while (!isAtEnd()) {
+                    if (check(TokenType::LeftParen) || check(TokenType::LeftBracket) ||
+                        check(TokenType::LeftBrace)) {
+                        ++depth; advance();
+                    } else if (check(TokenType::RightParen) ||
+                               check(TokenType::RightBracket) ||
+                               check(TokenType::RightBrace)) {
+                        if (depth == 0) break;
+                        --depth; advance();
+                    } else if (depth == 0 &&
+                               (check(TokenType::KeywordIn) ||
+                                check(TokenType::KeywordOf))) {
+                        break;
+                    } else {
+                        advance();
+                    }
+                }
+            }
             if (check(TokenType::KeywordIn) || check(TokenType::KeywordOf)) {
                 isForInOf = true;
             }
@@ -1110,17 +1135,54 @@ std::unique_ptr<Stmt> Parser::parseForStatement() {
             bool isConst = check(TokenType::KeywordConst);
             bool isLet = check(TokenType::KeywordLet);
             advance();
-            
+
             Token id = consume(TokenType::Identifier, "Expected variable name");
-            
+
+            // Annex B (non-strict) for-in/for-of binding initializer:
+            //   for (var x = expr in obj) { ... }
+            // The initializer expression is evaluated (for its side effects)
+            // once before the iteration begins. The `in` keyword must NOT be
+            // consumed as part of the initializer's expression (it terminates
+            // the binding), so disable the `in` operator during parsing.
+            ExprPtr initializer = nullptr;
+            if (check(TokenType::Equal)) {
+                // Annex B for-in/for-of binding initializers are a SyntaxError
+                // in strict mode.
+                if (strictMode_) {
+                    reportError("for-in/for-of binding initializer is not "
+                                "allowed in strict mode");
+                }
+                advance();
+                bool savedAllowIn = allowInOperator_;
+                allowInOperator_ = false;
+                initializer = parseAssignmentExpression();
+                allowInOperator_ = savedAllowIn;
+            }
+
             if (match(TokenType::KeywordIn)) {
-                return parseForInStatementBody(id.value, isConst ? "const" : (isLet ? "let" : "var"));
+                auto loop = parseForInStatementBody(
+                    id.value, isConst ? "const" : (isLet ? "let" : "var"));
+                if (initializer) {
+                    std::vector<StmtPtr> stmts;
+                    stmts.push_back(std::make_unique<ExprStmt>(std::move(initializer)));
+                    stmts.push_back(std::move(loop));
+                    return std::make_unique<BlockStmt>(std::move(stmts));
+                }
+                return loop;
             } else if (match(TokenType::KeywordOf)) {
-                return parseForOfStatementBody(id.value, isConst ? "const" : (isLet ? "let" : "var"));
+                auto loop = parseForOfStatementBody(
+                    id.value, isConst ? "const" : (isLet ? "let" : "var"));
+                if (initializer) {
+                    std::vector<StmtPtr> stmts;
+                    stmts.push_back(std::make_unique<ExprStmt>(std::move(initializer)));
+                    stmts.push_back(std::move(loop));
+                    return std::make_unique<BlockStmt>(std::move(stmts));
+                }
+                return loop;
             }
         } else {
             Token id = consume(TokenType::Identifier, "Expected variable name");
-            
+
             if (match(TokenType::KeywordIn)) {
                 return parseForInStatementBody(id.value, "");
             } else if (match(TokenType::KeywordOf)) {
@@ -1128,7 +1190,7 @@ std::unique_ptr<Stmt> Parser::parseForStatement() {
             }
         }
     }
-    
+
     // Regular for loop: for (init; test; update) body
     
     StmtPtr init = nullptr;

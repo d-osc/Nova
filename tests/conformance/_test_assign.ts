@@ -1,3 +1,6 @@
+// NOVA_TEST_MODE: run
+// NOVA_EXPECT_EXIT: 0
+
 function main(): number {
     let target = { first: 1, second: 2 };
     let source = { first: 10, second: 20 };

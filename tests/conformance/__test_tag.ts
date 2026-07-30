@@ -1,4 +1,6 @@
 // NOVA_TEST_MODE: run
+// NOVA_EXPECT_EXIT: 0
+
 function tag(strings: string[], ...values: number[]): string {
     console.log("inside tag");
     console.log("strings.length=" + strings.length);

@@ -108,7 +108,10 @@ void* nova_proxy_create(void* target, void* handler) {
 // the stashed __revoke_target__ to find the proxy to revoke.
 // ============================================================================
 void nova_proxy_revoke_by_proxy(void* proxy_ptr);
-int64_t nova_proxy_revoke_callable(void* this_arg) {
+int64_t nova_proxy_revoke_callable(
+    int64_t tagged_this, [[maybe_unused]] void* environment) {
+    void* this_arg = nova_value_to_object(
+        static_cast<std::uint64_t>(tagged_this));
     if (!this_arg) return 0;
     void* proxy = nova_object_get(this_arg, "__revoke_target__");
     if (proxy) nova_proxy_revoke_by_proxy(proxy);
@@ -197,10 +200,10 @@ static void proxy_type_error(const char* op) {
 // (null if the method captures nothing). If a trap body ever uses `this`,
 // FunctionExpr keeps __this as the leading arg — that case is not currently
 // exercised by js_spec_proxy_reflect.js.
-using TrapGetFn    = int64_t (*)(int64_t, int64_t, int64_t, void*);
-using TrapSetFn    = int64_t (*)(int64_t, int64_t, int64_t, int64_t, void*);
-using TrapHasFn    = int64_t (*)(int64_t, int64_t, void*);
-using TrapDeleteFn = int64_t (*)(int64_t, int64_t, void*);
+using TrapGetFn    = int64_t (*)(int64_t, int64_t, int64_t, int64_t, void*);
+using TrapSetFn    = int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t, void*);
+using TrapHasFn    = int64_t (*)(int64_t, int64_t, int64_t, void*);
+using TrapDeleteFn = int64_t (*)(int64_t, int64_t, int64_t, void*);
 using TrapApplyFn  = int64_t (*)(int64_t, int64_t, int64_t, int64_t, void*);
 using TrapConstructFn = int64_t (*)(int64_t, int64_t, int64_t, int64_t, void*);
 using TrapBool1Fn  = int64_t (*)(int64_t, int64_t, void*);
@@ -217,6 +220,8 @@ std::uint64_t nova_proxy_dispatch_get(void* proxy_ptr, const char* prop,
     if (info->revoked) { proxy_type_error("get"); return 0; }
 
     void* trapFn = nova_dynamic_object_get_function(info->handler, "get");
+    int64_t handlerJs = static_cast<int64_t>(
+        nova_value_from_object(info->handler));
     int64_t targetJs  = static_cast<int64_t>(nova_value_from_object(info->target));
     int64_t keyJs     = static_cast<int64_t>(nova_value_from_string(prop ? prop : ""));
     int64_t receiverJs = static_cast<int64_t>(nova_value_from_object(
@@ -226,7 +231,7 @@ std::uint64_t nova_proxy_dispatch_get(void* proxy_ptr, const char* prop,
         void* env = nova_dynamic_object_get_function_env(info->handler, "get");
         TrapGetFn fn = reinterpret_cast<TrapGetFn>(trapFn);
         return static_cast<std::uint64_t>(
-            fn(targetJs, keyJs, receiverJs, env));
+            fn(handlerJs, targetJs, keyJs, receiverJs, env));
     }
     // Default: read directly from target.
     void* val = nova_object_get(info->target, prop);
@@ -244,6 +249,8 @@ int64_t nova_proxy_dispatch_set(void* proxy_ptr, const char* prop,
     if (info->revoked) { proxy_type_error("set"); return 0; }
 
     void* trapFn = nova_dynamic_object_get_function(info->handler, "set");
+    int64_t handlerJs = static_cast<int64_t>(
+        nova_value_from_object(info->handler));
     int64_t targetJs  = static_cast<int64_t>(nova_value_from_object(info->target));
     int64_t keyJs     = static_cast<int64_t>(nova_value_from_string(prop ? prop : ""));
     int64_t valueArg  = static_cast<int64_t>(valueJs);
@@ -253,7 +260,7 @@ int64_t nova_proxy_dispatch_set(void* proxy_ptr, const char* prop,
     if (trapFn) {
         void* env = nova_dynamic_object_get_function_env(info->handler, "set");
         TrapSetFn fn = reinterpret_cast<TrapSetFn>(trapFn);
-        return fn(targetJs, keyJs, valueArg, receiverJs, env);
+        return fn(handlerJs, targetJs, keyJs, valueArg, receiverJs, env);
     }
     // Default: set on target. Store as a tagged JSValue so a later read
     // via nova_dynamic_object_get_tagged returns the same bits.
@@ -271,13 +278,15 @@ int64_t nova_proxy_dispatch_has(void* proxy_ptr, const char* prop) {
     if (info->revoked) { proxy_type_error("has"); return 0; }
 
     void* trapFn = nova_dynamic_object_get_function(info->handler, "has");
+    int64_t handlerJs = static_cast<int64_t>(
+        nova_value_from_object(info->handler));
     int64_t targetJs  = static_cast<int64_t>(nova_value_from_object(info->target));
     int64_t keyJs     = static_cast<int64_t>(nova_value_from_string(prop ? prop : ""));
 
     if (trapFn) {
         void* env = nova_dynamic_object_get_function_env(info->handler, "has");
         TrapHasFn fn = reinterpret_cast<TrapHasFn>(trapFn);
-        return fn(targetJs, keyJs, env);
+        return fn(handlerJs, targetJs, keyJs, env);
     }
     return nova_object_has(info->target, prop);
 }
@@ -291,13 +300,15 @@ int64_t nova_proxy_dispatch_delete(void* proxy_ptr, const char* prop) {
     if (info->revoked) { proxy_type_error("deleteProperty"); return 0; }
 
     void* trapFn = nova_dynamic_object_get_function(info->handler, "deleteProperty");
+    int64_t handlerJs = static_cast<int64_t>(
+        nova_value_from_object(info->handler));
     int64_t targetJs  = static_cast<int64_t>(nova_value_from_object(info->target));
     int64_t keyJs     = static_cast<int64_t>(nova_value_from_string(prop ? prop : ""));
 
     if (trapFn) {
         void* env = nova_dynamic_object_get_function_env(info->handler, "deleteProperty");
         TrapDeleteFn fn = reinterpret_cast<TrapDeleteFn>(trapFn);
-        return fn(targetJs, keyJs, env);
+        return fn(handlerJs, targetJs, keyJs, env);
     }
     return nova_object_delete(info->target, prop);
 }

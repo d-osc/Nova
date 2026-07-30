@@ -7,6 +7,7 @@
 #include <string>
 #include <functional>
 #include <mutex>
+#include <unordered_set>
 
 // Forward declarations
 extern "C" {
@@ -64,6 +65,8 @@ struct NovaAsyncGenerator {
 
 // Global generator context for yield
 thread_local NovaGenerator* currentGenerator = nullptr;
+static std::unordered_set<NovaGenerator*> generatorRegistry;
+static std::mutex generatorRegistryMutex;
 
 // ============= Iterator Result Functions =============
 
@@ -101,8 +104,18 @@ extern "C" void* nova_generator_create(void* funcPtr, int64_t initialState) {
 
     // Pre-allocate some local storage
     gen->locals.resize(32, 0);
+    {
+        std::lock_guard<std::mutex> lock(generatorRegistryMutex);
+        generatorRegistry.insert(gen);
+    }
 
     return gen;
+}
+
+extern "C" int64_t nova_is_generator(void* genPtr) {
+    std::lock_guard<std::mutex> lock(generatorRegistryMutex);
+    return generatorRegistry.count(
+        static_cast<NovaGenerator*>(genPtr)) > 0 ? 1 : 0;
 }
 
 // Set generator state (called by transformed code)
@@ -317,4 +330,24 @@ extern "C" void* nova_get_iterator(void* obj) {
 
 extern "C" bool nova_iterator_has_next(void* iterResult) {
     return !nova_iterator_result_done(iterResult);
+}
+
+extern "C" void* nova_value_array_create(int64_t length);
+extern "C" void value_array_set(
+    void* arrayPtr, int64_t index, int64_t value);
+
+extern "C" void* nova_generator_to_array(void* genPtr) {
+    std::vector<int64_t> values;
+    while (true) {
+        void* result = nova_generator_next(genPtr, 0);
+        if (nova_iterator_result_done(result)) break;
+        values.push_back(nova_iterator_result_value(result));
+    }
+    void* array = nova_value_array_create(
+        static_cast<int64_t>(values.size()));
+    for (size_t index = 0; index < values.size(); ++index) {
+        value_array_set(
+            array, static_cast<int64_t>(index), values[index]);
+    }
+    return array;
 }

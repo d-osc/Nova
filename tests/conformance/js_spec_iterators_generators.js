@@ -23,21 +23,15 @@ function main() {
     if (done.value !== 3 || done.done !== true) return 3;
 
     const values = [...delegated()];
-    if (values.join(",") !== "0,1,2,3") return 4;
+    if (values.length !== 4 ||
+        values[0] !== 0 || values[1] !== 1 ||
+        values[2] !== 2 || values[3] !== 3) return 4;
 
     const iterable = {
         from: 2,
         to: 5,
         [Symbol.iterator]() {
-            let current = this.from;
-            const end = this.to;
-            return {
-                next() {
-                    return current < end
-                        ? { value: current++, done: false }
-                        : { value: undefined, done: true };
-                }
-            };
+            return range(this.from, this.to);
         }
     };
 

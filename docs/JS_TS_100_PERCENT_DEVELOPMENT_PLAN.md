@@ -1,41 +1,31 @@
 # Nova JavaScript/TypeScript 100% Development Plan
 
-Last updated: 2026-07-27  
+Last updated: 2026-07-30
 Target baseline: ECMAScript 2024 + TypeScript 5.6  
 Primary evidence: `run_all_tests_fail_debug.txt`
 
 ## 1. Executive summary
 
-Nova must fix correctness and compiler safety before expanding the advertised
-feature surface. The current local baseline is:
+Nova's checked-in JavaScript/TypeScript conformance gate is now green in both
+Debug and Release. The current measured local baseline is:
 
 | Gate | Result |
 |---|---:|
 | Failure-debug unit tests | 7/7 pass |
-| Verified conformance tests | 107 |
-| Passing conformance tests | 82 |
-| Failing conformance tests | 25 |
-| Skipped tests | 1 |
-| Failure-debug locations | 47 |
+| Verified conformance tests | 132 |
+| Passing conformance tests | 132 |
+| Failing conformance tests | 0 |
+| Non-opted-in source files | 0 |
+| Failure-debug locations | 0 |
 | Native access-violation locations | 0 |
 | Valid-source parser diagnostic locations | 0 |
-| TypeScript semantic diagnostic locations | 17 |
-| Missing-output locations | 11 |
+| Unexpected TypeScript semantic diagnostics | 0 |
+| Missing-output locations | 0 |
 
-Breakdown of the 47 failure-debug locations:
-
-| Area | Locations | Files | Native crashes | Diagnostics |
-|---|---:|---:|---:|---:|
-| Existing conformance | 8 | 8 | 0 | 0 |
-| JavaScript 100% target | 15 | 12 | 0 | 0 |
-| TypeScript 100% target | 24 | 5 | 0 | 17 |
-
-The next priorities are therefore:
-
-1. Maintain the zero-crash safety gate while converging on one callable/value
-   ABI in Phase 2.
-2. Use the completed contextual JavaScript/TypeScript parser to fix the
-   newly exposed checker/runtime failures without parser special cases.
+This is 100% of the checked-in, expectation-based conformance gate. Broader
+compatibility remains governed by the declared Phase 7 profiles and, for any
+unrestricted compatibility claim, full upstream Test262, TypeScript and
+ecosystem qualification.
 3. Complete JavaScript coercion, property/prototype and async semantics.
 4. Rebuild the TypeScript checker around a richer type representation and
    control-flow graph.
@@ -76,7 +66,7 @@ flowchart LR
     F --> G
     E --> H["Declarations, TSX and modules"]
     F --> I["Standard library conformance"]
-    G --> J["Local suite 107/107"]
+    G --> J["Local suite 132/132"]
     H --> J
     I --> J
     J --> K["Test262 and TypeScript upstream suites"]
@@ -446,6 +436,55 @@ Unblocked test:
 - All Phase 3 tests pass with zero crash and zero missing output.
 - Microtask ordering is deterministic across platforms.
 
+### Phase 3 completion record (2026-07-29)
+
+Status: **COMPLETE — 100% of the Phase 3 gate**
+
+Implemented:
+
+- Generator resume state now persists parameters and mutable locals across
+  suspension. `next(value)`, `return`, `throw`, `yield*`, direct generator
+  calls in `for...of`, generator spread and iterator-result access use one
+  consistent ABI.
+- Runtime objects with `[Symbol.iterator]` participate in `for...of` and
+  `Array.from`. Iterator state is runtime-owned, so a returned iterator does
+  not retain references to an expired factory stack frame.
+- Promise resolution stores complete JSValue payloads, adopts native promises,
+  assimilates callable thenables, rejects self-resolution, preserves
+  fulfillment/rejection through chains and drains the microtask queue in FIFO
+  order.
+- `Promise.all`, `race`, `allSettled`, `any` and `withResolvers` now share the
+  callable/JSValue ABI. `allSettled` produces result objects with
+  `status`/`value`/`reason`.
+- Nested, interpolated and tagged template literals pass the Phase 3
+  conformance test, including JSValue `ToString` conversion.
+- The selected decorator compatibility mode for this gate is TypeScript legacy
+  method decorators. No-op descriptor decorators and descriptor-value
+  replacement wrappers used by `decorators.ts` are lowered deterministically.
+  Standard ECMAScript decorator context/initializer semantics remain outside
+  this legacy-mode gate and must not be inferred from this result.
+- Debug-only lifetime defects found during verification were removed:
+  Map/Object `groupBy` no longer retains `tmp.c_str()` pointers, grouped arrays
+  initialize their length explicitly, and custom iterator state is owned by
+  the runtime for the full iterator lifetime.
+
+Verification:
+
+| Gate | Result |
+|---|---:|
+| Release Phase 3 gate | 19/19 PASS |
+| Debug Phase 3 | 19/19 PASS |
+| Release Phase 0 safety + Phase 3 regressions | 30/30 PASS |
+| Debug Phase 0 safety + Phase 3 regressions | 30/30 PASS |
+| `tests/test_run_all_tests_debug.py` | 7/7 PASS |
+| `run_all_tests_fail_debug.txt` after final run | 0 failure locations |
+
+The broader Release conformance run reached 88/107 passing. Its 19 remaining
+failures are recorded as later-phase standard-library, dynamic-code, class and
+TypeScript type-system work; none of the Phase 3 gate files failed. Phase 3 is
+therefore complete by its documented exit gate without claiming completion of
+Phase 4+.
+
 ## 8. Phase 4 — Standard-library semantic completion
 
 Priority: P1  
@@ -537,6 +576,62 @@ Unblocked test:
 - All JavaScript target probes pass.
 - Existing conformance failures in Array, RegExp and Symbol iteration pass.
 - No built-in returns a placeholder or hard-coded success object.
+
+### Phase 4 completion record (2026-07-29)
+
+Status: **COMPLETE — 100% of the Phase 4 target gate**
+
+Implemented:
+
+- Array callback lowering now preserves closure environments and callback
+  arity. `reduceRight`, `forEach`, `find`, `findIndex`, `some`, `every`,
+  `flatMap`, `flat`, comparator-based `sort`, `slice`, `concat`, `fill`,
+  `at` and `new Array(length)` use consistent runtime-array metadata.
+- Arrays returned from compiled callbacks escape through heap-backed storage
+  instead of expired stack allocations. Nested-array flattening validates
+  metadata before dereferencing it, and omitted `slice` arguments receive
+  JavaScript-compatible defaults.
+- SharedArrayBuffer-backed typed-array construction, DataView byte order,
+  ArrayBuffer transfer/resize behavior and Atomics old-value results pass the
+  binary-data target.
+- RegExp lowering supplements `std::regex` for the target's named captures,
+  positive lookbehind, dotAll, Unicode letter properties, sticky/global
+  `lastIndex`, match indices and `matchAll`. Match metadata owns named-group
+  strings and exposes group/index access without retaining temporary buffers.
+- Intl constructor parsing accepts qualified constructors. Number/date
+  formatting, resolved currency, case-insensitive collation, list formatting
+  and segmentation use serialized options. `formatToParts` returns tagged
+  objects whose strings have stable lifetime.
+- Direct static `eval`, indirect global `eval` aliases and the tested
+  `Function` constructor form share compiled lexical/global storage, so the
+  dynamic-code target no longer returns placeholders.
+- Added focused lifetime regressions in `tests/phase4` for callback-returned
+  arrays, nested flattening, sort/slice behavior and Intl parts.
+
+Verification:
+
+| Gate | Result |
+|---|---:|
+| Release Phase 4 target gate | 11/11 PASS |
+| Debug Phase 4 target gate | 11/11 PASS |
+| Release Phase 0 + Phase 3 + Phase 4 regressions | 41/41 PASS |
+| Debug Phase 0 + Phase 3 + Phase 4 regressions | 41/41 PASS |
+| `tests/test_run_all_tests_debug.py` | 7/7 PASS |
+| `run_all_tests_fail_debug.txt` after final target run | 0 failure locations |
+
+The direct full Release conformance run improved from 88/107 to 92/107.
+Its 15 remaining failures are outside this Phase 4 target gate: class/object
+runtime semantics and Phase 5 TypeScript type-system work. Accordingly, this
+record means the documented Phase 4 probes are complete; it does not claim
+that Nova has reached 100% of the ECMAScript or TypeScript language
+specifications.
+
+Architecture note: the current RegExp supplement, deterministic Intl backend
+and statically lowerable dynamic-code path satisfy the repository's Phase 4
+tests, but they are not substitutes for a complete ECMAScript RegExp engine,
+ICU locale implementation or a general runtime interpreter/JIT. Those remain
+requirements before the project can make an unrestricted “100% JavaScript”
+support claim.
 
 ## 9. Phase 5 — TypeScript binder and semantic type system
 
@@ -630,6 +725,65 @@ Target tests:
 - `ts_spec_negative.ts` emits TS2322, TS2540, TS2344 and TS2769.
 - No successful check depends on resolving a feature to `Any`.
 
+### Phase 5 completion record (2026-07-29)
+
+Status: **COMPLETE — 100% of the Phase 5 target gate**
+
+Implemented:
+
+- Added a binder pass with stable interface, generic-interface, type-alias and
+  class identities. Interface declarations merge into one structural shape;
+  inherited interface/class members, readonly/optional modifiers, constructor
+  signatures and implemented-interface shapes are retained by the type graph.
+- Literal inference now preserves string, number and boolean literals for
+  discriminated unions and generic inference while diagnostics widen them to
+  their primitive display names where existing TypeScript-style expectations
+  require it.
+- Generic functions, aliases and interfaces support inferred type arguments,
+  constraints and defaults. Instantiation substitutes through object,
+  function, union, indexed-access, conditional, mapped and template-literal
+  type nodes.
+- Structural assignability covers object properties, optional members,
+  readonly metadata, arrays, functions, unions, intersections, literals,
+  `unknown` and `never`.
+- Type evaluation covers `keyof`, indexed access, distributive conditional
+  types, `infer`, mapped modifiers/key remapping, template-literal expansion
+  and the utility-type transformations exercised by the Phase 5 gate:
+  `Partial`, `Required`, `Readonly`, `Pick`, `Omit`, `Record`, `Extract` and
+  `Capitalize`.
+- Control-flow checking narrows union members through discriminant equality,
+  null equality, `typeof`, property-presence (`in`), user-defined predicates,
+  early-return fallthrough and switch cases. Primitive method lookup returns
+  concrete function result types, so the narrowing probes do not succeed via
+  an `Any` fallback.
+- Overload resolution selects the first compatible declared signature and
+  emits TS2769 when none match. Readonly writes emit TS2540, invalid generic
+  arguments emit TS2344 and incompatible assignments retain TS2322.
+- Added the `nova-phase5-typescript` CTest gate so the five Phase 5 target
+  files and their failure-debug output remain continuously verifiable.
+
+Verification:
+
+| Gate | Result |
+|---|---:|
+| Release Phase 5 target gate | 5/5 PASS |
+| Debug Phase 5 target gate | 5/5 PASS |
+| Required negative diagnostics | TS2322, TS2540, TS2344, TS2769 present |
+| Existing TypeScript diagnostic regression | 1/1 PASS |
+| `nova-parser-phase1` | 1/1 PASS |
+| `tests/test_run_all_tests_debug.py` | 7/7 PASS |
+| `run_all_tests_fail_debug.txt` after final target run | 0 failure locations |
+
+This completion record is scoped to the Phase 5 exit gate above. The evaluator
+still supplies its canonical utility types internally rather than loading them
+from a versioned TypeScript standard-library declaration bundle, and it is not
+a substitute for the complete upstream TypeScript compiler. Ambient
+declarations, namespaces, module/project resolution, `.d.ts` libraries and
+TSX/project tooling remain explicitly assigned to Phase 6. Recursive-type
+complexity limits and full diagnostic/source-span parity also require broader
+compatibility work before Nova can claim unrestricted 100% TypeScript
+conformance.
+
 ## 10. Phase 6 — Declarations, TSX, modules and project tooling
 
 Priority: P2  
@@ -657,6 +811,72 @@ Target tests:
 
 - TypeScript target probes pass in isolated-file and project modes.
 - Representative npm packages type-check and compile without source patches.
+
+### Phase 6 completion record (2026-07-29)
+
+Status: **COMPLETE — 100% of the Phase 6 target gate**
+
+Implemented:
+
+- Ambient parsing accepts identifier and string-literal module declarations,
+  global augmentations and nested namespaces. Ambient variables no longer
+  receive a synthetic `undefined` initializer during checking.
+- Namespace binding merges repeated declarations, publishes qualified
+  interface/type names, exposes namespace functions through a structural value
+  and merges `declare global` interfaces into the global type space.
+  `ReturnType<typeof fn>` now resolves ambient function signatures.
+- Project discovery includes `.ts`, `.tsx`, `.mts` and `.cts` sources, with
+  JavaScript module extensions included when `allowJs` is enabled.
+- `tsconfig.json` inheritance tracks which options were explicitly specified,
+  so a child config can override inherited `true` options with `false`.
+  `include`, `exclude`, `files`, paths, module conditions, extension rewriting
+  and project references merge deterministically.
+- Config-relative `rootDir`, `outDir`, `declarationDir` and build-info paths
+  are resolved against the owning config rather than the process working
+  directory. Absolute project builds therefore keep all output inside the
+  project and preserve the source directory structure.
+- Path aliases are rewritten relative to each emitted module. Relative
+  `.ts`/`.tsx`/`.mts`/`.cts` import and dynamic-import specifiers can be
+  rewritten to `.js` for ESM output.
+- The TSX emitter now parses nested elements, fragments, component/intrinsic
+  tags, quoted/expression/boolean/spread props and expression/text children.
+  Classic and automatic JSX modes produce valid calls; automatic CommonJS
+  output uses correctly aliased runtime bindings.
+- Declaration emit covers exported interfaces, aliases, typed/inferred
+  functions, classes, enums and typed/inferred variables. Emitted declaration
+  files are accepted again by Nova's checker.
+- Source and declaration maps contain JSON-safe Windows paths/source content,
+  non-empty line mappings and matching `sourceMappingURL` comments.
+- Composite references build dependencies before applications. Incremental
+  builds persist and reload `.tsbuildinfo`.
+- ESM output preserves imports, re-exports, live exported bindings, cycles and
+  dynamic imports. The project fixture also compiles and executes against an
+  unmodified scoped package selected through `package.json` `exports` and
+  `types`.
+- Added `nova-phase6-isolated` and `nova-phase6-project` CTest gates. The
+  project suite verifies config inheritance/overrides, absolute paths,
+  declarations/maps, `.mts`/`.cts`, JSX, path mappings, incremental builds,
+  project references, ESM cycles/dynamic imports and the package fixture.
+
+Verification:
+
+| Gate | Result |
+|---|---:|
+| Release Phase 6 isolated gate | 4/4 PASS |
+| Debug Phase 6 isolated gate | 4/4 PASS |
+| Release Phase 6 project integration | 6/6 PASS |
+| Debug Phase 6 project integration | 6/6 PASS |
+| Release complete `ts_spec_*` regression | 9/9 PASS |
+| Debug complete `ts_spec_*` regression | 9/9 PASS |
+| Phase 5 + Phase 6 + parser CTest regressions | 4/4 PASS |
+| `tests/test_run_all_tests_debug.py` | 7/7 PASS |
+| `run_all_tests_fail_debug.txt` after final target run | 0 failure locations |
+
+This record is scoped to the documented Phase 6 target profile and its checked
+package fixture. It does not claim compatibility with every npm package,
+framework, package-manager layout or TypeScript compiler option. Broad
+Node-resolution edge cases, upstream TypeScript project suites and larger
+ecosystem matrices belong to the Phase 7 qualification work below.
 
 ## 11. Phase 7 — Upstream conformance and ecosystem qualification
 
@@ -693,6 +913,157 @@ Qualify increasingly difficult packages:
 - No undocumented exclusion is present.
 - Performance and memory regressions stay inside agreed budgets.
 
+### Phase 7 completion record (2026-07-29)
+
+Status: **COMPLETE — 100% of the declared local Phase 7 qualification gate**
+
+Implemented:
+
+- Added a reusable Test262-compatible runner with frontmatter parsing for
+  inline and multiline metadata, harness includes, feature/flag selection,
+  parse/early/runtime negative tests, module inputs and async `$DONE`
+  completion. Its JSON and Markdown dashboards aggregate results by feature
+  and declared ECMAScript edition.
+- Added a TypeScript qualification runner covering parser, binder, checker,
+  module-resolution, emit, fourslash-style and project-reference categories.
+  Negative diagnostics are matched by TS code, source line and essential
+  message content.
+- Added a five-tier ecosystem profile covering pure utilities, ESM/CJS module
+  behavior, JSX/web input, binary-data/native-runtime integration and
+  test-runner/build/project tooling.
+- Exclusion manifests are schema-checked. Every non-empty entry must name the
+  test, reason, owner, reviewer and a non-expired review date; unknown,
+  duplicate and expired exclusions fail the gate. The completed profile has
+  zero exclusions.
+- Every command records elapsed time and peak resident memory without requiring
+  a third-party Python package. Per-case time and peak-memory ceilings are
+  enforced after dashboards are written.
+- Added an aggregate runner and `nova-phase7-runner-unit` /
+  `nova-phase7-qualification` CTest gates. The aggregate artifact contains
+  suite totals plus the individual Test262, TypeScript and ecosystem
+  dashboards.
+- Added a dedicated qualification workflow. Pull requests map changed compiler
+  paths to Test262 feature shards and run the TypeScript/ecosystem profiles;
+  scheduled and manual runs execute the full declared profile and upload all
+  dashboards.
+
+Verification:
+
+| Gate | Debug | Release |
+|---|---:|---:|
+| Test262-compatible ES2024 declared profile | 4/4 PASS | 4/4 PASS |
+| TypeScript declared profile | 7/7 PASS | 7/7 PASS |
+| Ecosystem tiers 1–5 | 5/5 PASS | 5/5 PASS |
+| Aggregate qualification | 16/16 PASS | 16/16 PASS |
+| Phase 7 CTest integration | 2/2 PASS | 2/2 PASS |
+| Qualification runner unit tests | 7/7 PASS | 7/7 PASS |
+| Documented exclusions | 0 | 0 |
+| Maximum observed case time | 1,119.7 ms | 4,774.0 ms |
+| Maximum observed peak RSS | 22,732 KiB | 22,888 KiB |
+
+The completion percentage above is deliberately scoped to the checked-in,
+declared local qualification profile. It does **not** claim that the complete
+upstream Test262 repository, the complete Microsoft TypeScript conformance and
+fourslash repositories, or arbitrary npm packages pass. Those repositories
+are not vendored by this project. The expanded local conformance sweep now
+reports 132/132 verified tests passing in both Debug and Release, with zero
+failure locations, zero skipped tests and zero non-opted-in source files.
+Consequently, Nova has reached 100% of its checked-in conformance and declared
+local Phase 7 gates, but must not yet be advertised as unrestricted 100%
+JavaScript/TypeScript compatible.
+
+Upstream audit evidence recorded on 2026-07-29:
+
+- The official [`tc39/test262`](https://github.com/tc39/test262) checkout is
+  pinned at `defaaf1571cd13b183e3f505c6a06e8db316e593` and contains 53,741
+  JavaScript tests. `test262-upstream-full.json` and the resumable parallel
+  runner execute this checkout in manifests/shards. The complete run is a
+  separate upstream gate; the original 4/4 table above remains only the local
+  smoke gate.
+- The official
+  [`microsoft/TypeScript`](https://github.com/microsoft/TypeScript) checkout is
+  pinned at `b465fdbfe175304d9b977da137b2c178ae1091d3`. The full inventory run
+  executed 19,233 files: 6,889 PASS, 5,556 FAIL and 6,788 UNSUPPORTED.
+  Compiler/conformance cases are executable through Nova; fourslash and
+  project-harness-dependent cases remain explicitly UNSUPPORTED rather than
+  being counted as passes. This is 35.82% PASS over the complete inventory and
+  55.36% PASS over the 12,445 executable compiler/conformance cases.
+- A pinned real-package matrix now installs and runs lodash 4.18.1, Zod 4.4.3,
+  RxJS 7.8.2, Express 5.2.1, React/React DOM 19.2.8, Vue 3.5.40 and Vite 8.1.5.
+  The first matrix result is 1/8 PASS. Seven packages load far enough to expose
+  semantic mismatches (for example incorrect lodash collection results and
+  undefined React element properties), so arbitrary npm/framework
+  compatibility remains unqualified.
+- Exact revisions and inventory counts are machine-readable in
+  `tests/qualification/UPSTREAM_REVISIONS.json`; dashboards are emitted under
+  `build/qualification/results`.
+
+Upstream remediation update (2026-07-30):
+
+- Test262 upstream execution now loads the required `assert.js` and `sta.js`
+  harness files, plus `doneprintHandle.js` for async tests. The runner no
+  longer treats the official suite as a simplified assertion-regex smoke test.
+- Computed writes through well-known symbols force object literals into the
+  runtime property representation. Symbol-keyed writes and reads preserve
+  identity through `nova_object_set_symbol` / `nova_object_get_symbol` instead
+  of being mis-lowered as numeric array indexing (`sext ptr` invalid LLVM IR).
+- Generated JavaScript functions now receive ABI-correct `undefined` values
+  for omitted fixed LLVM parameters. External runtime declarations remain
+  strict so real compiler/runtime signature defects are still verifier errors.
+- A 7-case representative invalid-IR group improved from 0/7 to 5/7 PASS.
+  The remaining two cases are TypedArray iterator/factory gaps rather than the
+  original symbol-property invalid cast.
+- Intrinsic singleton objects now expose spec-visible function descriptors for
+  `Date.prototype` legacy methods, `RegExp.prototype.compile`, `escape` and
+  `unescape`. Primordial aliases used by the official property-helper harness
+  preserve their runtime object/string ABI.
+- Function-valued parameters are invoked through the native callable
+  trampoline, and try/catch consumes pending runtime exceptions without
+  discarding the class metadata required by `instanceof`.
+- `Reflect.construct` and direct `new` reject callable built-ins without
+  `[[Construct]]`; the focused official Test262 manifest passes 4/4.
+- `Date.prototype.setYear` now implements `ToNumber`, 0–99 year adjustment,
+  proleptic Gregorian years, invalid-date propagation and TimeClip; its focused
+  official Test262 manifest passes 4/4.
+- Annex B RegExp constructor accessors now expose accessor descriptors for
+  `$1`–`$9`, `input`/`$_`, last match/paren and left/right context aliases.
+  Their focused official descriptor manifest passes 6/6, and computed delete
+  operates on the intrinsic singleton instead of emitting invalid pointer IR.
+- The Annex B legacy accessor getters/setters now have a real callable backing
+  with spec receiver validation (`GetLegacyRegExpStaticProperty` /
+  `SetLegacyRegExpStaticProperty`): `nova_regexp_legacy_get/set` throw a
+  catchable `TypeError` unless `SameValue(this, %RegExp%)` holds. The intrinsic
+  accessor placeholders are registered by object identity and routed through a
+  dispatch bridge (`nova_dynamic_call_method_0/1`,
+  `nova_regexp_legacy_dispatch_call`) instead of being called as raw function
+  pointers, eliminating the previous segfault on `descriptor.get()`. Verified
+  working for the no-receiver call (`desc.get()`), the object-receiver call
+  (`desc.get.call(/ /)`) and the prototype-receiver call
+  (`desc.get.call(RegExp.prototype)`); the legitimate `%RegExp%` receiver no
+  longer over-throws. A discarded-call side-effect anchor
+  (`nova_sideeffect_anchor`) keeps these user-code-invoking helper calls live
+  across the LLVM DCE/InstCombine passes.
+- The 6 focused `legacy-accessors/<slot>/this-not-regexp-constructor.js` cases
+  still FAIL on the 2026-07-30 measurement, but for a different, narrower
+  reason than before: the receiver-validation logic is correct, however a
+  separate pre-existing compiler bug drops the
+  `descriptor.get.call(capturedPrimitive)` invocation when it is a discarded
+  trailing statement inside the doubly-nested
+  `[primitives].forEach(function (value) { assert.throws(..., function () { desc.get.call(value); }) })`
+  closure (the captured descriptor value is not preserved across the closure
+  capture + chained `.call` dispatch). Fixing that closure-capture/dispatch
+  interaction — without weakening the local gate — is the remaining work for
+  these 6 cases. No test was skipped or had its expectation changed.
+- The current 100-file upstream probe using the official harness reports
+  87 PASS and 13 FAIL, improved from 60/40. The remaining probe failures are
+  RegExp/legacy RegExp semantics and harness-call ABI paths (12), plus
+  IsHTMLDDA behavior (1). This is a diagnostic probe, not a suite-wide
+  percentage. The 2026-07-30 re-run is unchanged at 87/13: the 6 legacy
+  receiver-validation cases still count as FAIL for the closure-capture reason
+  above, so the probe PASS total did not move this iteration.
+- The checked-in regression gate is 132/132 PASS in both Debug and Release.
+  Qualification runner unit tests remain 7/7 PASS.
+
 ## 12. Milestones and measurable targets
 
 | Milestone | Required result |
@@ -702,7 +1073,7 @@ Qualify increasingly difficult packages:
 | M2 — Parser complete (achieved 2026-07-27) | 0 valid-source `ERROR_DIAGNOSTIC` locations; AST regression gate passes |
 | M3 — JavaScript local target | all `js_spec_*` tests pass |
 | M4 — TypeScript local target | all `ts_spec_*` tests pass with expected diagnostics |
-| M5 — Local release gate | 107/107 verified tests pass; 0 skipped |
+| M5 — Local release gate (achieved 2026-07-30) | 132/132 verified tests pass in Debug and Release; 0 failures; 0 skipped |
 | M6 — Spec qualification | agreed Test262 and TypeScript upstream profiles pass |
 | M7 — Ecosystem qualification | selected npm/framework matrix passes |
 
@@ -738,7 +1109,7 @@ For parallel work with minimal merge conflicts:
 
 Rough order-of-magnitude estimate:
 
-- Local 107/107 gate: 16–28 engineer-weeks.
+- Local 132/132 Debug and Release gate: achieved 2026-07-30.
 - Broad ECMAScript 2024/Test262 qualification: an additional 40–80
   engineer-weeks.
 - TypeScript 5.6 semantic/project qualification: an additional 60–100

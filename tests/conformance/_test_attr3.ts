@@ -1,3 +1,6 @@
+// NOVA_TEST_MODE: run
+// NOVA_EXPECT_EXIT: 0
+
 function main(): number {
     let source = { visible: 10, hidden: 20 };
     Object.defineProperty(source, "hidden", { enumerable: false });

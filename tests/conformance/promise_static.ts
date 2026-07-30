@@ -50,7 +50,11 @@ function main(): number {
                 sum += r.value;
             }
         }
-        console.log("allSettled:" + fulfilled);
+        // allSettled returns one result per input, including rejections.
+        // Verify both the aggregate length and the fulfilled subset.
+        if (fulfilled === 2) {
+            console.log("allSettled:" + results.length);
+        }
     });
 
     // Promise.any — first fulfilled wins, throws AggregateError on all-reject

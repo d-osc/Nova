@@ -1,3 +1,6 @@
+// NOVA_TEST_MODE: run
+// NOVA_EXPECT_EXIT: 0
+
 function main(): number {
     let protectedTarget = { first: 1, second: 2 };
     Object.defineProperty(protectedTarget, "first", { writable: false });

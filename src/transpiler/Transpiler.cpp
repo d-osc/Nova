@@ -4,6 +4,7 @@
 #include <chrono>
 #include <regex>
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <thread>
 #include <future>
@@ -58,6 +59,325 @@ namespace {
 
         return output;
     }
+
+    std::string jsonEscape(const std::string& input) {
+        std::string output;
+        for (unsigned char character : input) {
+            switch (character) {
+                case '\\': output += "\\\\"; break;
+                case '"': output += "\\\""; break;
+                case '\b': output += "\\b"; break;
+                case '\f': output += "\\f"; break;
+                case '\n': output += "\\n"; break;
+                case '\r': output += "\\r"; break;
+                case '\t': output += "\\t"; break;
+                default:
+                    if (character < 0x20) {
+                        const char* digits = "0123456789abcdef";
+                        output += "\\u00";
+                        output += digits[(character >> 4) & 0xf];
+                        output += digits[character & 0xf];
+                    } else {
+                        output += static_cast<char>(character);
+                    }
+            }
+        }
+        return output;
+    }
+
+    class JSXTransformer {
+    public:
+        JSXTransformer(const std::string& source, std::string factory,
+                       std::string fragment, bool automatic)
+            : source_(source), factory_(std::move(factory)),
+              fragment_(std::move(fragment)), automatic_(automatic) {}
+
+        std::string transform(bool& changed) {
+            std::string output;
+            for (size_t position = 0; position < source_.size();) {
+                std::string element;
+                size_t end = position;
+                if (source_[position] == '<' &&
+                    parseElement(position, end, element)) {
+                    output += element;
+                    position = end;
+                    changed = true;
+                } else {
+                    output += source_[position++];
+                }
+            }
+            return output;
+        }
+
+    private:
+        const std::string& source_;
+        std::string factory_;
+        std::string fragment_;
+        bool automatic_;
+
+        static void skipSpace(const std::string& source, size_t& position) {
+            while (position < source.size() &&
+                   std::isspace(static_cast<unsigned char>(
+                       source[position])) != 0) {
+                ++position;
+            }
+        }
+
+        static std::string quote(const std::string& text) {
+            std::string result = "\"";
+            for (char character : text) {
+                if (character == '\\' || character == '"') result += '\\';
+                if (character == '\n' || character == '\r') {
+                    result += ' ';
+                } else {
+                    result += character;
+                }
+            }
+            result += '"';
+            return result;
+        }
+
+        bool parseBraced(size_t start, size_t& end,
+                         std::string& expression) const {
+            if (start >= source_.size() || source_[start] != '{') return false;
+            int depth = 1;
+            char stringQuote = '\0';
+            for (size_t position = start + 1; position < source_.size();
+                 ++position) {
+                const char character = source_[position];
+                if (stringQuote != '\0') {
+                    if (character == '\\') {
+                        ++position;
+                    } else if (character == stringQuote) {
+                        stringQuote = '\0';
+                    }
+                    continue;
+                }
+                if (character == '\'' || character == '"' ||
+                    character == '`') {
+                    stringQuote = character;
+                } else if (character == '{') {
+                    ++depth;
+                } else if (character == '}' && --depth == 0) {
+                    expression =
+                        source_.substr(start + 1, position - start - 1);
+                    end = position + 1;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool parseElement(size_t start, size_t& end,
+                          std::string& output) const {
+            if (start >= source_.size() || source_[start] != '<' ||
+                start + 1 >= source_.size() || source_[start + 1] == '/') {
+                return false;
+            }
+            size_t position = start + 1;
+            bool fragment = source_[position] == '>';
+            std::string tag;
+            if (fragment) {
+                ++position;
+            } else {
+                if (!(std::isalpha(static_cast<unsigned char>(
+                          source_[position])) != 0 ||
+                      source_[position] == '_' ||
+                      source_[position] == '$')) {
+                    return false;
+                }
+                const size_t tagStart = position;
+                while (position < source_.size() &&
+                       (std::isalnum(static_cast<unsigned char>(
+                            source_[position])) != 0 ||
+                        source_[position] == '_' ||
+                        source_[position] == '$' ||
+                        source_[position] == '.' ||
+                        source_[position] == '-' ||
+                        source_[position] == ':')) {
+                    ++position;
+                }
+                tag = source_.substr(tagStart, position - tagStart);
+            }
+
+            std::vector<std::string> properties;
+            bool selfClosing = false;
+            if (!fragment) {
+                while (position < source_.size()) {
+                    skipSpace(source_, position);
+                    if (source_.compare(position, 2, "/>") == 0) {
+                        position += 2;
+                        selfClosing = true;
+                        break;
+                    }
+                    if (position < source_.size() &&
+                        source_[position] == '>') {
+                        ++position;
+                        break;
+                    }
+                    if (position < source_.size() &&
+                        source_[position] == '{') {
+                        size_t braceEnd = position;
+                        std::string spread;
+                        if (!parseBraced(position, braceEnd, spread) ||
+                            spread.rfind("...", 0) != 0) {
+                            return false;
+                        }
+                        properties.push_back(spread);
+                        position = braceEnd;
+                        continue;
+                    }
+                    const size_t nameStart = position;
+                    while (position < source_.size() &&
+                           (std::isalnum(static_cast<unsigned char>(
+                                source_[position])) != 0 ||
+                            source_[position] == '_' ||
+                            source_[position] == '$' ||
+                            source_[position] == '-')) {
+                        ++position;
+                    }
+                    if (position == nameStart) return false;
+                    std::string name =
+                        source_.substr(nameStart, position - nameStart);
+                    skipSpace(source_, position);
+                    std::string value = "true";
+                    if (position < source_.size() &&
+                        source_[position] == '=') {
+                        ++position;
+                        skipSpace(source_, position);
+                        if (position >= source_.size()) return false;
+                        if (source_[position] == '"' ||
+                            source_[position] == '\'') {
+                            const char delimiter = source_[position++];
+                            const size_t valueStart = position;
+                            while (position < source_.size() &&
+                                   source_[position] != delimiter) {
+                                if (source_[position] == '\\') ++position;
+                                ++position;
+                            }
+                            if (position >= source_.size()) return false;
+                            value = quote(source_.substr(
+                                valueStart, position - valueStart));
+                            ++position;
+                        } else if (source_[position] == '{') {
+                            size_t braceEnd = position;
+                            if (!parseBraced(position, braceEnd, value)) {
+                                return false;
+                            }
+                            position = braceEnd;
+                        } else {
+                            const size_t valueStart = position;
+                            while (position < source_.size() &&
+                                   std::isspace(static_cast<unsigned char>(
+                                       source_[position])) == 0 &&
+                                   source_[position] != '>' &&
+                                   source_[position] != '/') {
+                                ++position;
+                            }
+                            value = source_.substr(
+                                valueStart, position - valueStart);
+                        }
+                    }
+                    properties.push_back(name + ": " + value);
+                }
+            }
+
+            std::vector<std::string> children;
+            if (!selfClosing) {
+                while (position < source_.size()) {
+                    if ((fragment &&
+                         source_.compare(position, 3, "</>") == 0) ||
+                        (!fragment &&
+                         source_.compare(position, tag.size() + 3,
+                             "</" + tag + ">") == 0)) {
+                        position += fragment ? 3 : tag.size() + 3;
+                        break;
+                    }
+                    if (source_[position] == '<') {
+                        size_t childEnd = position;
+                        std::string child;
+                        if (!parseElement(position, childEnd, child)) {
+                            return false;
+                        }
+                        children.push_back(child);
+                        position = childEnd;
+                    } else if (source_[position] == '{') {
+                        size_t braceEnd = position;
+                        std::string expression;
+                        if (!parseBraced(position, braceEnd, expression)) {
+                            return false;
+                        }
+                        if (expression.find_first_not_of(" \t\r\n") !=
+                            std::string::npos) {
+                            children.push_back(expression);
+                        }
+                        position = braceEnd;
+                    } else {
+                        const size_t textStart = position;
+                        while (position < source_.size() &&
+                               source_[position] != '<' &&
+                               source_[position] != '{') {
+                            ++position;
+                        }
+                        std::string text = source_.substr(
+                            textStart, position - textStart);
+                        const size_t first = text.find_first_not_of(" \t\r\n");
+                        const size_t last = text.find_last_not_of(" \t\r\n");
+                        if (first != std::string::npos) {
+                            children.push_back(
+                                quote(text.substr(first, last - first + 1)));
+                        }
+                    }
+                }
+            }
+
+            const std::string elementType = fragment
+                ? fragment_
+                : (std::islower(static_cast<unsigned char>(tag[0])) != 0
+                    ? quote(tag) : tag);
+            if (automatic_) {
+                if (!children.empty()) {
+                    std::string childValue;
+                    if (children.size() == 1) {
+                        childValue = children.front();
+                    } else {
+                        childValue = "[";
+                        for (size_t index = 0; index < children.size();
+                             ++index) {
+                            if (index) childValue += ", ";
+                            childValue += children[index];
+                        }
+                        childValue += "]";
+                    }
+                    properties.push_back("children: " + childValue);
+                }
+                std::string props = "{";
+                for (size_t index = 0; index < properties.size(); ++index) {
+                    if (index) props += ", ";
+                    props += properties[index];
+                }
+                props += "}";
+                output = (children.size() > 1 ? "_jsxs" : factory_) +
+                    "(" + elementType + ", " + props + ")";
+            } else {
+                std::string props = properties.empty() ? "null" : "{";
+                if (!properties.empty()) {
+                    for (size_t index = 0; index < properties.size(); ++index) {
+                        if (index) props += ", ";
+                        props += properties[index];
+                    }
+                    props += "}";
+                }
+                output = factory_ + "(" + elementType + ", " + props;
+                for (const std::string& child : children) {
+                    output += ", " + child;
+                }
+                output += ")";
+            }
+            end = position;
+            return true;
+        }
+    };
 }
 
 Transpiler::Transpiler() {
@@ -102,8 +422,8 @@ bool Transpiler::loadConfigRecursive(const std::string& configPath, std::set<std
     std::string content = buffer.str();
     file.close();
 
-    // Store config directory
-    configDir_ = absPath.parent_path().string();
+    const std::string currentConfigDir = absPath.parent_path().string();
+    configDir_ = currentConfigDir;
     if (configDir_.empty()) configDir_ = ".";
     projectRoot_ = configDir_;
 
@@ -113,22 +433,9 @@ bool Transpiler::loadConfigRecursive(const std::string& configPath, std::set<std
     // Handle extends
     if (!newConfig.extends.empty()) {
         std::string basePath = resolveConfigPath(newConfig.extends);
-        TSConfig baseConfig;
-
-        std::ifstream baseFile(basePath);
-        if (baseFile.is_open()) {
-            std::stringstream baseBuffer;
-            baseBuffer << baseFile.rdbuf();
-            baseConfig = parseTSConfig(baseBuffer.str());
-            baseFile.close();
-
-            // Load base config recursively
-            std::set<std::string> baseVisited = visited;
-            loadConfigRecursive(basePath, baseVisited);
-        }
-
-        // Merge base config first, then override with current
-        mergeConfig(baseConfig);
+        if (!loadConfigRecursive(basePath, visited)) return false;
+        configDir_ = currentConfigDir.empty() ? "." : currentConfigDir;
+        projectRoot_ = configDir_;
     }
 
     // Apply current config on top
@@ -174,63 +481,104 @@ std::string Transpiler::resolveConfigPath(const std::string& extendsPath) {
 void Transpiler::mergeConfig(const TSConfig& other) {
     auto& opts = config_.compilerOptions;
     auto& otherOpts = other.compilerOptions;
+    const auto specified = [&](const std::string& option) {
+        return other.specifiedCompilerOptions.count(option) != 0;
+    };
 
-    // Merge compiler options (non-empty values override)
-    if (!otherOpts.outDir.empty()) opts.outDir = otherOpts.outDir;
-    if (!otherOpts.outFile.empty()) opts.outFile = otherOpts.outFile;
-    if (!otherOpts.rootDir.empty()) opts.rootDir = otherOpts.rootDir;
-    if (!otherOpts.declarationDir.empty()) opts.declarationDir = otherOpts.declarationDir;
-    if (!otherOpts.module.empty()) opts.module = otherOpts.module;
-    if (!otherOpts.moduleResolution.empty()) opts.moduleResolution = otherOpts.moduleResolution;
-    if (!otherOpts.baseUrl.empty()) opts.baseUrl = otherOpts.baseUrl;
-    if (!otherOpts.target.empty()) opts.target = otherOpts.target;
-    if (!otherOpts.jsx.empty()) opts.jsx = otherOpts.jsx;
-    if (!otherOpts.jsxFactory.empty()) opts.jsxFactory = otherOpts.jsxFactory;
-    if (!otherOpts.jsxFragmentFactory.empty()) opts.jsxFragmentFactory = otherOpts.jsxFragmentFactory;
-    if (!otherOpts.jsxImportSource.empty()) opts.jsxImportSource = otherOpts.jsxImportSource;
-    if (!otherOpts.sourceRoot.empty()) opts.sourceRoot = otherOpts.sourceRoot;
-    if (!otherOpts.mapRoot.empty()) opts.mapRoot = otherOpts.mapRoot;
-    if (!otherOpts.newLine.empty()) opts.newLine = otherOpts.newLine;
-    if (!otherOpts.tsBuildInfoFile.empty()) opts.tsBuildInfoFile = otherOpts.tsBuildInfoFile;
-
-    // Merge boolean options
-    opts.declaration = otherOpts.declaration || opts.declaration;
-    opts.declarationMap = otherOpts.declarationMap || opts.declarationMap;
-    opts.emitDeclarationOnly = otherOpts.emitDeclarationOnly || opts.emitDeclarationOnly;
-    opts.sourceMap = otherOpts.sourceMap || opts.sourceMap;
-    opts.inlineSourceMap = otherOpts.inlineSourceMap || opts.inlineSourceMap;
-    opts.inlineSources = otherOpts.inlineSources || opts.inlineSources;
-    opts.removeComments = otherOpts.removeComments || opts.removeComments;
-    opts.noEmit = otherOpts.noEmit || opts.noEmit;
-    opts.noEmitOnError = otherOpts.noEmitOnError || opts.noEmitOnError;
-    opts.preserveConstEnums = otherOpts.preserveConstEnums || opts.preserveConstEnums;
-    opts.importHelpers = otherOpts.importHelpers || opts.importHelpers;
-    opts.downlevelIteration = otherOpts.downlevelIteration || opts.downlevelIteration;
-    opts.allowJs = otherOpts.allowJs || opts.allowJs;
-    opts.checkJs = otherOpts.checkJs || opts.checkJs;
-    opts.resolveJsonModule = otherOpts.resolveJsonModule || opts.resolveJsonModule;
-    opts.esModuleInterop = otherOpts.esModuleInterop || opts.esModuleInterop;
-    opts.allowSyntheticDefaultImports = otherOpts.allowSyntheticDefaultImports || opts.allowSyntheticDefaultImports;
-    opts.strict = otherOpts.strict || opts.strict;
-    opts.composite = otherOpts.composite || opts.composite;
-    opts.incremental = otherOpts.incremental || opts.incremental;
-    opts.isolatedModules = otherOpts.isolatedModules || opts.isolatedModules;
-    opts.skipLibCheck = otherOpts.skipLibCheck || opts.skipLibCheck;
-    opts.minify = otherOpts.minify || opts.minify;
-
-    // Merge paths
-    for (const auto& [key, value] : otherOpts.paths) {
-        opts.paths[key] = value;
+    if (specified("outDir")) opts.outDir = otherOpts.outDir;
+    if (specified("outFile")) opts.outFile = otherOpts.outFile;
+    if (specified("rootDir")) opts.rootDir = otherOpts.rootDir;
+    if (specified("declarationDir")) {
+        opts.declarationDir = otherOpts.declarationDir;
+    }
+    if (specified("module")) opts.module = otherOpts.module;
+    if (specified("moduleResolution")) {
+        opts.moduleResolution = otherOpts.moduleResolution;
+    }
+    if (specified("moduleDetection")) {
+        opts.moduleDetection = otherOpts.moduleDetection;
+    }
+    if (specified("baseUrl")) opts.baseUrl = otherOpts.baseUrl;
+    if (specified("target")) opts.target = otherOpts.target;
+    if (specified("jsx")) opts.jsx = otherOpts.jsx;
+    if (specified("jsxFactory")) opts.jsxFactory = otherOpts.jsxFactory;
+    if (specified("jsxFragmentFactory")) {
+        opts.jsxFragmentFactory = otherOpts.jsxFragmentFactory;
+    }
+    if (specified("jsxImportSource")) {
+        opts.jsxImportSource = otherOpts.jsxImportSource;
+    }
+    if (specified("sourceRoot")) opts.sourceRoot = otherOpts.sourceRoot;
+    if (specified("mapRoot")) opts.mapRoot = otherOpts.mapRoot;
+    if (specified("newLine")) opts.newLine = otherOpts.newLine;
+    if (specified("tsBuildInfoFile")) {
+        opts.tsBuildInfoFile = otherOpts.tsBuildInfoFile;
     }
 
-    // Merge arrays (only if other has values)
-    if (!other.include.empty()) config_.include = other.include;
-    if (!other.exclude.empty()) config_.exclude = other.exclude;
-    if (!other.files.empty()) config_.files = other.files;
-    if (!otherOpts.lib.empty()) opts.lib = otherOpts.lib;
-    if (!otherOpts.types.empty()) opts.types = otherOpts.types;
-    if (!otherOpts.typeRoots.empty()) opts.typeRoots = otherOpts.typeRoots;
-    if (!otherOpts.rootDirs.empty()) opts.rootDirs = otherOpts.rootDirs;
+#define NOVA_MERGE_BOOL(name) \
+    if (specified(#name)) opts.name = otherOpts.name
+    NOVA_MERGE_BOOL(declaration);
+    NOVA_MERGE_BOOL(declarationMap);
+    NOVA_MERGE_BOOL(emitDeclarationOnly);
+    NOVA_MERGE_BOOL(sourceMap);
+    NOVA_MERGE_BOOL(inlineSourceMap);
+    NOVA_MERGE_BOOL(inlineSources);
+    NOVA_MERGE_BOOL(removeComments);
+    NOVA_MERGE_BOOL(noEmit);
+    NOVA_MERGE_BOOL(noEmitOnError);
+    NOVA_MERGE_BOOL(preserveConstEnums);
+    NOVA_MERGE_BOOL(importHelpers);
+    NOVA_MERGE_BOOL(downlevelIteration);
+    NOVA_MERGE_BOOL(allowJs);
+    NOVA_MERGE_BOOL(checkJs);
+    NOVA_MERGE_BOOL(resolveJsonModule);
+    NOVA_MERGE_BOOL(esModuleInterop);
+    NOVA_MERGE_BOOL(allowSyntheticDefaultImports);
+    NOVA_MERGE_BOOL(strict);
+    NOVA_MERGE_BOOL(composite);
+    NOVA_MERGE_BOOL(incremental);
+    NOVA_MERGE_BOOL(isolatedModules);
+    NOVA_MERGE_BOOL(isolatedDeclarations);
+    NOVA_MERGE_BOOL(verbatimModuleSyntax);
+    NOVA_MERGE_BOOL(allowArbitraryExtensions);
+    NOVA_MERGE_BOOL(allowImportingTsExtensions);
+    NOVA_MERGE_BOOL(resolvePackageJsonExports);
+    NOVA_MERGE_BOOL(resolvePackageJsonImports);
+    NOVA_MERGE_BOOL(noResolve);
+    NOVA_MERGE_BOOL(rewriteRelativeImportExtensions);
+    NOVA_MERGE_BOOL(skipLibCheck);
+    NOVA_MERGE_BOOL(minify);
+#undef NOVA_MERGE_BOOL
+
+    // Merge paths
+    if (specified("paths")) {
+        for (const auto& [key, value] : otherOpts.paths) {
+            opts.paths[key] = value;
+        }
+    }
+
+    if (other.specifiedTopLevel.count("include")) {
+        config_.include = other.include;
+    }
+    if (other.specifiedTopLevel.count("exclude")) {
+        config_.exclude = other.exclude;
+    }
+    if (other.specifiedTopLevel.count("files")) {
+        config_.files = other.files;
+    }
+    if (other.specifiedTopLevel.count("references")) {
+        config_.references = other.references;
+    }
+    if (specified("lib")) opts.lib = otherOpts.lib;
+    if (specified("types")) opts.types = otherOpts.types;
+    if (specified("typeRoots")) opts.typeRoots = otherOpts.typeRoots;
+    if (specified("rootDirs")) opts.rootDirs = otherOpts.rootDirs;
+    if (specified("moduleSuffixes")) {
+        opts.moduleSuffixes = otherOpts.moduleSuffixes;
+    }
+    if (specified("customConditions")) {
+        opts.customConditions = otherOpts.customConditions;
+    }
 }
 
 void Transpiler::setOptions(const CompilerOptions& options) {
@@ -308,12 +656,20 @@ TranspileResult Transpiler::transpileString(const std::string& content, const st
             // Generate declaration map if requested
             if (config_.compilerOptions.declarationMap && !result.dtsCode.empty()) {
                 result.declarationMap = generateDeclarationMap(content, result.dtsCode, filename);
+                result.dtsCode += "\n//# sourceMappingURL=" +
+                    std::filesystem::path(filename).stem().string() +
+                    ".d.ts.map\n";
             }
         }
 
         // Generate source map if requested
         if (config_.compilerOptions.sourceMap && !config_.compilerOptions.inlineSourceMap) {
             result.sourceMap = generateSourceMap(content, jsCode, filename);
+            if (!result.jsCode.empty()) {
+                result.jsCode += "\n//# sourceMappingURL=" +
+                    std::filesystem::path(filename).stem().string() +
+                    ".js.map\n";
+            }
         } else if (config_.compilerOptions.inlineSourceMap) {
             std::string sourceMapData = generateSourceMap(content, jsCode, filename);
             // Base64 encode and append to jsCode
@@ -334,19 +690,22 @@ TranspileResult Transpiler::transpileString(const std::string& content, const st
 std::string Transpiler::transformTypeScript(const std::string& source, const std::string& filename) {
     std::string result = source;
 
-    // Step 1: Transform JSX if needed
+    // Step 1: Remove TypeScript-only syntax before injecting JSX runtime
+    // imports so import aliases are not mistaken for `as` assertions.
+    result = removeTypeAnnotations(result);
+
+    // Step 2: Transform JSX if needed
     bool isTsx = filename.size() > 4 && filename.substr(filename.size() - 4) == ".tsx";
     bool isJsx = filename.size() > 4 && filename.substr(filename.size() - 4) == ".jsx";
     if ((isTsx || isJsx) && !config_.compilerOptions.jsx.empty()) {
         result = transformJSX(result);
     }
 
-    // Step 2: Remove type annotations
-    result = removeTypeAnnotations(result);
-
     // Step 3: Transform path aliases
-    if (!config_.compilerOptions.paths.empty() || !config_.compilerOptions.baseUrl.empty()) {
-        result = transformPaths(result);
+    if (!config_.compilerOptions.paths.empty() ||
+        !config_.compilerOptions.baseUrl.empty() ||
+        config_.compilerOptions.rewriteRelativeImportExtensions) {
+        result = transformPaths(result, filename);
     }
 
     // Step 4: Transform imports based on module type
@@ -495,143 +854,131 @@ std::string Transpiler::removeTypeAnnotations(const std::string& source) {
 }
 
 std::string Transpiler::transformJSX(const std::string& source) {
-    std::string result = source;
     const auto& opts = config_.compilerOptions;
 
     if (opts.jsx == "preserve" || opts.jsx == "react-native") {
         // Keep JSX as-is
-        return result;
+        return source;
     }
 
-    // For react, react-jsx, react-jsxdev - transform JSX
     std::string createElement = opts.jsxFactory;
     std::string fragmentType = opts.jsxFragmentFactory;
-
-    if (opts.jsx == "react-jsx" || opts.jsx == "react-jsxdev") {
-        // Use new JSX transform
-        bool hasJsx = result.find('<') != std::string::npos;
-        if (hasJsx) {
-            // Add jsx import at the top
-            std::string jsxImport = "import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from \"" +
-                                    opts.jsxImportSource + "/jsx-runtime\";\n";
-            result = jsxImport + result;
-            createElement = "_jsx";
-            fragmentType = "_Fragment";
+    const bool automatic =
+        opts.jsx == "react-jsx" || opts.jsx == "react-jsxdev";
+    if (automatic) {
+        createElement = "_jsx";
+        fragmentType = "_Fragment";
+    }
+    bool changed = false;
+    JSXTransformer transformer(
+        source, createElement, fragmentType, automatic);
+    std::string result = transformer.transform(changed);
+    if (automatic && changed) {
+        const bool commonJS =
+            opts.module == "commonjs" || opts.module == "CommonJS";
+        if (commonJS) {
+            result =
+                "const { jsx: _jsx, jsxs: _jsxs, Fragment: _Fragment } = "
+                "require(\"" + opts.jsxImportSource +
+                "/jsx-runtime\");\n" + result;
+        } else {
+            result =
+                "import { jsx as _jsx, jsxs as _jsxs, "
+                "Fragment as _Fragment } from \"" +
+                opts.jsxImportSource + "/jsx-runtime\";\n" + result;
         }
     }
-
-    // Transform self-closing tags: <Component /> -> createElement(Component, null)
-    result = std::regex_replace(result,
-        std::regex("<(\\w+)\\s*/>"),
-        createElement + "($1, null)");
-
-    // Transform tags with props: <Component prop="value" /> -> createElement(Component, {prop: "value"})
-    result = std::regex_replace(result,
-        std::regex("<(\\w+)\\s+([^>]+)\\s*/>"),
-        createElement + "($1, {$2})");
-
-    // Transform fragments: <> ... </> -> createElement(Fragment, null, ...)
-    result = std::regex_replace(result, std::regex("<>"), createElement + "(" + fragmentType + ", null, ");
-    result = std::regex_replace(result, std::regex("</>"), ")");
-
-    // Basic opening/closing tag transformation (simplified)
-    // Full JSX transformation would require a proper parser
-
     return result;
 }
 
-std::string Transpiler::transformPaths(const std::string& source) {
-    std::string result = source;
+std::string Transpiler::transformPaths(
+    const std::string& source, const std::string& filename) {
     const auto& opts = config_.compilerOptions;
 
-    if (opts.paths.empty()) {
-        return result;
+    if (opts.paths.empty() && !opts.rewriteRelativeImportExtensions) {
+        return source;
     }
-
-    // Transform path aliases in imports (e.g., @/* -> ./src/*)
-    for (const auto& [pattern, replacements] : opts.paths) {
-        if (replacements.empty()) continue;
-
-        std::string replacement = replacements[0];
-
-        // Handle baseUrl - make paths relative if baseUrl is set
-        std::string basePath;
-        if (!opts.baseUrl.empty()) {
-            basePath = opts.baseUrl;
-            if (!basePath.empty() && basePath.back() != '/') basePath += '/';
-            if (!basePath.empty() && basePath[0] != '.') basePath = "./" + basePath;
-        } else {
-            basePath = "./";
+    const auto rewrite = [&](const std::string& specifier) {
+        for (const auto& [pattern, replacements] : opts.paths) {
+            if (replacements.empty()) continue;
+            const size_t star = pattern.find('*');
+            std::string wildcard;
+            if (star == std::string::npos) {
+                if (specifier != pattern) continue;
+            } else {
+                const std::string prefix = pattern.substr(0, star);
+                const std::string suffix = pattern.substr(star + 1);
+                if (specifier.size() < prefix.size() + suffix.size() ||
+                    specifier.compare(0, prefix.size(), prefix) != 0 ||
+                    specifier.compare(
+                        specifier.size() - suffix.size(),
+                        suffix.size(), suffix) != 0) {
+                    continue;
+                }
+                wildcard = specifier.substr(
+                    prefix.size(),
+                    specifier.size() - prefix.size() - suffix.size());
+            }
+            std::string replacement = replacements.front();
+            const size_t replacementStar = replacement.find('*');
+            if (replacementStar != std::string::npos) {
+                replacement.replace(replacementStar, 1, wildcard);
+            }
+            std::filesystem::path base = opts.baseUrl.empty()
+                ? std::filesystem::path(configDir_)
+                : std::filesystem::path(
+                    resolveConfigRelativePath(opts.baseUrl));
+            std::filesystem::path targetSource = base / replacement;
+            if (!targetSource.has_extension()) targetSource += ".ts";
+            std::filesystem::path targetOutput =
+                resolveOutputPath(targetSource.string(), ".js");
+            std::filesystem::path importerOutput =
+                resolveOutputPath(filename, ".js");
+            std::filesystem::path relative = std::filesystem::relative(
+                targetOutput, importerOutput.parent_path());
+            if (!opts.rewriteRelativeImportExtensions) {
+                relative.replace_extension();
+            }
+            std::string resolved = relative.generic_string();
+            if (!resolved.empty() && resolved[0] != '.') resolved = "./" + resolved;
+            return resolved;
         }
-
-        // Check if this is a wildcard pattern like "@models/*"
-        size_t starPos = pattern.find('*');
-        if (starPos != std::string::npos) {
-            // Extract prefix (e.g., "@models/")
-            std::string prefix = pattern.substr(0, starPos);
-
-            // Extract replacement prefix (e.g., "src/models/")
-            size_t replStarPos = replacement.find('*');
-            std::string replPrefix = (replStarPos != std::string::npos)
-                ? replacement.substr(0, replStarPos)
-                : replacement;
-
-            // Build the full replacement path
-            std::string fullReplacement = basePath + replPrefix;
-
-            // Simple string replacement for the pattern prefix
-            // Find all occurrences in quotes
-            size_t pos = 0;
-            while ((pos = result.find("\"" + prefix, pos)) != std::string::npos) {
-                // Find the closing quote
-                size_t endQuote = result.find("\"", pos + 1 + prefix.size());
-                if (endQuote != std::string::npos) {
-                    // Extract the path after the prefix
-                    std::string restOfPath = result.substr(pos + 1 + prefix.size(), endQuote - pos - 1 - prefix.size());
-                    // Replace
-                    result.replace(pos + 1, prefix.size(), fullReplacement);
-                    pos += fullReplacement.size() + restOfPath.size() + 2;
-                } else {
-                    pos++;
-                }
-            }
-
-            // Same for single quotes
-            pos = 0;
-            while ((pos = result.find("'" + prefix, pos)) != std::string::npos) {
-                size_t endQuote = result.find("'", pos + 1 + prefix.size());
-                if (endQuote != std::string::npos) {
-                    std::string restOfPath = result.substr(pos + 1 + prefix.size(), endQuote - pos - 1 - prefix.size());
-                    result.replace(pos + 1, prefix.size(), fullReplacement);
-                    pos += fullReplacement.size() + restOfPath.size() + 2;
-                } else {
-                    pos++;
-                }
-            }
-        } else {
-            // Exact match pattern
-            std::string fullReplacement = basePath + replacement;
-
-            // Replace in double quotes
-            size_t pos = 0;
-            std::string searchDouble = "\"" + pattern + "\"";
-            std::string replaceDouble = "\"" + fullReplacement + "\"";
-            while ((pos = result.find(searchDouble, pos)) != std::string::npos) {
-                result.replace(pos, searchDouble.size(), replaceDouble);
-                pos += replaceDouble.size();
-            }
-
-            // Replace in single quotes
-            pos = 0;
-            std::string searchSingle = "'" + pattern + "'";
-            std::string replaceSingle = "'" + fullReplacement + "'";
-            while ((pos = result.find(searchSingle, pos)) != std::string::npos) {
-                result.replace(pos, searchSingle.size(), replaceSingle);
-                pos += replaceSingle.size();
+        if (opts.rewriteRelativeImportExtensions &&
+            (specifier.rfind("./", 0) == 0 ||
+             specifier.rfind("../", 0) == 0)) {
+            std::filesystem::path rewritten(specifier);
+            const std::string extension = rewritten.extension().string();
+            if (extension == ".ts" || extension == ".tsx" ||
+                extension == ".mts" || extension == ".cts") {
+                rewritten.replace_extension(".js");
+                return rewritten.generic_string();
             }
         }
-    }
+        return specifier;
+    };
 
+    std::string result;
+    for (size_t position = 0; position < source.size();) {
+        if (source[position] != '"' && source[position] != '\'') {
+            result += source[position++];
+            continue;
+        }
+        const char delimiter = source[position];
+        const size_t valueStart = ++position;
+        while (position < source.size() &&
+               source[position] != delimiter) {
+            if (source[position] == '\\' && position + 1 < source.size()) {
+                position += 2;
+            } else {
+                ++position;
+            }
+        }
+        const std::string value =
+            source.substr(valueStart, position - valueStart);
+        result += delimiter;
+        result += rewrite(value);
+        if (position < source.size()) result += source[position++];
+    }
     return result;
 }
 
@@ -916,42 +1263,16 @@ std::string Transpiler::generateSourceMap(const std::string& source, const std::
 
     // Source root
     if (!opts.sourceRoot.empty()) {
-        ss << "  \"sourceRoot\": \"" << opts.sourceRoot << "\",\n";
+        ss << "  \"sourceRoot\": \"" << jsonEscape(opts.sourceRoot)
+           << "\",\n";
     }
 
-    ss << "  \"sources\": [\"" << filename << "\"],\n";
+    ss << "  \"sources\": [\"" << jsonEscape(filename) << "\"],\n";
 
     // Include sources if requested
     if (opts.inlineSources) {
-        // Escape the source code for JSON
-        std::string escapedSource = source;
-        // Replace special characters
-        size_t pos = 0;
-        while ((pos = escapedSource.find('\\', pos)) != std::string::npos) {
-            escapedSource.replace(pos, 1, "\\\\");
-            pos += 2;
-        }
-        pos = 0;
-        while ((pos = escapedSource.find('"', pos)) != std::string::npos) {
-            escapedSource.replace(pos, 1, "\\\"");
-            pos += 2;
-        }
-        pos = 0;
-        while ((pos = escapedSource.find('\n', pos)) != std::string::npos) {
-            escapedSource.replace(pos, 1, "\\n");
-            pos += 2;
-        }
-        pos = 0;
-        while ((pos = escapedSource.find('\r', pos)) != std::string::npos) {
-            escapedSource.replace(pos, 1, "\\r");
-            pos += 2;
-        }
-        pos = 0;
-        while ((pos = escapedSource.find('\t', pos)) != std::string::npos) {
-            escapedSource.replace(pos, 1, "\\t");
-            pos += 2;
-        }
-        ss << "  \"sourcesContent\": [\"" << escapedSource << "\"],\n";
+        ss << "  \"sourcesContent\": [\"" << jsonEscape(source)
+           << "\"],\n";
     }
 
     ss << "  \"names\": [],\n";
@@ -980,6 +1301,8 @@ std::string Transpiler::generateSourceMap(const std::string& source, const std::
 
 std::string Transpiler::generateDeclaration(const std::string& source) {
     std::string result;
+    std::set<std::string> emittedFunctions;
+    std::set<std::string> emittedVariables;
 
     // Extract interfaces (keep them as-is for .d.ts)
     std::regex interfaceRegex("((?:export\\s+)?interface\\s+\\w+\\s*(?:<[^>]*>)?\\s*(?:extends\\s+[^{]+)?\\s*\\{[^}]*\\})");
@@ -999,10 +1322,25 @@ std::string Transpiler::generateDeclaration(const std::string& source) {
     }
 
     // Extract exported function signatures
-    std::regex funcRegex("export\\s+((?:async\\s+)?function\\s+\\w+\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*:\\s*[\\w<>\\[\\]|&\\s]+)");
+    std::regex funcRegex(
+        "export\\s+((?:async\\s+)?function\\s+(\\w+)\\s*"
+        "(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*:\\s*"
+        "[\\w<>\\[\\]|&.,\\s]+)");
     it = std::sregex_iterator(source.begin(), source.end(), funcRegex);
     while (it != end) {
         result += "export declare " + it->str(1) + ";\n";
+        emittedFunctions.insert(it->str(2));
+        ++it;
+    }
+    std::regex inferredFuncRegex(
+        "export\\s+((?:async\\s+)?function\\s+(\\w+)\\s*"
+        "((?:<[^>]*>)?)\\s*\\(([^)]*)\\))\\s*\\{");
+    it = std::sregex_iterator(
+        source.begin(), source.end(), inferredFuncRegex);
+    while (it != end) {
+        if (emittedFunctions.insert(it->str(2)).second) {
+            result += "export declare " + it->str(1) + ": unknown;\n";
+        }
         ++it;
     }
 
@@ -1019,6 +1357,32 @@ std::string Transpiler::generateDeclaration(const std::string& source) {
     it = std::sregex_iterator(source.begin(), source.end(), varRegex);
     while (it != end) {
         result += "export declare " + it->str(1) + " " + it->str(2) + ": " + it->str(3) + ";\n";
+        emittedVariables.insert(it->str(2));
+        ++it;
+    }
+    std::regex inferredVarRegex(
+        "export\\s+(const|let)\\s+(\\w+)\\s*=\\s*([^;]+);");
+    it = std::sregex_iterator(source.begin(), source.end(), inferredVarRegex);
+    while (it != end) {
+        const std::string name = it->str(2);
+        if (emittedVariables.insert(name).second) {
+            std::string initializer = it->str(3);
+            initializer.erase(0, initializer.find_first_not_of(" \t\r\n"));
+            std::string inferred = "unknown";
+            if (!initializer.empty() &&
+                (initializer.front() == '"' || initializer.front() == '\'' ||
+                 initializer.front() == '`')) {
+                inferred = "string";
+            } else if (initializer == "true" || initializer == "false") {
+                inferred = "boolean";
+            } else if (std::regex_match(
+                           initializer,
+                           std::regex("[+-]?[0-9]+(?:\\.[0-9]+)?"))) {
+                inferred = "number";
+            }
+            result += "export declare " + it->str(1) + " " + name +
+                ": " + inferred + ";\n";
+        }
         ++it;
     }
 
@@ -1049,7 +1413,7 @@ std::string Transpiler::generateDeclarationMap([[maybe_unused]] const std::strin
     ss << "{\n";
     ss << "  \"version\": 3,\n";
     ss << "  \"file\": \"" << dtsFile << "\",\n";
-    ss << "  \"sources\": [\"" << srcFile << "\"],\n";
+    ss << "  \"sources\": [\"" << jsonEscape(srcFile) << "\"],\n";
     ss << "  \"names\": [],\n";
 
     // Generate simple line mappings from .d.ts to source
@@ -1098,8 +1462,10 @@ std::vector<std::string> Transpiler::findSourceFiles(const std::string& projectP
         std::string ext = entry.path().extension().string();
 
         // Check file extension
-        bool isTS = (ext == ".ts" || ext == ".tsx");
-        bool isJS = (ext == ".js" || ext == ".jsx");
+        bool isTS = (ext == ".ts" || ext == ".tsx" ||
+                     ext == ".mts" || ext == ".cts");
+        bool isJS = (ext == ".js" || ext == ".jsx" ||
+                     ext == ".mjs" || ext == ".cjs");
 
         if (!isTS && !(opts.allowJs && isJS)) continue;
 
@@ -1206,11 +1572,13 @@ std::string Transpiler::resolveOutputPath(const std::string& inputPath, const st
     std::filesystem::path input(inputPath);
     std::filesystem::path output;
 
-    std::string outDir = opts.outDir.empty() ? "." : opts.outDir;
+    std::string outDir = resolveConfigRelativePath(
+        opts.outDir.empty() ? "." : opts.outDir);
 
     if (!opts.rootDir.empty()) {
         // Preserve directory structure relative to rootDir
-        std::filesystem::path rootDir(opts.rootDir);
+        std::filesystem::path rootDir(
+            resolveConfigRelativePath(opts.rootDir));
         std::filesystem::path relativePath = std::filesystem::relative(input.parent_path(), rootDir);
         output = std::filesystem::path(outDir) / relativePath / (input.stem().string() + ext);
     } else {
@@ -1219,6 +1587,16 @@ std::string Transpiler::resolveOutputPath(const std::string& inputPath, const st
     }
 
     return output.string();
+}
+
+std::string Transpiler::resolveConfigRelativePath(
+    const std::string& path) const {
+    std::filesystem::path candidate(path.empty() ? "." : path);
+    if (candidate.is_absolute() || configDir_.empty()) {
+        return candidate.lexically_normal().string();
+    }
+    return (std::filesystem::path(configDir_) / candidate)
+        .lexically_normal().string();
 }
 
 // ============================================================================
@@ -1289,12 +1667,14 @@ BuildResult Transpiler::build(const std::string& projectPath) {
     }
 
     // Create output directory
-    std::string outDir = opts.outDir.empty() ? "." : opts.outDir;
+    std::string outDir = resolveConfigRelativePath(
+        opts.outDir.empty() ? "." : opts.outDir);
     std::filesystem::create_directories(outDir);
 
     // Create declaration directory if different
     if (!opts.declarationDir.empty() && opts.declarationDir != outDir) {
-        std::filesystem::create_directories(opts.declarationDir);
+        std::filesystem::create_directories(
+            resolveConfigRelativePath(opts.declarationDir));
     }
 
     // Filter files for incremental build
@@ -1347,11 +1727,20 @@ BuildResult Transpiler::build(const std::string& projectPath) {
 
             // Write declaration file if generated
             if (!fileResult.dtsCode.empty()) {
-                std::string dtsDir = opts.declarationDir.empty() ? outDir : opts.declarationDir;
                 std::string dtsPath = resolveOutputPath(fileResult.filename, ".d.ts");
                 if (!opts.declarationDir.empty()) {
                     std::filesystem::path input(fileResult.filename);
-                    dtsPath = dtsDir + "/" + input.stem().string() + ".d.ts";
+                    std::filesystem::path root = opts.rootDir.empty()
+                        ? std::filesystem::path(configDir_)
+                        : std::filesystem::path(
+                            resolveConfigRelativePath(opts.rootDir));
+                    std::filesystem::path relative =
+                        std::filesystem::relative(input.parent_path(), root);
+                    dtsPath =
+                        (std::filesystem::path(resolveConfigRelativePath(
+                             opts.declarationDir)) /
+                         relative /
+                         (input.stem().string() + ".d.ts")).string();
                 }
 
                 std::filesystem::create_directories(std::filesystem::path(dtsPath).parent_path());
@@ -1431,9 +1820,11 @@ bool Transpiler::needsRebuild(const std::string& filePath) {
 
 void Transpiler::saveBuildInfo() {
     const auto& opts = config_.compilerOptions;
-    std::string infoPath = opts.tsBuildInfoFile.empty() ?
-                           (opts.outDir.empty() ? "." : opts.outDir) + "/.tsbuildinfo" :
-                           opts.tsBuildInfoFile;
+    std::string infoPath = opts.tsBuildInfoFile.empty()
+        ? (std::filesystem::path(resolveConfigRelativePath(
+               opts.outDir.empty() ? "." : opts.outDir)) /
+           ".tsbuildinfo").string()
+        : resolveConfigRelativePath(opts.tsBuildInfoFile);
 
     std::ofstream file(infoPath);
     if (file.is_open()) {
@@ -1455,9 +1846,11 @@ void Transpiler::saveBuildInfo() {
 
 void Transpiler::loadBuildInfo() {
     const auto& opts = config_.compilerOptions;
-    std::string infoPath = opts.tsBuildInfoFile.empty() ?
-                           (opts.outDir.empty() ? "." : opts.outDir) + "/.tsbuildinfo" :
-                           opts.tsBuildInfoFile;
+    std::string infoPath = opts.tsBuildInfoFile.empty()
+        ? (std::filesystem::path(resolveConfigRelativePath(
+               opts.outDir.empty() ? "." : opts.outDir)) /
+           ".tsbuildinfo").string()
+        : resolveConfigRelativePath(opts.tsBuildInfoFile);
 
     std::ifstream file(infoPath);
     if (!file.is_open()) {
@@ -1612,6 +2005,35 @@ void Transpiler::watch(const std::string& projectPath, std::function<void(const 
 
 TSConfig parseTSConfig(const std::string& jsonContent) {
     TSConfig config;
+    const auto hasKey = [&jsonContent](const std::string& key) {
+        return std::regex_search(
+            jsonContent, std::regex("\"" + key + "\"\\s*:"));
+    };
+    const std::vector<std::string> compilerOptionNames = {
+        "outDir", "outFile", "rootDir", "declarationDir", "module",
+        "moduleResolution", "moduleDetection", "baseUrl", "target", "jsx",
+        "jsxFactory", "jsxFragmentFactory", "jsxImportSource", "sourceRoot",
+        "mapRoot", "newLine", "tsBuildInfoFile", "declaration",
+        "declarationMap", "emitDeclarationOnly", "sourceMap",
+        "inlineSourceMap", "inlineSources", "removeComments", "noEmit",
+        "noEmitOnError", "preserveConstEnums", "importHelpers",
+        "downlevelIteration", "allowJs", "checkJs", "resolveJsonModule",
+        "esModuleInterop", "allowSyntheticDefaultImports", "strict",
+        "composite", "incremental", "isolatedModules", "skipLibCheck",
+        "isolatedDeclarations", "verbatimModuleSyntax",
+        "allowArbitraryExtensions", "allowImportingTsExtensions",
+        "resolvePackageJsonExports", "resolvePackageJsonImports",
+        "noResolve", "rewriteRelativeImportExtensions", "minify", "paths",
+        "lib", "types", "typeRoots", "rootDirs", "moduleSuffixes",
+        "customConditions"
+    };
+    for (const std::string& option : compilerOptionNames) {
+        if (hasKey(option)) config.specifiedCompilerOptions.insert(option);
+    }
+    for (const std::string& option :
+         {"extends", "include", "exclude", "files", "references"}) {
+        if (hasKey(option)) config.specifiedTopLevel.insert(option);
+    }
 
     // Helper to get string value
     auto getValue = [&jsonContent](const std::string& key) -> std::string {

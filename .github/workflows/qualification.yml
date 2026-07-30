@@ -1,0 +1,71 @@
+name: Phase 7 Qualification
+
+on:
+  pull_request:
+    branches: [master, main, develop]
+  schedule:
+    - cron: "25 18 * * *"
+  workflow_dispatch:
+
+jobs:
+  qualification-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18 llvm-18-dev cmake ninja-build
+
+      - name: Configure and build Nova
+        run: |
+          cmake -S . -B build/qualification -G Ninja \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build build/qualification --target nova
+
+      - name: Pull-request changed-feature shard
+        if: github.event_name == 'pull_request'
+        run: |
+          python -B tests/qualification/run_changed_test262.py \
+            --nova build/qualification/nova \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --output build/qualification/dashboard/test262-changed
+
+      - name: Pull-request TypeScript and ecosystem profiles
+        if: github.event_name == 'pull_request'
+        run: |
+          python -B tests/qualification/typescript_runner.py \
+            --nova build/qualification/nova \
+            --profile tests/qualification/profiles/typescript-local-profile.json \
+            --output build/qualification/dashboard/typescript
+          python -B tests/qualification/ecosystem_runner.py \
+            --nova build/qualification/nova \
+            --profile tests/qualification/profiles/ecosystem-local-profile.json \
+            --output build/qualification/dashboard/ecosystem
+
+      - name: Nightly full declared profile
+        if: github.event_name != 'pull_request'
+        run: |
+          python -B tests/qualification/run_qualification.py \
+            --nova build/qualification/nova \
+            --output build/qualification/dashboard
+
+      - name: Runner unit tests
+        run: python -B -m unittest tests.test_qualification_runners -v
+
+      - name: Upload qualification dashboards
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase7-qualification-${{ github.run_id }}
+          path: build/qualification/dashboard
+          if-no-files-found: warn
+          retention-days: 30

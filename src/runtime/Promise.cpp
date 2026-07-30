@@ -14,12 +14,21 @@
 #include <memory>
 
 #include "nova/runtime/Value.h"
+#include "nova/runtime/Runtime.h"
 
 extern "C" {
 
 // Forward declarations
 void nova_console_log_string(const char* str);
 void nova_console_error_string(const char* str);
+void* nova_dynamic_object_create();
+void nova_dynamic_object_set_tagged(
+    void* object, const char* key, std::uint64_t value);
+void* nova_dynamic_object_get_registered_function(
+    std::uint64_t value, const char* key);
+void* nova_dynamic_object_from_registered_value(std::uint64_t value);
+int64_t nova_dynamic_call_method_2(
+    void* object, const char* methodName, int64_t arg0, int64_t arg1);
 
 // Forward declarations for Promise functions (needed for mutual recursion)
 void nova_promise_fulfill(void* promisePtr, int64_t value);
@@ -433,6 +442,20 @@ void nova_promise_fulfill(void* promisePtr, int64_t value) {
 
     NovaPromise* adopted = promiseFromValue(value);
     if (!adopted) {
+        if (nova_dynamic_object_get_registered_function(
+                static_cast<std::uint64_t>(value), "then")) {
+            void* thenable = nova_dynamic_object_from_registered_value(
+                static_cast<std::uint64_t>(value));
+            PromiseCallable* resolve = createPromiseCallable(
+                promise, PromiseCallableKind::Resolve);
+            PromiseCallable* reject = createPromiseCallable(
+                promise, PromiseCallableKind::Reject);
+            nova_dynamic_call_method_2(
+                thenable, "then",
+                static_cast<int64_t>(nova_value_from_object(resolve)),
+                static_cast<int64_t>(nova_value_from_object(reject)));
+            return;
+        }
         fulfillPlain(promise, value);
         return;
     }
@@ -645,6 +668,22 @@ struct PromiseArrayMeta { char pad[24]; int64_t length; int64_t capacity; int64_
 void* nova_value_array_create(int64_t length);
 void value_array_set(void* arrayPtr, int64_t index, int64_t value);
 
+static int64_t normalizePlainPromiseElement(int64_t value) {
+    using namespace nova::runtime;
+    const auto bits = static_cast<JSValue>(value);
+    const auto tag = bits & JS_VALUE_TAG_MASK;
+    if (tag == JS_VALUE_UNDEFINED || tag == JS_VALUE_NULL ||
+        tag == JS_VALUE_FALSE || tag == JS_VALUE_TRUE ||
+        tag == JS_VALUE_STRING_TAG || tag == JS_VALUE_OBJECT_TAG ||
+        tag == JS_VALUE_CANONICAL_NAN) {
+        return value;
+    }
+    if (value >= -(1LL << 31) && value <= (1LL << 31)) {
+        return static_cast<int64_t>(nova_value_from_i64(value));
+    }
+    return value;
+}
+
 // Promise.all(promises) - Wait for all promises
 // Accepts a NovaArray pointer (single argument from compiler)
 void* nova_promise_all(void* arrayPtr) {
@@ -652,6 +691,9 @@ void* nova_promise_all(void* arrayPtr) {
     PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
     int64_t count = meta->length;
     void* values = nova_value_array_create(count);
+    // Promise fulfillment payloads are NaN-boxed JSValues. Mark the result
+    // array so typed and dynamic element access do not box them a second time.
+    static_cast<nova::runtime::ObjectHeader*>(values)->value_encoding = 1;
     if (count == 0) {
         return nova_promise_resolve(static_cast<int64_t>(
             nova_value_from_object(values)));
@@ -691,7 +733,8 @@ void* nova_promise_all(void* arrayPtr) {
         if (NovaPromise* promise = promiseFromValue(element)) {
             observePromise(promise, std::move(settleElement));
         } else {
-            settleElement(PromiseState::FULFILLED, element);
+            settleElement(PromiseState::FULFILLED,
+                          normalizePlainPromiseElement(element));
         }
     }
     return result;
@@ -721,7 +764,8 @@ void* nova_promise_race(void* arrayPtr) {
         } else {
             nova_promise_queue_microtask(
                 [settle = std::move(settle), element]() mutable {
-                    settle(PromiseState::FULFILLED, element);
+                    settle(PromiseState::FULFILLED,
+                           normalizePlainPromiseElement(element));
                 });
         }
     }
@@ -734,17 +778,64 @@ void* nova_promise_allSettled(void* arrayPtr) {
     if (!arrayPtr) return nova_promise_resolve(0);
     PromiseArrayMeta* meta = static_cast<PromiseArrayMeta*>(arrayPtr);
     int64_t count = meta->length;
-    // Always expose an array-shaped result. Returning the raw count made
-    // generated for-of/property access reinterpret a small integer as an
-    // object pointer and crash before semantic diagnostics could be produced.
     void* results = nova_value_array_create(count);
-    for (int64_t index = 0; index < count; ++index) {
-        value_array_set(
-            results, index,
-            static_cast<int64_t>(nova::runtime::JS_VALUE_UNDEFINED));
+    if (count == 0) {
+        return nova_promise_resolve(static_cast<int64_t>(
+            nova_value_from_object(results)));
     }
-    return nova_promise_resolve(static_cast<int64_t>(
-        nova_value_from_object(results)));
+
+    NovaPromise* result =
+        static_cast<NovaPromise*>(nova_promise_create());
+    struct AllSettledContext {
+        std::mutex mutex;
+        int64_t remaining;
+        NovaPromise* result;
+        void* values;
+    };
+    auto context = std::make_shared<AllSettledContext>();
+    context->remaining = count;
+    context->result = result;
+    context->values = results;
+
+    for (int64_t index = 0; index < count; ++index) {
+        const int64_t element = meta->elements[index];
+        auto settle = [context, index](
+                PromiseState state, int64_t payload) {
+            void* entry = nova_dynamic_object_create();
+            if (state == PromiseState::FULFILLED) {
+                nova_dynamic_object_set_tagged(
+                    entry, "status",
+                    nova_value_from_string("fulfilled"));
+                nova_dynamic_object_set_tagged(
+                    entry, "value", static_cast<std::uint64_t>(payload));
+            } else {
+                nova_dynamic_object_set_tagged(
+                    entry, "status",
+                    nova_value_from_string("rejected"));
+                nova_dynamic_object_set_tagged(
+                    entry, "reason", static_cast<std::uint64_t>(payload));
+            }
+
+            std::lock_guard<std::mutex> lock(context->mutex);
+            value_array_set(context->values, index, static_cast<int64_t>(
+                nova_value_from_object(entry)));
+            if (--context->remaining == 0) {
+                nova_promise_fulfill(
+                    context->result, static_cast<int64_t>(
+                        nova_value_from_object(context->values)));
+            }
+        };
+        if (NovaPromise* promise = promiseFromValue(element)) {
+            observePromise(promise, std::move(settle));
+        } else {
+            nova_promise_queue_microtask(
+                [settle = std::move(settle), element]() mutable {
+                    settle(PromiseState::FULFILLED,
+                           normalizePlainPromiseElement(element));
+                });
+        }
+    }
+    return result;
 }
 
 // Promise.any(promises) - First fulfilled promise wins (ES2021)
@@ -784,7 +875,8 @@ void* nova_promise_any(void* arrayPtr) {
         } else {
             nova_promise_queue_microtask(
                 [settle = std::move(settle), element]() mutable {
-                    settle(PromiseState::FULFILLED, element);
+                    settle(PromiseState::FULFILLED,
+                           normalizePlainPromiseElement(element));
                 });
         }
     }

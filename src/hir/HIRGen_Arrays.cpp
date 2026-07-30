@@ -51,9 +51,18 @@ void HIRGenerator::visit(ArrayExpr& node) {
             auto* spreadExpr = dynamic_cast<SpreadExpr*>(node.elements[0].get());
             if (spreadExpr) {
                 // Evaluate the source array
-                spreadExpr->argument->accept(*this);
+                spreadExpr->accept(*this);
 
                 HIRValue* sourceArray = lastValue_;
+
+                // SpreadExpr materializes generators into a runtime array.
+                // That result is already a fresh copy and must not be passed
+                // through nova_array_copy (which expects array metadata, not
+                // a generator object).
+                if (lastWasRuntimeArray_) {
+                    arrayVisitorDepth--;
+                    return;
+                }
 
                 // Get or create nova_array_copy function
                 auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);

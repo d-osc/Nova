@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>
+#include "nova/runtime/Runtime.h"
 
 // Forward declare the functions from Array.cpp
 extern "C" {
@@ -41,6 +42,10 @@ void* nova_array_copy(void* source_array_ptr) {
     // Set length before copying (value_array_set checks index < length)
     ValueArrayHeader* result_array = static_cast<ValueArrayHeader*>(result);
     result_array->length = length;
+    auto* source_header =
+        static_cast<nova::runtime::ObjectHeader*>(source_array_ptr);
+    auto* result_header = static_cast<nova::runtime::ObjectHeader*>(result);
+    result_header->value_encoding = source_header->value_encoding;
 
     // Copy all elements
     for (int64_t i = 0; i < length; i++) {

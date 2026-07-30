@@ -4,10 +4,52 @@
 #include <string>
 #include <ctime>
 #include <cmath>
+#include <sstream>
+#include <iomanip>
+#include <algorithm>
+#include <cctype>
+#include <vector>
+#include "nova/runtime/Value.h"
+
+namespace nova::runtime {
+struct ValueArray {
+    struct {
+        size_t size;
+        uint32_t type_id;
+        bool is_marked;
+        void* next;
+    } header;
+    int64_t length;
+    int64_t capacity;
+    int64_t* elements;
+};
+ValueArray* create_value_array(int64_t capacity);
+void* create_metadata_from_value_array(ValueArray* array);
+}
+
+extern "C" {
+void* nova_dynamic_object_create();
+void nova_dynamic_object_set_tagged(
+    void* object, const char* key, std::uint64_t value);
+}
 
 // ============================================================================
 // Intl API Implementation (Simplified for AOT Compiler)
 // ============================================================================
+
+static std::string intlOption(
+        const char* options, const char* key,
+        const char* fallback = "") {
+    if (!options || !key) return fallback;
+    const std::string source(options);
+    const std::string prefix = std::string(key) + "=";
+    size_t position = source.find(prefix);
+    if (position == std::string::npos) return fallback;
+    position += prefix.size();
+    const size_t end = source.find(';', position);
+    return source.substr(position, end == std::string::npos
+        ? std::string::npos : end - position);
+}
 
 extern "C" {
 
@@ -24,11 +66,13 @@ struct NovaNumberFormat {
     int64_t useGrouping;   // Boolean: use thousand separators
 };
 
-void* nova_intl_numberformat_create(const char* locale, [[maybe_unused]] const char* options) {
+void* nova_intl_numberformat_create(const char* locale, const char* options) {
     NovaNumberFormat* fmt = static_cast<NovaNumberFormat*>(malloc(sizeof(NovaNumberFormat)));
     fmt->locale = locale ? strdup(locale) : strdup("en");
-    fmt->style = strdup("decimal");
-    fmt->currency = strdup("USD");
+    const std::string style = intlOption(options, "style", "decimal");
+    const std::string currency = intlOption(options, "currency", "USD");
+    fmt->style = strdup(style.c_str());
+    fmt->currency = strdup(currency.c_str());
     fmt->minimumFractionDigits = 0;
     fmt->maximumFractionDigits = 3;
     fmt->useGrouping = 1;
@@ -42,7 +86,17 @@ void* nova_intl_numberformat_format(void* fmtPtr, double value) {
     if (strcmp(fmt->style, "percent") == 0) {
         snprintf(buffer, sizeof(buffer), "%.0f%%", value * 100);
     } else if (strcmp(fmt->style, "currency") == 0) {
-        snprintf(buffer, sizeof(buffer), "$%.2f", value);
+        std::ostringstream formatted;
+        formatted << std::fixed << std::setprecision(2) << std::fabs(value);
+        std::string digits = formatted.str();
+        const size_t decimal = digits.find('.');
+        for (size_t position = decimal; position > 3; position -= 3) {
+            digits.insert(position - 3, ",");
+        }
+        const char* symbol = strcmp(fmt->currency, "USD") == 0
+            ? "$" : fmt->currency;
+        snprintf(buffer, sizeof(buffer), "%s%s%s",
+            value < 0 ? "-" : "", symbol, digits.c_str());
     } else {
         snprintf(buffer, sizeof(buffer), "%g", value);
     }
@@ -53,6 +107,11 @@ void* nova_intl_numberformat_format(void* fmtPtr, double value) {
 void* nova_intl_numberformat_resolvedoptions(void* fmtPtr) {
     NovaNumberFormat* fmt = static_cast<NovaNumberFormat*>(fmtPtr);
     return strdup(fmt->locale);
+}
+
+const char* nova_intl_numberformat_currency(void* fmtPtr) {
+    auto* fmt = static_cast<NovaNumberFormat*>(fmtPtr);
+    return fmt && fmt->currency ? fmt->currency : "";
 }
 
 void nova_intl_numberformat_free(void* fmtPtr) {
@@ -156,17 +215,34 @@ void nova_intl_datetimeformat_free(void* fmtPtr) {
 void* nova_intl_datetimeformat_formattoparts([[maybe_unused]] void* fmtPtr, int64_t timestamp) {
     time_t t = static_cast<time_t>(timestamp / 1000);
     struct tm* tm_info = gmtime(&t);
-    if (!tm_info) return strdup("[]");
+    auto* result = nova::runtime::create_value_array(
+        tm_info ? 5 : 0);
+    if (!tm_info) {
+        return nova::runtime::create_metadata_from_value_array(result);
+    }
 
-    char buffer[1024];
-    snprintf(buffer, sizeof(buffer),
-        "[{\"type\":\"month\",\"value\":\"%02d\"},"
-        "{\"type\":\"literal\",\"value\":\"/\"},"
-        "{\"type\":\"day\",\"value\":\"%02d\"},"
-        "{\"type\":\"literal\",\"value\":\"/\"},"
-        "{\"type\":\"year\",\"value\":\"%d\"}]",
-        tm_info->tm_mon + 1, tm_info->tm_mday, tm_info->tm_year + 1900);
-    return strdup(buffer);
+    auto addPart = [&](const char* type, const std::string& value) {
+        void* part = nova_dynamic_object_create();
+        nova_dynamic_object_set_tagged(
+            part, "type", nova_value_from_string(type));
+        char* stableValue = strdup(value.c_str());
+        nova_dynamic_object_set_tagged(
+            part, "value", nova_value_from_string(stableValue));
+        result->elements[result->length++] =
+            static_cast<int64_t>(nova_value_from_object(part));
+    };
+    char month[3];
+    char day[3];
+    char year[8];
+    snprintf(month, sizeof(month), "%02d", tm_info->tm_mon + 1);
+    snprintf(day, sizeof(day), "%02d", tm_info->tm_mday);
+    snprintf(year, sizeof(year), "%d", tm_info->tm_year + 1900);
+    addPart("month", month);
+    addPart("literal", "/");
+    addPart("day", day);
+    addPart("literal", "/");
+    addPart("year", year);
+    return nova::runtime::create_metadata_from_value_array(result);
 }
 
 void* nova_intl_datetimeformat_formatrange([[maybe_unused]] void* fmtPtr, int64_t start, int64_t end) {
@@ -211,17 +287,32 @@ struct NovaCollator {
     int64_t numeric;    // Boolean: numeric collation
 };
 
-void* nova_intl_collator_create(const char* locale, [[maybe_unused]] const char* options) {
+void* nova_intl_collator_create(const char* locale, const char* options) {
     NovaCollator* col = static_cast<NovaCollator*>(malloc(sizeof(NovaCollator)));
     col->locale = locale ? strdup(locale) : strdup("en");
     col->usage = strdup("sort");
-    col->sensitivity = strdup("variant");
+    const std::string sensitivity =
+        intlOption(options, "sensitivity", "variant");
+    col->sensitivity = strdup(sensitivity.c_str());
     col->numeric = 0;
     return col;
 }
 
-int64_t nova_intl_collator_compare([[maybe_unused]] void* colPtr, const char* str1, const char* str2) {
-    int result = strcmp(str1 ? str1 : "", str2 ? str2 : "");
+int64_t nova_intl_collator_compare(void* colPtr, const char* str1, const char* str2) {
+    auto* collator = static_cast<NovaCollator*>(colPtr);
+    std::string left = str1 ? str1 : "";
+    std::string right = str2 ? str2 : "";
+    if (collator && strcmp(collator->sensitivity, "base") == 0) {
+        std::transform(left.begin(), left.end(), left.begin(),
+            [](unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
+        std::transform(right.begin(), right.end(), right.begin(),
+            [](unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
+    }
+    int result = left.compare(right);
     if (result < 0) return -1;
     if (result > 0) return 1;
     return 0;
@@ -399,11 +490,15 @@ struct NovaListFormat {
     char* style;
 };
 
-void* nova_intl_listformat_create(const char* locale, [[maybe_unused]] const char* options) {
+void* nova_intl_listformat_create(const char* locale, const char* options) {
     NovaListFormat* fmt = static_cast<NovaListFormat*>(malloc(sizeof(NovaListFormat)));
     fmt->locale = locale ? strdup(locale) : strdup("en");
-    fmt->type = strdup("conjunction");
-    fmt->style = strdup("long");
+    const std::string type =
+        intlOption(options, "type", "conjunction");
+    const std::string style =
+        intlOption(options, "style", "long");
+    fmt->type = strdup(type.c_str());
+    fmt->style = strdup(style.c_str());
     return fmt;
 }
 
@@ -428,6 +523,37 @@ void* nova_intl_listformat_format_simple(void* fmtPtr, const char* item1, const 
         }
     }
 
+    return strdup(result.c_str());
+}
+
+void* nova_intl_listformat_format(void* fmtPtr, void* arrayPtr) {
+    auto* fmt = static_cast<NovaListFormat*>(fmtPtr);
+    struct StringArrayMetadata {
+        char header[24];
+        int64_t length;
+        int64_t capacity;
+        const char** elements;
+    };
+    auto* array = static_cast<StringArrayMetadata*>(arrayPtr);
+    if (!array || array->length <= 0 || !array->elements) {
+        return strdup("");
+    }
+    const std::string conjunction =
+        fmt && strcmp(fmt->type, "disjunction") == 0
+        ? "or" : "and";
+    std::string result;
+    for (int64_t index = 0; index < array->length; ++index) {
+        if (index > 0) {
+            if (index == array->length - 1) {
+                result += array->length > 2 ? ", " : " ";
+                result += conjunction + " ";
+            } else {
+                result += ", ";
+            }
+        }
+        result += array->elements[index]
+            ? array->elements[index] : "";
+    }
     return strdup(result.c_str());
 }
 
@@ -700,7 +826,10 @@ struct NovaSegmenter {
 void* nova_intl_segmenter_create(const char* locale, const char* granularity) {
     NovaSegmenter* seg = static_cast<NovaSegmenter*>(malloc(sizeof(NovaSegmenter)));
     seg->locale = locale ? strdup(locale) : strdup("en");
-    seg->granularity = granularity ? strdup(granularity) : strdup("grapheme");
+    const std::string selected = intlOption(
+        granularity, "granularity",
+        granularity ? granularity : "grapheme");
+    seg->granularity = strdup(selected.c_str());
     return seg;
 }
 
@@ -748,41 +877,35 @@ void* nova_intl_segmenter_resolvedoptions(void* segPtr) {
 }
 
 void* nova_intl_segmenter_segment(void* segPtr, const char* str) {
-    // Returns an iterator-like object (simplified as JSON)
     NovaSegmenter* seg = static_cast<NovaSegmenter*>(segPtr);
-    if (!str) return strdup("[]");
-
-    std::string result = "[";
-    std::string s = str;
-    int index = 0;
-
-    if (strcmp(seg->granularity, "word") == 0) {
+    const std::string input = str ? str : "";
+    std::vector<std::string> segments;
+    if (seg && strcmp(seg->granularity, "word") == 0) {
         std::string word;
-        for (size_t i = 0; i <= s.length(); i++) {
-            if (i == s.length() || s[i] == ' ' || s[i] == '\t' || s[i] == '\n') {
+        for (size_t i = 0; i <= input.length(); i++) {
+            if (i == input.length() || input[i] == ' ' ||
+                input[i] == '\t' || input[i] == '\n') {
                 if (!word.empty()) {
-                    if (result.length() > 1) result += ",";
-                    result += "{\"segment\":\"" + word + "\",\"index\":" + std::to_string(index) + ",\"isWordLike\":true}";
+                    segments.push_back(word);
                     word.clear();
                 }
-                index = (int)i + 1;
             } else {
-                if (word.empty()) index = (int)i;
-                word += s[i];
+                word += input[i];
             }
         }
     } else {
-        // Grapheme mode - each character
-        for (size_t i = 0; i < s.length(); i++) {
-            if (i > 0) result += ",";
-            result += "{\"segment\":\"";
-            result += s[i];
-            result += "\",\"index\":" + std::to_string(i) + "}";
+        for (char character : input) {
+            segments.emplace_back(1, character);
         }
     }
-
-    result += "]";
-    return strdup(result.c_str());
+    auto* result = nova::runtime::create_value_array(
+        static_cast<int64_t>(segments.size()));
+    result->length = static_cast<int64_t>(segments.size());
+    for (size_t index = 0; index < segments.size(); ++index) {
+        result->elements[index] = reinterpret_cast<int64_t>(
+            strdup(segments[index].c_str()));
+    }
+    return nova::runtime::create_metadata_from_value_array(result);
 }
 
 void* nova_intl_segmenter_supportedlocalesof(const char* locales) {

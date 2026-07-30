@@ -147,6 +147,8 @@ private:
     unsigned pendingTypeArgumentClosers_ = 0;
     unsigned ambientDepth_ = 0;
     bool jsxMode_ = false;
+    bool allowInOperator_ = true;
+    bool strictMode_ = false;
 };
 
 } // namespace nova

@@ -80,10 +80,12 @@ struct Object {
 //   bit 0: writable
 //   bit 1: enumerable
 //   bit 2: configurable
+//   bit 3: accessor descriptor (Property::value points to an accessor pair)
 // A default data property is writable|enumerable|configurable = 0b111 = 7.
 inline constexpr uint32_t PROP_WRITABLE   = 1u << 0;
 inline constexpr uint32_t PROP_ENUMERABLE = 1u << 1;
 inline constexpr uint32_t PROP_CONFIGURABLE = 1u << 2;
+inline constexpr uint32_t PROP_ACCESSOR = 1u << 3;
 inline constexpr uint32_t PROP_DEFAULT_FLAGS =
     PROP_WRITABLE | PROP_ENUMERABLE | PROP_CONFIGURABLE;
 

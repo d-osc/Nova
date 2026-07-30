@@ -82,7 +82,15 @@ extern "C" int64_t nova_reflect_apply(int64_t targetFnPtr, int64_t thisArgJs,
 // Reflect.construct(target, argumentsList[, newTarget])
 // Acts like the new operator, but as a function
 // ============================================================================
-void* nova_reflect_construct([[maybe_unused]] void* target, [[maybe_unused]] void* argumentsList, [[maybe_unused]] void* newTarget) {
+extern int64_t nova_intrinsic_function_is_constructor(void* candidate);
+extern void nova_throw_type_error(const char* message);
+
+void* nova_reflect_construct([[maybe_unused]] void* target, [[maybe_unused]] void* argumentsList, void* newTarget) {
+    if (newTarget &&
+        !nova_intrinsic_function_is_constructor(newTarget)) {
+        nova_throw_type_error("newTarget is not a constructor");
+        return nullptr;
+    }
     // In a full implementation, this would construct a new instance
     // For now, create an empty object
     return nova_object_create_empty();

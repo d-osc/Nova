@@ -1,0 +1,73 @@
+{
+  "name": "ecosystem-local-profile",
+  "exclusions": "../exclusions/ecosystem.json",
+  "timeout_seconds": 90,
+  "budgets": {
+    "max_case_ms": 90000,
+    "max_peak_memory_kb": 524288
+  },
+  "cases": [
+    {
+      "name": "pure-utility-coercion",
+      "tier": "1-pure-utility",
+      "command": [
+        "{python}",
+        "-B",
+        "{root}/tests/run_all_tests.py",
+        "--nova",
+        "{nova}",
+        "--prefix",
+        "js_spec_coercion"
+      ],
+      "contains": ["Verified: 1, passed: 1, failed: 0"]
+    },
+    {
+      "name": "esm-cjs-module-interop",
+      "tier": "2-esm-cjs",
+      "command": [
+        "{python}",
+        "-B",
+        "{root}/tests/run_all_tests.py",
+        "--nova",
+        "{nova}",
+        "--prefix",
+        "modules"
+      ],
+      "contains": ["Verified: 3, passed: 3, failed: 0"]
+    },
+    {
+      "name": "web-jsx-project",
+      "tier": "3-web-jsx",
+      "command": [
+        "{nova}",
+        "check",
+        "{root}/tests/conformance/ts_spec_jsx.tsx"
+      ]
+    },
+    {
+      "name": "native-binary-data",
+      "tier": "4-native-binary",
+      "command": [
+        "{python}",
+        "-B",
+        "{root}/tests/run_all_tests.py",
+        "--nova",
+        "{nova}",
+        "--prefix",
+        "js_spec_binary_data"
+      ],
+      "contains": ["Verified: 1, passed: 1, failed: 0"]
+    },
+    {
+      "name": "test-runner-build-monorepo",
+      "tier": "5-tooling-monorepo",
+      "command": [
+        "{python}",
+        "-B",
+        "{root}/tests/test_phase6_project_tooling.py",
+        "-v"
+      ],
+      "contains": ["OK"]
+    }
+  ]
+}

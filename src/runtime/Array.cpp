@@ -7,6 +7,15 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 // ==================== ULTRA OPTIMIZATIONS ====================
 // Enable SIMD optimizations for array operations
@@ -534,10 +543,16 @@ const char* value_array_join(ValueArray* array, const char* delimiter) {
     // NaN-boxed JSValues depending on the producer. Detect at format time so
     // join works for Object.keys (string ptrs), Object.values (mixed), and
     // numeric arrays alike.
-    auto render_element = [](int64_t raw, std::string& out) {
+    const bool boxedElements = array->header.value_encoding == 1;
+    auto render_element = [boxedElements](int64_t raw, std::string& out) {
         // JSValue tag check (upper 16 bits). If it's a known tag, decode.
         namespace r = nova::runtime;
         r::JSValue v = static_cast<r::JSValue>(static_cast<std::uintptr_t>(raw));
+        if (boxedElements) {
+            const char* text = nova_value_to_string_ptr(v);
+            out = text ? text : "";
+            return;
+        }
         if (r::js_value_has_tag(v, r::JS_VALUE_STRING_TAG)) {
             const char* s = reinterpret_cast<const char*>(
                 static_cast<std::uintptr_t>(v & r::JS_VALUE_PAYLOAD_MASK));
@@ -729,6 +744,53 @@ void* nova_array_unshift(nova::runtime::Array* array, void* value) {
 #include <unordered_map>
 static std::unordered_map<void*, nova::runtime::ValueArray*> conversion_cache;
 
+static bool is_readable_array_metadata(void* ptr) {
+    if (!ptr || reinterpret_cast<std::uintptr_t>(ptr) < 0x10000) {
+        return false;
+    }
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION info{};
+    if (VirtualQuery(ptr, &info, sizeof(info)) != sizeof(info) ||
+        info.State != MEM_COMMIT ||
+        (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) {
+        return false;
+    }
+    const auto begin = reinterpret_cast<std::uintptr_t>(ptr);
+    const auto regionEnd =
+        reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+    if (begin + 48 > regionEnd) {
+        return false;
+    }
+#else
+    const long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0) return false;
+    const auto begin = reinterpret_cast<std::uintptr_t>(ptr);
+    const auto firstPage = begin &
+        ~static_cast<std::uintptr_t>(pageSize - 1);
+    const auto lastPage = (begin + 47) &
+        ~static_cast<std::uintptr_t>(pageSize - 1);
+    unsigned char residency = 0;
+    if (mincore(reinterpret_cast<void*>(firstPage),
+                static_cast<size_t>(pageSize), &residency) != 0) {
+        return false;
+    }
+    if (lastPage != firstPage &&
+        mincore(reinterpret_cast<void*>(lastPage),
+                static_cast<size_t>(pageSize), &residency) != 0) {
+        return false;
+    }
+#endif
+    const auto* bytes = static_cast<const char*>(ptr);
+    const auto typeId = *reinterpret_cast<const std::uint32_t*>(bytes + 8);
+    const auto length = *reinterpret_cast<const int64_t*>(bytes + 24);
+    const auto capacity = *reinterpret_cast<const int64_t*>(bytes + 32);
+    const auto elements = *reinterpret_cast<int64_t* const*>(bytes + 40);
+    return typeId == static_cast<std::uint32_t>(
+                         nova::runtime::TypeId::ARRAY) &&
+           length >= 0 && capacity >= length && capacity < (1LL << 30) &&
+           (length == 0 || elements != nullptr);
+}
+
 // Helper to check if a pointer is already a ValueArray or needs conversion
 static nova::runtime::ValueArray* ensure_value_array(void* ptr) {
     if (!ptr) return nullptr;
@@ -793,18 +855,30 @@ int64_t nova_value_array_unshift(void* array_ptr, int64_t value) {
 }
 
 int64_t nova_value_array_at(void* array_ptr, int64_t index) {
-    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
-    return nova::runtime::value_array_at(array, index);
+    if (!array_ptr) return 0;
+    auto* array = static_cast<nova::runtime::ValueArray*>(array_ptr);
+    int64_t normalized = index < 0 ? array->length + index : index;
+    if (normalized < 0 || normalized >= array->length ||
+        !array->elements) {
+        return 0;
+    }
+    return array->elements[normalized];
 }
 
 std::uint64_t nova_value_array_at_tagged(
     void* array_ptr, int64_t index, int64_t element_kind) {
-    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
-    if (!array || index < 0 || index >= array->length) {
+    auto* array = static_cast<nova::runtime::ValueArray*>(array_ptr);
+    if (!array) {
+        return nova::runtime::JS_VALUE_UNDEFINED;
+    }
+    int64_t normalized = index < 0 ? array->length + index : index;
+    if (normalized < 0 || normalized >= array->length ||
+        !array->elements) {
         return nova::runtime::JS_VALUE_UNDEFINED;
     }
 
-    const std::uint64_t raw = static_cast<std::uint64_t>(array->elements[index]);
+    const std::uint64_t raw =
+        static_cast<std::uint64_t>(array->elements[normalized]);
     if (array->header.value_encoding == 1) return raw;
 
     switch (element_kind) {
@@ -1309,7 +1383,6 @@ const char* nova_value_array_toString(void* array_ptr) {
 
 // Array.flat() - flattens nested arrays one level deep (ES2019)
 // Array.flat() - flattens array by default depth of 1 (ES2019)
-// For now, creates a copy of the array (nested arrays not yet supported)
 // Returns new array
 void* nova_value_array_flat(void* array_ptr) {
     nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
@@ -1319,12 +1392,24 @@ void* nova_value_array_flat(void* array_ptr) {
         return nova::runtime::create_metadata_from_value_array(empty);
     }
 
-    // Create new array with same length
-    nova::runtime::ValueArray* result = nova::runtime::create_value_array(array->length);
-    result->length = array->length;
+    std::vector<int64_t> flattened;
+    for (int64_t i = 0; i < array->length; ++i) {
+        void* candidate = reinterpret_cast<void*>(
+            static_cast<std::uintptr_t>(array->elements[i]));
+        if (is_readable_array_metadata(candidate)) {
+            auto* nested = ensure_value_array(candidate);
+            flattened.insert(
+                flattened.end(), nested->elements,
+                nested->elements + nested->length);
+        } else {
+            flattened.push_back(array->elements[i]);
+        }
+    }
 
-    // Copy elements from original array
-    std::memcpy(result->elements, array->elements, array->length * sizeof(int64_t));
+    nova::runtime::ValueArray* result = nova::runtime::create_value_array(
+        static_cast<int64_t>(flattened.size()));
+    result->length = static_cast<int64_t>(flattened.size());
+    std::copy(flattened.begin(), flattened.end(), result->elements);
 
     // Create metadata struct for the new array
     return nova::runtime::create_metadata_from_value_array(result);
@@ -1367,19 +1452,32 @@ void* nova_value_array_flatMap(void* array_ptr, FlatMapCallbackFunc callback) {
         return nova::runtime::create_metadata_from_value_array(emptyArray);
     }
 
-    // Create new array with same size as input
-    // (For now, works like map since we don't have nested arrays)
-    nova::runtime::ValueArray* resultArray = nova::runtime::create_value_array(array->length);
-    resultArray->length = array->length;
-
-    // Transform each element (map operation)
+    std::vector<int64_t> flattened;
     for (int64_t i = 0; i < array->length; i++) {
         int64_t element = array->elements[i];
         int64_t transformed = callback(element);
-        resultArray->elements[i] = transformed;
+        struct ArrayMetadata {
+            char header[24];
+            int64_t length;
+            int64_t capacity;
+            int64_t* elements;
+        };
+        auto* nested = reinterpret_cast<ArrayMetadata*>(
+            static_cast<uintptr_t>(transformed));
+        if (is_readable_array_metadata(nested)) {
+            flattened.insert(
+                flattened.end(), nested->elements,
+                nested->elements + nested->length);
+        } else {
+            flattened.push_back(transformed);
+        }
     }
 
-    // Return new array (flattening not needed for simple values)
+    nova::runtime::ValueArray* resultArray =
+        nova::runtime::create_value_array(
+            static_cast<int64_t>(flattened.size()));
+    resultArray->length = static_cast<int64_t>(flattened.size());
+    std::copy(flattened.begin(), flattened.end(), resultArray->elements);
     return nova::runtime::create_metadata_from_value_array(resultArray);
 }
 
@@ -1548,6 +1646,20 @@ int64_t nova_value_array_find(void* array_ptr, FindCallbackFunc callback) {
     return 0;
 }
 
+std::uint64_t nova_value_array_find_tagged(
+        void* array_ptr, FindCallbackFunc callback) {
+    auto* array = static_cast<nova::runtime::ValueArray*>(array_ptr);
+    if (!array || !callback) {
+        return nova::runtime::JS_VALUE_UNDEFINED;
+    }
+    for (int64_t i = 0; i < array->length; ++i) {
+        if (callback(array->elements[i]) != 0) {
+            return nova_value_from_i64(array->elements[i]);
+        }
+    }
+    return nova::runtime::JS_VALUE_UNDEFINED;
+}
+
 // Array.findIndex() implementation
 // Callback function type: same as find
 typedef int64_t (*FindIndexCallbackFunc)(int64_t);
@@ -1602,6 +1714,20 @@ int64_t nova_value_array_findLast(void* array_ptr, FindLastCallbackFunc callback
 
     // Not found
     return 0;
+}
+
+std::uint64_t nova_value_array_findLast_tagged(
+        void* array_ptr, FindLastCallbackFunc callback) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    if (!array || !callback) {
+        return nova::runtime::JS_VALUE_UNDEFINED;
+    }
+    for (int64_t i = array->length - 1; i >= 0; --i) {
+        if (callback(array->elements[i]) != 0) {
+            return nova_value_from_i64(array->elements[i]);
+        }
+    }
+    return nova::runtime::JS_VALUE_UNDEFINED;
 }
 
 // Array.findLastIndex() implementation - ES2023
@@ -1766,6 +1892,51 @@ void nova_value_array_forEach(void* array_ptr, ForEachCallbackFunc callback) {
     for (int64_t i = 0; i < array->length; i++) {
         int64_t element = array->elements[i];
         callback(element);  // Call for side effects only
+    }
+}
+
+// Closure-aware Array callback ABI. The compiled callback receives the
+// ECMAScript arguments it declared, followed by its captured environment when
+// one exists.
+void nova_value_array_forEach_ctx(
+        void* array_ptr, void* callback_ptr, void* environment,
+        int64_t arity) {
+    nova::runtime::ValueArray* array = ensure_value_array(array_ptr);
+    if (!array || !callback_ptr) return;
+
+    for (int64_t index = 0; index < array->length; ++index) {
+        const int64_t value = array->elements[index];
+        if (environment) {
+            if (arity >= 3) {
+                using Callback = void (*)(
+                    int64_t, int64_t, void*, void*);
+                reinterpret_cast<Callback>(callback_ptr)(
+                    value, index, array_ptr, environment);
+            } else if (arity == 2) {
+                using Callback = void (*)(int64_t, int64_t, void*);
+                reinterpret_cast<Callback>(callback_ptr)(
+                    value, index, environment);
+            } else if (arity == 1) {
+                using Callback = void (*)(int64_t, void*);
+                reinterpret_cast<Callback>(callback_ptr)(value, environment);
+            } else {
+                using Callback = void (*)(void*);
+                reinterpret_cast<Callback>(callback_ptr)(environment);
+            }
+        } else if (arity >= 3) {
+            using Callback = void (*)(int64_t, int64_t, void*);
+            reinterpret_cast<Callback>(callback_ptr)(
+                value, index, array_ptr);
+        } else if (arity == 2) {
+            using Callback = void (*)(int64_t, int64_t);
+            reinterpret_cast<Callback>(callback_ptr)(value, index);
+        } else if (arity == 1) {
+            using Callback = void (*)(int64_t);
+            reinterpret_cast<Callback>(callback_ptr)(value);
+        } else {
+            using Callback = void (*)();
+            reinterpret_cast<Callback>(callback_ptr)();
+        }
     }
 }
 

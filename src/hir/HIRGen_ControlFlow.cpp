@@ -28,8 +28,9 @@ void HIRGenerator::visit(IfStmt& node) {
         builder_->setInsertPoint(thenBlock);
         node.consequent->accept(*this);
         
-        // Only add branch to end block if the then block doesn't end with a return, break, or continue
-        if (!thenBlock->hasBreakOrContinue) {
+        auto* thenTail = builder_->getInsertBlock();
+        if (thenTail && !thenTail->hasTerminator() &&
+            !thenTail->hasBreakOrContinue) {
             builder_->createBr(endBlock);
         }
         
@@ -38,8 +39,9 @@ void HIRGenerator::visit(IfStmt& node) {
             builder_->setInsertPoint(elseBlock);
             node.alternate->accept(*this);
             
-            // Only add branch to end block if the else block doesn't end with a return, break, or continue
-            if (!elseBlock->hasBreakOrContinue) {
+            auto* elseTail = builder_->getInsertBlock();
+            if (elseTail && !elseTail->hasTerminator() &&
+                !elseTail->hasBreakOrContinue) {
                 builder_->createBr(endBlock);
             }
         }
@@ -47,12 +49,10 @@ void HIRGenerator::visit(IfStmt& node) {
         // Continue at end block
         builder_->setInsertPoint(endBlock);
         
-        // If end block is empty (both branches had returns), add unreachable
-        if (builder_->getInsertBlock()->instructions.empty()) {
-            // Create a dummy return instruction
-            auto dummyConst = builder_->createIntConstant(0);
-            builder_->createReturn(dummyConst);
-        }
+        // The surrounding statement/loop owns the continuation edge. Do not
+        // synthesize a return in an empty merge block: inside a generator
+        // loop that would complete the generator whenever the condition is
+        // false instead of continuing the loop.
     }
     
 void HIRGenerator::visit(WhileStmt& node) {
@@ -97,8 +97,12 @@ void HIRGenerator::visit(WhileStmt& node) {
         node.body->accept(*this);
         if(NOVA_DEBUG) std::cerr << "DEBUG: While body executed" << std::endl;
 
-        // Check if body block has a terminator (break/continue/return all set hasBreakOrContinue flag)
-        if (!bodyBlock->hasBreakOrContinue) {
+        // Yield creates a new resume block and moves the insertion point to
+        // it.  Continue from the actual tail block, not necessarily the
+        // original body block, so resumed generators re-enter the loop.
+        auto* bodyTail = builder_->getInsertBlock();
+        if (bodyTail && !bodyTail->hasTerminator() &&
+            !bodyTail->hasBreakOrContinue) {
             if(NOVA_DEBUG) std::cerr << "DEBUG: Creating branch back to condition" << std::endl;
             builder_->createBr(condBlock);
         } else {
@@ -136,8 +140,9 @@ void HIRGenerator::visit(DoWhileStmt& node) {
         builder_->setInsertPoint(bodyBlock);
         node.body->accept(*this);
         
-        // Check if body block has a terminator
-        if (!bodyBlock->hasBreakOrContinue) {
+        auto* bodyTail = builder_->getInsertBlock();
+        if (bodyTail && !bodyTail->hasTerminator() &&
+            !bodyTail->hasBreakOrContinue) {
             // Branch to condition after body
             builder_->createBr(condBlock);
         }
@@ -220,21 +225,13 @@ void HIRGenerator::visit(ForStmt& node) {
         node.body->accept(*this);
         if(NOVA_DEBUG) std::cerr << "DEBUG: For body executed" << std::endl;
 
-        // Check if the body block itself ends with a terminator instruction
-        // (break, continue, or return). If it does, don't add a branch.
-        // Otherwise, always add the branch to update block to maintain proper CFG.
-        bool needsBranch = true;
-        if (!bodyBlock->instructions.empty()) {
-            auto lastOpcode = bodyBlock->instructions.back()->opcode;
-            if (lastOpcode == hir::HIRInstruction::Opcode::Break ||
-                lastOpcode == hir::HIRInstruction::Opcode::Continue ||
-                lastOpcode == hir::HIRInstruction::Opcode::Return) {
-                needsBranch = false;
-                if(NOVA_DEBUG) std::cerr << "DEBUG: Body block ends with terminator, not adding branch to update" << std::endl;
-            }
-        }
-
-        if (needsBranch) {
+        // A yield terminates `bodyBlock` but leaves a fresh resume block as
+        // the current insertion point. Wire that real tail to the update
+        // block; otherwise the dispatch target is empty and the generator is
+        // incorrectly completed on its second next().
+        auto* bodyTail = builder_->getInsertBlock();
+        if (bodyTail && !bodyTail->hasTerminator() &&
+            !bodyTail->hasBreakOrContinue) {
             // Always branch to update block to maintain proper CFG and enable loop detection
             if(NOVA_DEBUG) std::cerr << "DEBUG: Creating branch from body to update block" << std::endl;
             builder_->createBr(updateBlock);
@@ -317,7 +314,25 @@ void HIRGenerator::visit(ForInStmt& node) {
             builder_->setInsertPoint(initBlock);
 
             if(NOVA_DEBUG) std::cerr << "DEBUG: ForIn - evaluating iterable" << std::endl;
-            node.right->accept(*this);
+            // Inline object literals in a dynamic for-in path must use the
+            // runtime Object representation consumed by nova_object_keys.
+            // A fixed-layout __obj_N pointer is not ABI-compatible and would
+            // be interpreted as PropertyStorage, causing an access violation.
+            if (dynamic_cast<ObjectExpr*>(node.right.get())) {
+                const std::string savedDeclName = currentDeclName_;
+                const std::string sentinel = "__forin_runtime_object";
+                const bool wasForced =
+                    forcedDynamicObjectVars_.count(sentinel) > 0;
+                forcedDynamicObjectVars_.insert(sentinel);
+                currentDeclName_ = sentinel;
+                node.right->accept(*this);
+                currentDeclName_ = savedDeclName;
+                if (!wasForced) {
+                    forcedDynamicObjectVars_.erase(sentinel);
+                }
+            } else {
+                node.right->accept(*this);
+            }
             auto* objectValue = lastValue_;
 
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -424,6 +439,7 @@ void HIRGenerator::visit(ForOfStmt& node) {
         // Check if iterating over a generator or async generator
         bool isGeneratorIteration = false;
         bool isAsyncGeneratorIteration = false;
+        bool isDynamicProtocolIteration = false;
         if (auto* identExpr = dynamic_cast<Identifier*>(node.right.get())) {
             if (asyncGeneratorVars_.count(identExpr->name) > 0) {
                 isAsyncGeneratorIteration = true;
@@ -432,6 +448,22 @@ void HIRGenerator::visit(ForOfStmt& node) {
             } else if (generatorVars_.count(identExpr->name) > 0) {
                 isGeneratorIteration = true;
                 if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - iterating over generator: " << identExpr->name << std::endl;
+            } else if (dynamicObjectVars_.count(identExpr->name) > 0 &&
+                       runtimeArrayVars_.count(identExpr->name) == 0 &&
+                       taggedRuntimeArrayVars_.count(identExpr->name) == 0) {
+                isDynamicProtocolIteration = true;
+            }
+        } else if (auto* callExpr = dynamic_cast<CallExpr*>(node.right.get())) {
+            // A very common form is `for (const value of generator())`.
+            // Do not rely on the result having first been assigned to a
+            // variable: recognize the generator function at the call site.
+            if (auto* callee = dynamic_cast<Identifier*>(callExpr->callee.get())) {
+                if (asyncGeneratorFuncs_.count(callee->name) > 0) {
+                    isAsyncGeneratorIteration = true;
+                    isGeneratorIteration = true;
+                } else if (generatorFuncs_.count(callee->name) > 0) {
+                    isGeneratorIteration = true;
+                }
             }
         }
 
@@ -440,7 +472,7 @@ void HIRGenerator::visit(ForOfStmt& node) {
             std::cerr << "NOTE: 'for await...of' on non-async-generator compiled as synchronous iteration" << std::endl;
         }
 
-        if (isGeneratorIteration) {
+        if (isGeneratorIteration || isDynamicProtocolIteration) {
             // Generator iteration using iterator protocol:
             //   let result = gen.next(0);
             //   while (!result.done) {
@@ -469,18 +501,43 @@ void HIRGenerator::visit(ForOfStmt& node) {
             // Create result variable to hold IteratorResult
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto jsValueType =
+                std::make_shared<HIRType>(HIRType::Kind::JSValue);
+            if (isDynamicProtocolIteration) {
+                auto existingCreate =
+                    module_->getFunction("nova_dynamic_iterator_create");
+                HIRFunction* createIterator =
+                    existingCreate ? existingCreate.get() : nullptr;
+                if (!createIterator) {
+                    auto* functionType =
+                        new HIRFunctionType({ptrType}, ptrType);
+                    auto created = module_->createFunction(
+                        "nova_dynamic_iterator_create", functionType);
+                    created->linkage = HIRFunction::Linkage::External;
+                    createIterator = created.get();
+                }
+                genValue = builder_->createCall(
+                    createIterator, {genValue}, "dynamic.iterator");
+                genValue->type = ptrType;
+            }
             auto* resultVar = builder_->createAlloca(ptrType.get(), "__iter_result");
 
             // Call gen.next(0) for first iteration
             // Use async generator functions for async generators
-            std::string nextFuncName = isAsyncGeneratorIteration ?
-                "nova_async_generator_next" : "nova_generator_next";
+            std::string nextFuncName = isDynamicProtocolIteration
+                ? "nova_dynamic_iterator_next"
+                : (isAsyncGeneratorIteration
+                    ? "nova_async_generator_next"
+                    : "nova_generator_next");
             auto existingNextFunc = module_->getFunction(nextFuncName);
             HIRFunction* nextFunc = nullptr;
             if (existingNextFunc) {
                 nextFunc = existingNextFunc.get();
             } else {
-                std::vector<HIRTypePtr> paramTypes = {ptrType, intType};
+                std::vector<HIRTypePtr> paramTypes =
+                    isDynamicProtocolIteration
+                        ? std::vector<HIRTypePtr>{ptrType}
+                        : std::vector<HIRTypePtr>{ptrType, intType};
                 HIRFunctionType* funcType = new HIRFunctionType(paramTypes, ptrType);
                 HIRFunctionPtr funcPtr = module_->createFunction(nextFuncName, funcType);
                 funcPtr->linkage = HIRFunction::Linkage::External;
@@ -492,7 +549,10 @@ void HIRGenerator::visit(ForOfStmt& node) {
             }
 
             auto* zeroConst = builder_->createIntConstant(0);
-            std::vector<HIRValue*> nextArgs = {genValue, zeroConst};
+            std::vector<HIRValue*> nextArgs =
+                isDynamicProtocolIteration
+                    ? std::vector<HIRValue*>{genValue}
+                    : std::vector<HIRValue*>{genValue, zeroConst};
             auto* firstResult = builder_->createCall(nextFunc, nextArgs, "iter_result");
             firstResult->type = ptrType;
             builder_->createStore(firstResult, resultVar);
@@ -549,10 +609,14 @@ void HIRGenerator::visit(ForOfStmt& node) {
 
             std::vector<HIRValue*> valueArgs = {resultForValue};
             auto* itemValue = builder_->createCall(valueFunc, valueArgs, "iter_value");
-            itemValue->type = intType;
+            itemValue->type =
+                isDynamicProtocolIteration ? jsValueType : intType;
 
             // Create loop variable and assign
-            auto* varType = new hir::HIRType(hir::HIRType::Kind::I64);
+            auto* varType = new hir::HIRType(
+                isDynamicProtocolIteration
+                    ? hir::HIRType::Kind::JSValue
+                    : hir::HIRType::Kind::I64);
             auto* loopVar = builder_->createAlloca(varType, node.left);
             builder_->createStore(itemValue, loopVar);
             symbolTable_[node.left] = loopVar;
@@ -590,12 +654,14 @@ void HIRGenerator::visit(ForOfStmt& node) {
             // Update block: result = gen.next(0)
             builder_->setInsertPoint(updateBlock);
 
-            // Re-evaluate the generator expression to get its current value
-            node.right->accept(*this);
-            auto* genValueAgain = lastValue_;
-
             auto* zeroForNext = builder_->createIntConstant(0);
-            std::vector<HIRValue*> nextArgs2 = {genValueAgain, zeroForNext};
+            // Reuse the iterator created in the init block. Re-evaluating a
+            // call expression here creates a fresh generator on every loop
+            // iteration and therefore repeatedly yields its first value.
+            std::vector<HIRValue*> nextArgs2 =
+                isDynamicProtocolIteration
+                    ? std::vector<HIRValue*>{genValue}
+                    : std::vector<HIRValue*>{genValue, zeroForNext};
             auto* nextResult = builder_->createCall(nextFunc, nextArgs2, "next_result");
             nextResult->type = ptrType;
             builder_->createStore(nextResult, resultVar);
@@ -636,8 +702,70 @@ void HIRGenerator::visit(ForOfStmt& node) {
         // Init block: evaluate the iterable expression and create iterator index
         builder_->setInsertPoint(initBlock);
         if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - evaluating iterable" << std::endl;
+        bool isSetIterable = false;
+        std::string iterableElementType;
+        if (auto* iterableIdentifier =
+                dynamic_cast<Identifier*>(node.right.get())) {
+            isSetIterable =
+                setVars_.count(iterableIdentifier->name) > 0;
+            auto elementType =
+                variableArrayElementTypes_.find(iterableIdentifier->name);
+            if (elementType != variableArrayElementTypes_.end()) {
+                iterableElementType = elementType->second;
+            }
+        } else if (auto* iterableCall =
+                       dynamic_cast<CallExpr*>(node.right.get())) {
+            if (auto* member =
+                    dynamic_cast<MemberExpr*>(iterableCall->callee.get())) {
+                auto* receiver =
+                    dynamic_cast<Identifier*>(member->object.get());
+                auto* method =
+                    dynamic_cast<Identifier*>(member->property.get());
+                if (receiver && method &&
+                    mapVars_.count(receiver->name) > 0) {
+                    const auto& elementTypes = method->name == "keys"
+                        ? mapKeyElementTypes_ : mapValueElementTypes_;
+                    auto found = elementTypes.find(receiver->name);
+                    if (found != elementTypes.end()) {
+                        iterableElementType = found->second;
+                    }
+                }
+            }
+        }
         node.right->accept(*this);  // Evaluate array expression
         auto* arrayValue = lastValue_;
+        bool expressionRuntimeArray = lastWasRuntimeArray_;
+        bool expressionTaggedRuntimeArray =
+            lastWasTaggedRuntimeArray_;
+        lastWasRuntimeArray_ = false;
+        lastWasTaggedRuntimeArray_ = false;
+
+        // Set iteration uses insertion-ordered values. A Set object does not
+        // share the ValueArray metadata layout, so materialize its values
+        // before using the indexed for-of lowering.
+        if (isSetIterable) {
+            auto pointerType =
+                std::make_shared<HIRType>(HIRType::Kind::Pointer);
+            auto existing = module_->getFunction("nova_set_values");
+            HIRFunction* valuesFunction =
+                existing ? existing.get() : nullptr;
+            if (!valuesFunction) {
+                auto* functionType =
+                    new HIRFunctionType({pointerType}, pointerType);
+                auto created = module_->createFunction(
+                    "nova_set_values", functionType);
+                created->linkage = HIRFunction::Linkage::External;
+                valuesFunction = created.get();
+            }
+            arrayValue = builder_->createCall(
+                valuesFunction, {arrayValue}, "set.iter.values");
+            arrayValue->type = pointerType;
+            expressionRuntimeArray = true;
+            expressionTaggedRuntimeArray = true;
+        }
+        const bool isStringIterable =
+            arrayValue && arrayValue->type &&
+            arrayValue->type->kind == HIRType::Kind::String;
         if (arrayValue && arrayValue->type &&
             arrayValue->type->kind == HIRType::Kind::JSValue) {
             // Promise callbacks and other dynamic sources carry arrays as
@@ -679,7 +807,7 @@ void HIRGenerator::visit(ForOfStmt& node) {
         auto* currentIndex = builder_->createLoad(indexVar);
 
         // Check if iterating over a runtime array
-        bool isRuntimeArrayForLength = false;
+        bool isRuntimeArrayForLength = expressionRuntimeArray;
         if (auto* identExpr = dynamic_cast<Identifier*>(node.right.get())) {
             if (runtimeArrayVars_.count(identExpr->name) > 0) {
                 isRuntimeArrayForLength = true;
@@ -688,7 +816,25 @@ void HIRGenerator::visit(ForOfStmt& node) {
 
         // Get array.length
         HIRValue* arrayLength = nullptr;
-        if (isRuntimeArrayForLength) {
+        if (isStringIterable) {
+            auto stringType =
+                std::make_shared<HIRType>(HIRType::Kind::String);
+            auto intType =
+                std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto existing = module_->getFunction("strlen");
+            HIRFunction* function = existing ? existing.get() : nullptr;
+            if (!function) {
+                auto* functionType =
+                    new HIRFunctionType({stringType}, intType);
+                auto created =
+                    module_->createFunction("strlen", functionType);
+                created->linkage = HIRFunction::Linkage::External;
+                function = created.get();
+            }
+            arrayLength = builder_->createCall(
+                function, {arrayValue}, "string_iter_len");
+            arrayLength->type = intType;
+        } else if (isRuntimeArrayForLength) {
             if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - using runtime array length function" << std::endl;
             // Use nova_value_array_length for runtime arrays
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
@@ -740,15 +886,37 @@ void HIRGenerator::visit(ForOfStmt& node) {
         HIRValue* currentElement = nullptr;
 
         // Check if iterating over a runtime array (from keys(), values(), entries())
-        bool isRuntimeArray = false;
+        bool isRuntimeArray = expressionRuntimeArray;
+        bool isTaggedRuntimeArray =
+            expressionTaggedRuntimeArray;
         if (auto* identExpr = dynamic_cast<Identifier*>(node.right.get())) {
             if (runtimeArrayVars_.count(identExpr->name) > 0) {
                 isRuntimeArray = true;
+                isTaggedRuntimeArray =
+                    taggedRuntimeArrayVars_.count(identExpr->name) > 0;
                 if(NOVA_DEBUG) std::cerr << "DEBUG: ForOf - using runtime array element access for " << identExpr->name << std::endl;
             }
         }
 
-        if (isRuntimeArray) {
+        if (isStringIterable) {
+            auto stringType =
+                std::make_shared<HIRType>(HIRType::Kind::String);
+            auto intType =
+                std::make_shared<HIRType>(HIRType::Kind::I64);
+            auto existing = module_->getFunction("nova_string_at");
+            HIRFunction* function = existing ? existing.get() : nullptr;
+            if (!function) {
+                auto* functionType =
+                    new HIRFunctionType({stringType, intType}, stringType);
+                auto created =
+                    module_->createFunction("nova_string_at", functionType);
+                created->linkage = HIRFunction::Linkage::External;
+                function = created.get();
+            }
+            currentElement = builder_->createCall(
+                function, {arrayValue, indexForAccess}, "string_iter_elem");
+            currentElement->type = stringType;
+        } else if (isRuntimeArray) {
             // Use nova_value_array_at for runtime arrays
             auto ptrType = std::make_shared<HIRType>(HIRType::Kind::Pointer);
             auto intType = std::make_shared<HIRType>(HIRType::Kind::I64);
@@ -768,7 +936,76 @@ void HIRGenerator::visit(ForOfStmt& node) {
 
             std::vector<HIRValue*> args = {arrayValue, indexForAccess};
             currentElement = builder_->createCall(func, args, "iter_elem");
-            currentElement->type = intType;
+            currentElement->type = isTaggedRuntimeArray
+                ? std::make_shared<HIRType>(HIRType::Kind::JSValue)
+                : intType;
+            if (isTaggedRuntimeArray && !iterableElementType.empty()) {
+                auto jsType =
+                    std::make_shared<HIRType>(HIRType::Kind::JSValue);
+                if (iterableElementType == "String") {
+                    auto stringType =
+                        std::make_shared<HIRType>(HIRType::Kind::String);
+                    auto existing =
+                        module_->getFunction("nova_value_to_string_alloc");
+                    HIRFunction* function =
+                        existing ? existing.get() : nullptr;
+                    if (!function) {
+                        auto* functionType =
+                            new HIRFunctionType({jsType}, stringType);
+                        auto created = module_->createFunction(
+                            "nova_value_to_string_alloc", functionType);
+                        created->linkage =
+                            HIRFunction::Linkage::External;
+                        function = created.get();
+                    }
+                    currentElement = builder_->createCall(
+                        function, {currentElement}, "iter_elem.string");
+                    currentElement->type = stringType;
+                } else if (iterableElementType == "Bool") {
+                    auto existing =
+                        module_->getFunction("nova_value_to_boolean");
+                    HIRFunction* function =
+                        existing ? existing.get() : nullptr;
+                    if (!function) {
+                        auto* functionType =
+                            new HIRFunctionType({jsType}, intType);
+                        auto created = module_->createFunction(
+                            "nova_value_to_boolean", functionType);
+                        created->linkage =
+                            HIRFunction::Linkage::External;
+                        function = created.get();
+                    }
+                    currentElement = builder_->createCall(
+                        function, {currentElement}, "iter_elem.boolean");
+                    currentElement->type = intType;
+                } else {
+                    auto doubleType =
+                        std::make_shared<HIRType>(HIRType::Kind::F64);
+                    auto existing =
+                        module_->getFunction("nova_value_to_number");
+                    HIRFunction* function =
+                        existing ? existing.get() : nullptr;
+                    if (!function) {
+                        auto* functionType =
+                            new HIRFunctionType({jsType}, doubleType);
+                        auto created = module_->createFunction(
+                            "nova_value_to_number", functionType);
+                        created->linkage =
+                            HIRFunction::Linkage::External;
+                        function = created.get();
+                    }
+                    auto* number = builder_->createCall(
+                        function, {currentElement}, "iter_elem.number");
+                    currentElement = builder_->createCast(
+                        number, intType.get(), "iter_elem.integer");
+                    currentElement->type = intType;
+                }
+                isTaggedRuntimeArray = false;
+            } else if (!isTaggedRuntimeArray &&
+                       iterableElementType == "String") {
+                currentElement->type =
+                    std::make_shared<HIRType>(HIRType::Kind::String);
+            }
         } else {
             // Use GetElement for regular arrays
             currentElement = builder_->createGetElement(arrayValue, indexForAccess, "iter_elem");
@@ -776,7 +1013,12 @@ void HIRGenerator::visit(ForOfStmt& node) {
 
         // Declare loop variable and assign current element
         // node.left is the variable name (e.g., "value" in "for (let value of arr)")
-        auto* varType = new hir::HIRType(hir::HIRType::Kind::I64);
+        auto* varType = new hir::HIRType(
+            (isStringIterable || iterableElementType == "String")
+                ? hir::HIRType::Kind::String
+                : (isTaggedRuntimeArray
+                    ? hir::HIRType::Kind::JSValue
+                    : hir::HIRType::Kind::I64));
         auto* loopVar = builder_->createAlloca(varType, node.left);
 
         // Store the current element in the loop variable
@@ -1186,7 +1428,25 @@ void HIRGenerator::visit(TryStmt& node) {
         }
 
         // After try block, jump to finally or end
-        if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+        if (!builder_->getInsertBlock()->hasBreakOrContinue &&
+            !builder_->getInsertBlock()->hasTerminator()) {
+            // The normal path leaves the runtime try scope here. Without
+            // this, g_try_depth leaks into later calls and unrelated throws
+            // are misclassified as catchable.
+            HIRFunction* tryEnd = nullptr;
+            if (auto existing = module_->getFunction("nova_try_end")) {
+                tryEnd = existing.get();
+            } else {
+                auto* type = new HIRFunctionType(
+                    {}, std::make_shared<HIRType>(
+                            HIRType::Kind::Void));
+                auto created =
+                    module_->createFunction("nova_try_end", type);
+                created->linkage =
+                    HIRFunction::Linkage::External;
+                tryEnd = created.get();
+            }
+            builder_->createCall(tryEnd, {}, "try.normal.end");
             if (finallyBlock) {
                 builder_->createBr(finallyBlock.get());
             } else {
@@ -1233,6 +1493,32 @@ void HIRGenerator::visit(TryStmt& node) {
                 exceptionValue = builder_->createCall(runtimeFunc, args, "exception_value");
             }
 
+            // Consuming an exception must clear the pending flag before the
+            // catch body runs, and the runtime nesting depth must leave this
+            // try scope even when the catch returns early.
+            {
+                auto voidType =
+                    std::make_shared<HIRType>(HIRType::Kind::Void);
+                auto getRuntimeVoid = [&](const std::string& name) {
+                    if (auto existing = module_->getFunction(name)) {
+                        return existing.get();
+                    }
+                    auto* type =
+                        new HIRFunctionType({}, voidType);
+                    auto created =
+                        module_->createFunction(name, type);
+                    created->linkage =
+                        HIRFunction::Linkage::External;
+                    return created.get();
+                };
+                builder_->createCall(
+                    getRuntimeVoid("nova_consume_exception"), {},
+                    "catch.consume.exception");
+                builder_->createCall(
+                    getRuntimeVoid("nova_try_end"), {},
+                    "catch.try.end");
+            }
+
             // Add catch parameter to symbol table
             if (node.handler && !node.handler->param.empty()) {
                 symbolTable_[node.handler->param] = exceptionValue;
@@ -1247,7 +1533,8 @@ void HIRGenerator::visit(TryStmt& node) {
             }
 
             // After catch, jump to finally or end
-            if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+            if (!builder_->getInsertBlock()->hasBreakOrContinue &&
+                !builder_->getInsertBlock()->hasTerminator()) {
                 if (finallyBlock) {
                     builder_->createBr(finallyBlock.get());
                 } else {
@@ -1263,7 +1550,8 @@ void HIRGenerator::visit(TryStmt& node) {
                 node.finalizer->accept(*this);
             }
             // After finally, jump to end
-            if (!builder_->getInsertBlock()->hasBreakOrContinue) {
+            if (!builder_->getInsertBlock()->hasBreakOrContinue &&
+                !builder_->getInsertBlock()->hasTerminator()) {
                 builder_->createBr(endBlock.get());
             }
         }
